@@ -1,0 +1,13 @@
+{
+  "name": "AutoJs6 Studio",
+  "short_name": "A6 Studio",
+  "description": "AutoJs6 可视化模块化脚本工作台：拖拽积木、生成代码、模拟运行、测试与诊断",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f1116",
+  "theme_color": "#0f1116",
+  "lang": "zh-CN",
+  "icons": []
+}

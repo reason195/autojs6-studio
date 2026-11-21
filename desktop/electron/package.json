@@ -1,0 +1,16 @@
+{
+  "name": "a6studio-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "AutoJs6 Studio 桌面壳（Windows / macOS）",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack:win": "electron-packager . AutoJs6Studio --platform=win32 --arch=x64 --overwrite --out=dist",
+    "pack:mac": "electron-packager . AutoJs6Studio --platform=darwin --arch=x64 --overwrite --out=dist"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-packager": "^17.1.2"
+  }
+}

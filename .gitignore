@@ -1,0 +1,13 @@
+# 交付压缩包不入库（内容与源码重复）
+AutoJs6-Studio.zip
+*.zip
+
+# 本地工作文档（调试记录、设备地址等内部信息）
+task-*.md
+
+# 工具缓存
+.ruff_cache/
+__pycache__/
+node_modules/
+.dumate/
+.DS_Store

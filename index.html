@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AutoJs6 Studio · 可视化模块化脚本工作台</title>
+<meta name="theme-color" content="#0f1116">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="css/app.css?v=27">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">A6</span>
+    <div class="brand-text">
+      <strong>AutoJs6 Studio</strong>
+      <small>可视化 · 模块化 · 运行 / 测试 / 诊断</small>
+    </div>
+  </div>
+
+  <input id="projectName" class="proj-name" value="未命名项目" spellcheck="false" aria-label="项目名称">
+
+  <div class="actions">
+    <button id="btnRun" class="btn primary" title="F5 运行">▶ 运行</button>
+    <button id="btnTest" class="btn" title="F6 运行全部测试">✓ 测试</button>
+    <button id="btnDiag" class="btn" title="F7 诊断">⚕ 诊断</button>
+    <span class="divider"></span>
+    <button id="btnUndo" class="btn ghost" title="Ctrl+Z 撤销">↶</button>
+    <button id="btnSave" class="btn ghost" title="Ctrl+S 保存到本机">保存</button>
+    <button id="btnExportJs" class="btn ghost" title="导出生成的 AutoJs6 脚本">导出 JS</button>
+    <button id="btnExportProject" class="btn ghost" title="导出项目 JSON">导出项目</button>
+    <button id="btnImport" class="btn ghost" title="导入项目 JSON">导入</button>
+    <button id="btnExample" class="btn ghost" title="恢复内置示例项目">示例</button>
+  </div>
+
+  <div id="deviceChip" class="chip" title="真机连接状态">真机：未连接</div>
+</header>
+
+<main class="layout">
+  <aside class="panel left">
+    <div class="panel-head">
+      <input id="paletteSearch" class="search" placeholder="搜索积木（Ctrl+K）" spellcheck="false">
+    </div>
+    <div id="palette" class="palette scroll"></div>
+    <div class="left-foot">
+      <span id="statBlocks" class="muted">0 块</span>
+      <span id="statModules" class="muted">0 模块</span>
+      <span id="statTests" class="muted">0 测试</span>
+    </div>
+  </aside>
+
+  <section class="panel center">
+    <div class="canvas-toolbar">
+      <div id="scopeTabs" class="tabs small"></div>
+      <div class="spacer"></div>
+      <span id="scopeHint" class="muted"></span>
+      <button id="btnNewModule" class="btn ghost xs">+ 新建模块</button>
+    </div>
+    <div id="canvas" class="canvas scroll"></div>
+  </section>
+
+  <aside class="panel right">
+    <div class="tabs" id="rightTabs">
+      <button class="tab active" data-tab="code">代码</button>
+      <button class="tab" data-tab="run">运行</button>
+      <button class="tab" data-tab="test">测试</button>
+      <button class="tab" data-tab="diag">诊断</button>
+      <button class="tab" data-tab="device">真机</button>
+      <button class="tab" data-tab="help">帮助</button>
+    </div>
+
+    <div class="tabpanes scroll">
+      <div class="tabpane active" id="pane-code">
+        <div class="pane-bar">
+          <span id="codeInfo" class="muted">生成的 AutoJs6 脚本</span>
+          <div class="spacer"></div>
+          <button id="btnCopyCode" class="btn ghost xs">复制</button>
+        </div>
+        <pre id="codeOut" class="code"></pre>
+      </div>
+
+      <div class="tabpane" id="pane-run">
+        <div class="pane-bar">
+          <span id="runStatus" class="badge idle">未运行</span>
+          <div class="spacer"></div>
+          <label class="mini"><input type="checkbox" id="optRealDevice"> 发送到真机</label>
+        </div>
+        <div class="sim-wrap">
+          <div class="phone">
+            <div class="phone-notch"></div>
+            <div class="phone-status"><span id="simPkg">com.jingdong.app.mall</span><span id="simClock">09:41</span></div>
+            <div id="simScreen" class="phone-screen"></div>
+            <div class="phone-hint">模拟设备 · 由积木脚本驱动</div>
+          </div>
+        </div>
+        <div class="log-head">
+          <span>运行日志</span>
+          <div class="spacer"></div>
+          <button id="btnClearLog" class="btn ghost xs">清空</button>
+        </div>
+        <div id="runLog" class="log scroll"></div>
+      </div>
+
+      <div class="tabpane" id="pane-test">
+        <div class="pane-bar">
+          <span class="muted">测试用例</span>
+          <div class="spacer"></div>
+          <button id="btnAddTest" class="btn ghost xs">+ 用例</button>
+          <button id="btnRunTests" class="btn xs">运行全部</button>
+        </div>
+        <div id="testList" class="test-list"></div>
+        <div id="testResult" class="log scroll"></div>
+      </div>
+
+      <div class="tabpane" id="pane-diag">
+        <div class="pane-bar">
+          <span class="muted">静态诊断 + 运行后诊断</span>
+          <div class="spacer"></div>
+          <span id="diagSummary" class="badge idle">—</span>
+        </div>
+        <div id="diagList" class="diag-list scroll"></div>
+      </div>
+
+      <div class="tabpane" id="pane-device">
+        <div class="field">
+          <label>设备</label>
+          <div class="row">
+            <select id="bridgeDevice" class="input" style="flex:1"></select>
+            <button id="btnSaveDevice" class="btn ghost xs">保存当前</button>
+          </div>
+          <small class="muted">保存多台设备后在这里切换；地址写进项目，令牌只在本页会话里按地址记住，不落盘。</small>
+        </div>
+        <div class="field">
+          <label>MCP 桥接地址</label>
+          <input id="bridgeUrl" class="input" placeholder="http://127.0.0.1:8765" spellcheck="false">
+          <small class="muted">AutoJs6 插件中心开启「MCP Server」，或用随包的 bridge 脚本转发（含 CORS）。</small>
+        </div>
+        <div class="field">
+          <label>令牌（可选，只存内存）</label>
+          <input id="bridgeToken" class="input" placeholder="粘贴 mcpServers 里的 Bearer token" spellcheck="false" autocomplete="off">
+          <small class="muted">服务端要求鉴权时填；默认不保存，刷新即清空。</small>
+          <label class="chk"><input id="rememberToken" type="checkbox"> 记住令牌（写进本机浏览器存储，公用电脑别勾）</label>
+        </div>
+        <div class="row">
+          <button id="btnBridgeConnect" class="btn">连接并读取设备</button>
+          <button id="btnBridgePing" class="btn ghost">Ping</button>
+          <button id="btnBridgeDump" class="btn ghost">界面树</button>
+        </div>
+        <div id="deviceInfo" class="kv"></div>
+        <div class="log-head"><span>真机输出</span></div>
+        <div id="deviceLog" class="log scroll"></div>
+      </div>
+
+      <div class="tabpane" id="pane-help">
+        <div class="help">
+          <h3>怎么用</h3>
+          <ol>
+            <li>左侧点/拖积木到中间画布，点积木卡片可选中，右侧实时出代码。</li>
+            <li>点 <b>运行</b> 在内置模拟设备上执行生成的脚本；勾选「发送到真机」则调用 AutoJs6。</li>
+            <li>点 <b>测试</b> 跑用例；点 <b>诊断</b> 查静态风险与运行日志问题。</li>
+            <li>「我的模块」可把一组积木固化为可复用模块，像函数一样调用。</li>
+          </ol>
+          <h3>快捷键</h3>
+          <ul>
+            <li><code>F5</code> 运行 · <code>F6</code> 测试 · <code>F7</code> 诊断</li>
+            <li><code>Ctrl+S</code> 保存 · <code>Ctrl+Z</code> 撤销 · <code>Ctrl+E</code> 导出 JS</li>
+            <li><code>Ctrl+K</code> 搜索积木 · <code>Delete</code> 删除选中积木</li>
+          </ul>
+          <h3>边界</h3>
+          <p>内置模拟器只覆盖 AutoJs6 常用 API 的行为（控件选择、应用跳转、文件、HTTP、OCR 桩）。真机行为以 AutoJs6 为准，建议关键脚本先「测试」再上真机。</p>
+        </div>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<aside id="picker" class="drawer">
+  <div class="drawer-head">
+    <strong>控件拾取</strong>
+    <span id="pickTarget" class="muted"></span>
+    <span id="pickMeta" class="muted"></span>
+    <div class="spacer"></div>
+    <button id="pickRefresh" class="btn ghost xs">刷新</button>
+    <button id="pickClose" class="btn ghost xs">✕</button>
+  </div>
+  <div class="drawer-bar">
+    <div class="viewtabs">
+      <button id="pickViewList" class="vt active">列表</button>
+      <button id="pickViewShot" class="vt">截图</button>
+    </div>
+    <input id="pickSearch" class="search" placeholder="过滤：文本 / desc / id / 类名" spellcheck="false">
+  </div>
+  <div class="drawer-bar slim">
+    <label class="mini"><input type="checkbox" id="pickOnlyClick"> 只看可点击</label>
+    <span class="muted">点绿框选控件 · 点空白取坐标 · 拖拽框选区域</span>
+  </div>
+  <div id="pickScope" class="scope-bar" hidden></div>
+  <div id="pickTree" class="pick-tree scroll"></div>
+  <div id="shotWrap" class="shot-wrap scroll" hidden>
+    <div id="shotBox" class="shot-box">
+      <img id="shotImg" alt="device screen">
+      <div id="shotHot" class="shot-hot"></div>
+    </div>
+    <div id="shotHint" class="shot-hint">切到「截图」会自动抓一张当前屏幕；拖拽可框选一块区域下钻</div>
+  </div>
+  <div id="pickDetail" class="pick-detail"></div>
+</aside>
+
+<div id="toast" class="toast"></div>
+<input type="file" id="fileInput" accept=".json,application/json" hidden>
+
+<script>window.A6 = window.A6 || {};</script>
+<script src="js/config.js"></script>
+<script src="js/catalog.js?v=27"></script>
+<script src="js/store.js?v=27"></script>
+<script src="js/codegen.js?v=27"></script>
+<script src="js/runtime.js?v=27"></script>
+<script src="js/diagnose.js?v=27"></script>
+<script src="js/bridge.js?v=27"></script>
+<script src="js/picker.js?v=27"></script>
+<script src="js/audit.js?v=27"></script>
+<script src="js/recorder.js?v=27"></script>
+<script src="js/editor.js?v=27"></script>
+<script src="js/app.js?v=27"></script>
+</body>
+</html>

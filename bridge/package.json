@@ -1,0 +1,10 @@
+{
+  "name": "a6studio-bridge",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "AutoJs6 Studio 的 MCP 转发桥接（补 CORS，不改协议）",
+  "scripts": {
+    "start": "node mcp-bridge.mjs"
+  }
+}
