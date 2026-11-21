@@ -2,6 +2,7 @@ package cn.dumate.a6studio.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import cn.dumate.a6studio.platform.nowMillis
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.random.Random
 
@@ -127,15 +128,19 @@ data class Project(
     }
 }
 
-/** Stable, collision-resistant ids (mirrors the web `b_<ts>_<n>` scheme). */
+/**
+ * Stable, collision-resistant ids, shaped like the web `b_<ts>_<n>` scheme.
+ *
+ * The old implementation bumped a shared `counter`, which is not thread-safe: two blocks created
+ * from different threads in the same millisecond could receive the same id and then collide in
+ * selection/undo. A random numeric suffix keeps the exact `b_<ts>_<digits>` shape the legacy
+ * parity fixture normalises, without any shared mutable state.
+ */
 object Ids {
-    private var counter = 0
-    fun next(): String {
-        counter += 1
-        return "b_" + System.currentTimeMillis().toString(36) + "_" + counter
-    }
+    fun next(): String = "b_" + nowMillis().toString(36) + "_" + Random.nextInt(1, 1_000_000_000)
 
-    fun nextWith(prefix: String): String = prefix + "_" + System.currentTimeMillis().toString(36)
+    fun nextWith(prefix: String): String =
+        prefix + "_" + nowMillis().toString(36) + "_" + Random.nextInt(1, 1_000_000_000)
 
     fun randomHex(len: Int = 8): String =
         (1..len).map { "0123456789abcdef"[Random.nextInt(16)] }.joinToString("")

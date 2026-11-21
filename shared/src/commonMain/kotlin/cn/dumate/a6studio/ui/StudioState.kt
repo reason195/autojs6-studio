@@ -19,6 +19,7 @@ import cn.dumate.a6studio.picker.PickTarget
 import cn.dumate.a6studio.picker.PickerController
 import cn.dumate.a6studio.picker.PickerState
 import cn.dumate.a6studio.platform.Platform
+import cn.dumate.a6studio.platform.nowMillis
 import cn.dumate.a6studio.recorder.RecorderController
 import cn.dumate.a6studio.recorder.RecorderState
 import cn.dumate.a6studio.runtime.LogEntry
@@ -362,7 +363,7 @@ class StudioState(
         applyBridgeConfig()
         scope.launch {
             try {
-                val name = (repo.current.name.ifBlank { "a6studio" }) + "_" + System.currentTimeMillis()
+                val name = (repo.current.name.ifBlank { "a6studio" }) + "_" + nowMillis()
                 val r = bridge.runScript(CodeGen.code(repo.current), name)
                 appendDevice("sys", "真机返回：${r.take(800)}")
                 val tail = bridge.consoleTail(120)

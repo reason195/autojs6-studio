@@ -1,5 +1,6 @@
 package cn.dumate.a6studio.bridge
 
+import cn.dumate.a6studio.platform.nowMillis
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.header
@@ -333,10 +334,10 @@ class McpClient(
 
     suspend fun ping(): Long {
         resetPendingState()
-        val t0 = System.currentTimeMillis()
+        val t0 = nowMillis()
         initialize()
         callTool("device_ping")
-        return System.currentTimeMillis() - t0
+        return nowMillis() - t0
     }
 
     /**
