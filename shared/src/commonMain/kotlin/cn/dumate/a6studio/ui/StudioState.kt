@@ -23,6 +23,7 @@ import cn.dumate.a6studio.recorder.RecorderController
 import cn.dumate.a6studio.recorder.RecorderState
 import cn.dumate.a6studio.runtime.LogEntry
 import cn.dumate.a6studio.runtime.RunResult
+import cn.dumate.a6studio.runtime.RunControl
 import cn.dumate.a6studio.runtime.RunEngine
 import cn.dumate.a6studio.runtime.SimNode
 import cn.dumate.a6studio.runtime.SimSink
@@ -35,7 +36,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -109,6 +112,8 @@ class StudioState(
 
     var testResults by mutableStateOf<List<TestResult>>(emptyList())
         private set
+    var testsRunning by mutableStateOf(false)
+        private set
     var testSummary by mutableStateOf("")
 
     var deviceLog by mutableStateOf<List<LogEntry>>(emptyList())
@@ -139,6 +144,10 @@ class StudioState(
     private var diagJob: Job? = null
     private var bubbleJob: Job? = null
     private var tickJob: Job? = null
+
+    /** Stop switches for the simulation / test run in flight (null when idle). */
+    private var runControl: RunControl? = null
+    private var testControl: RunControl? = null
 
     private val picker = PickerController(bridge) { pickerState = it }
     private val audit = AuditController(bridge) { rows, note -> auditRows = rows; auditNote = note }
@@ -283,22 +292,38 @@ class StudioState(
         running = true
         runStatus = "运行中"
         runStatusLevel = "run"
+        val control = RunControl()
+        runControl = control
+        // The simulator runs on a worker thread and may render thousands of times per second;
+        // a StateFlow conflates that to the latest frame so the UI thread only draws what it can.
+        val frames = MutableStateFlow<Pair<List<SimNode>, SimStateView>?>(null)
         val sink = object : SimSink {
             override fun onRender(nodes: List<SimNode>, state: SimStateView) {
-                simNodes = nodes
-                simView = state
+                frames.value = nodes to state
             }
             override fun onToast(msg: String) {
-                simBubble = msg
-                bubbleJob?.cancel()
-                bubbleJob = scope.launch { delay(2400); simBubble = null }
+                scope.launch {
+                    simBubble = msg
+                    bubbleJob?.cancel()
+                    bubbleJob = scope.launch { delay(2400); simBubble = null }
+                }
             }
         }
+        val project = repo.current
+        val frameJob = scope.launch {
+            frames.collect { f -> if (f != null) { simNodes = f.first; simView = f.second } }
+        }
         scope.launch {
-            val result = engine.run(repo.current, sink)
+            val result = try {
+                withContext(Dispatchers.Default) { engine.run(project, sink, control) }
+            } finally {
+                frameJob.cancel()
+                frames.value?.let { simNodes = it.first; simView = it.second }
+                runControl = null
+                running = false
+            }
             lastRun = result
             runLogs = result.logs
-            simNodes = simNodes.ifEmpty { emptyList() }
             when (result.status) {
                 "error" -> {
                     runStatus = "异常"
@@ -306,10 +331,27 @@ class StudioState(
                     runLogs = runLogs + LogEntry("error", "异常：${result.error}", result.virtualMs)
                 }
                 "exited" -> { runStatus = "已退出"; runStatusLevel = "warn" }
+                "stopped" -> { runStatus = "已停止"; runStatusLevel = "warn" }
+                "timeout" -> { runStatus = "超时"; runStatusLevel = "err" }
                 else -> { runStatus = "完成 · 模拟 ${result.virtualMs / 1000}s"; runStatusLevel = "ok" }
             }
-            running = false
             recomputeDiag()
+        }
+    }
+
+    /** Stops the simulation or test run in flight; on a real device, stops its scripts. */
+    fun stopRun() {
+        runControl?.cancel()
+        testControl?.cancel()
+        if (running && sendToDevice && runControl == null) {
+            scope.launch {
+                try {
+                    bridge.stopAllScripts()
+                    appendDevice("sys", "已请求手机停止所有脚本")
+                } catch (e: BridgeException) {
+                    appendDevice("error", "停止失败：${e.message}")
+                }
+            }
         }
     }
 
@@ -351,10 +393,20 @@ class StudioState(
 
     // ---- tests ---------------------------------------------------------------
     fun runTests(onlyIds: List<String>? = null) {
+        if (testsRunning) return
         showPane(Pane.TEST)
         testSummary = "运行中…"
+        testsRunning = true
+        val control = RunControl()
+        testControl = control
+        val project = repo.current
         scope.launch {
-            val results = engine.runTests(repo.current, onlyIds)
+            val results = try {
+                withContext(Dispatchers.Default) { engine.runTests(project, onlyIds, control = control) }
+            } finally {
+                testControl = null
+                testsRunning = false
+            }
             testResults = results
             val pass = results.count { it.ok }
             testSummary = "$pass / ${results.size} 通过"

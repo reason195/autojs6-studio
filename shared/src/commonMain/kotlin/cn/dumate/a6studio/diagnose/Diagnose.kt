@@ -141,6 +141,9 @@ object Diagnose {
         if (run.status == "error" && run.error != null) {
             issues += Issue(Level.ERROR, "运行抛出异常", run.error, "运行日志")
         }
+        if (run.status == "timeout") {
+            issues += Issue(Level.ERROR, "运行超时被自动停止", run.error ?: "脚本可能卡在死循环里", "运行日志")
+        }
         val logs = run.logs
         fun count(pattern: Regex) = logs.count { pattern.containsMatchIn(it.msg) }
 

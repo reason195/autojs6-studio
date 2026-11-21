@@ -2,6 +2,7 @@ package cn.dumate.a6studio.runtime
 
 import org.mozilla.javascript.BaseFunction
 import org.mozilla.javascript.Context
+import org.mozilla.javascript.ContextFactory
 import org.mozilla.javascript.Function
 import org.mozilla.javascript.NativeArray
 import org.mozilla.javascript.NativeObject
@@ -12,14 +13,59 @@ import org.mozilla.javascript.ScriptableObject
 class SimExit : RuntimeException("exit")
 
 /**
+ * Aborts a simulation (user stop or time budget). Deliberately an [Error], not an exception:
+ * Rhino runs neither JS `catch` nor `finally` for Java errors, so a script cannot swallow it
+ * with `try {} catch {}` or keep looping inside a `finally`.
+ */
+class SimAbort(val status: String, message: String) : Error(message) {
+    companion object {
+        const val STOPPED = "stopped"
+        const val TIMEOUT = "timeout"
+        const val STOPPED_MESSAGE = "已手动停止"
+        fun timeoutMessage(ms: Long) =
+            "运行超过 ${ms / 1000} 秒被自动停止：脚本可能卡在死循环里（模拟的 sleep 不计时）"
+    }
+}
+
+/**
  * Runs generated AutoJs6 scripts against [SimState] using Rhino — the same engine AutoJs6
  * uses. Selectors and nodes are exposed as native JS objects with attached functions so that
  * interop behaves exactly like the real AutoJs6 object graph.
  */
-class SimRuntime(private val sink: SimSink? = null) {
+class SimRuntime(
+    private val sink: SimSink? = null,
+    private val control: RunControl = RunControl()
+) {
 
     val state = SimState()
     private var cx: Context? = null
+    private var depth = 0
+    private var deadlineNanos = Long.MAX_VALUE
+
+    /**
+     * Contexts from this factory call [checkLimits] every [INSTRUCTION_SLICE] interpreted
+     * instructions, which is what lets a stop/timeout interrupt a pure-JS infinite loop.
+     */
+    private val factory = object : ContextFactory() {
+        override fun makeContext(): Context = super.makeContext().apply {
+            optimizationLevel = -1 // instruction observation only works in interpreted mode
+            languageVersion = Context.VERSION_ES6
+            instructionObserverThreshold = INSTRUCTION_SLICE
+        }
+
+        override fun observeInstructionCount(cx: Context, instructionCount: Int) = checkLimits()
+    }
+
+    /** Enters a Rhino context wired to this runtime's stop switch and time budget. */
+    fun enterContext(): Context = factory.enterContext()
+
+    /** Throws [SimAbort] when the user pressed stop or the wall-clock budget ran out. */
+    fun checkLimits() {
+        if (control.cancelled) throw SimAbort(SimAbort.STOPPED, SimAbort.STOPPED_MESSAGE)
+        if (System.nanoTime() > deadlineNanos) {
+            throw SimAbort(SimAbort.TIMEOUT, SimAbort.timeoutMessage(control.wallTimeoutMs))
+        }
+    }
     private var scope: Scriptable? = null
     private var stateObject: NativeObject? = null
 
@@ -28,14 +74,24 @@ class SimRuntime(private val sink: SimSink? = null) {
     private fun clip(s: String) = if (s.length > 4000) s.substring(0, 4000) + "…" else s
 
     fun execute(source: String, target: Scriptable? = null): Pair<String, String?> {
-        val context = Context.enter()
+        // The time budget covers the outermost script; nested `$run()` shares it.
+        if (depth == 0) {
+            val budget = control.wallTimeoutMs
+            deadlineNanos = if (budget > 0) System.nanoTime() + budget * 1_000_000 else Long.MAX_VALUE
+        }
+        depth += 1
+        val context = enterContext()
         cx = context
         return try {
-            context.optimizationLevel = -1
-            context.languageVersion = Context.VERSION_ES6
+            checkLimits()
             val sc = target ?: newScope(context)
             context.evaluateString(sc, source, "a6studio", 1, null)
             "finished" to null
+        } catch (e: SimAbort) {
+            // Inside `$run()` the abort must keep unwinding through the outer test script.
+            if (depth > 1) throw e
+            log("error", e.message ?: e.status)
+            e.status to e.message
         } catch (e: SimExit) {
             "exited" to null
         } catch (e: org.mozilla.javascript.WrappedException) {
@@ -48,6 +104,7 @@ class SimRuntime(private val sink: SimSink? = null) {
             "error" to (e.message ?: e.toString())
         } finally {
             Context.exit()
+            depth -= 1
             cx = null
             scope = null
         }
@@ -266,6 +323,7 @@ class SimRuntime(private val sink: SimSink? = null) {
 
         put(s, "sleep") { a, _ ->
             val ms = (a.getOrNull(0) as? Number)?.toLong() ?: 0
+            checkLimits()
             state.clock += ms
             if (ms >= 1000) log("debug", "sleep ${ms}ms")
             null
@@ -504,5 +562,10 @@ class SimRuntime(private val sink: SimSink? = null) {
 
     fun publishRender() {
         sink?.onRender(state.buildNodes(), state.stateView(1080, 2400))
+    }
+
+    private companion object {
+        /** Interpreted instructions between stop/timeout checks (~sub-millisecond). */
+        const val INSTRUCTION_SLICE = 10_000
     }
 }

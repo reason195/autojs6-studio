@@ -6,6 +6,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
@@ -24,6 +25,7 @@ fun Modifier.studioShortcuts(state: StudioState): Modifier {
             if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
             val ctrl = ev.isCtrlPressed || ev.isMetaPressed
             when {
+                ev.key == Key.F5 && ev.isShiftPressed -> { state.stopRun(); true }
                 ev.key == Key.F5 -> { state.run(); true }
                 ev.key == Key.F6 -> { state.runTests(); true }
                 ev.key == Key.F7 -> { state.showPane(Pane.DIAG); true }

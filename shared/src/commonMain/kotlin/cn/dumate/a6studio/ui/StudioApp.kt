@@ -193,7 +193,8 @@ private fun BrandMark() {
 
 @Composable
 private fun TopActions(state: StudioState) {
-    TopAction("▶ 运行", primary = true) { state.run() }
+    if (state.running) TopAction("■ 停止", primary = true) { state.stopRun() }
+    else TopAction("▶ 运行", primary = true) { state.run() }
     TopAction("📋 模板") { state.openTemplates() }
     TopAction("? 怎么做") { state.showGuide = true }
     if (state.beginnerMode) {

@@ -14,10 +14,8 @@ class ScriptableHarness(private val sim: SimRuntime, private val mainCode: Strin
     private var scope: Scriptable? = null
 
     fun install() {
-        val ctx = Context.enter()
+        val ctx = sim.enterContext()
         try {
-            ctx.optimizationLevel = -1
-            ctx.languageVersion = Context.VERSION_ES6
             val sc = sim.newScope(ctx)
             scope = sc
             val runFn = object : BaseFunction() {

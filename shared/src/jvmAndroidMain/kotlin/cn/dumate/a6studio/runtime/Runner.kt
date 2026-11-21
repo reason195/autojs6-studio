@@ -9,9 +9,9 @@ import cn.dumate.a6studio.model.Project
  */
 object Runner {
 
-    fun run(project: Project, sink: SimSink? = null): RunResult {
+    fun run(project: Project, sink: SimSink? = null, control: RunControl = RunControl()): RunResult {
         val code = CodeGen.code(project)
-        val sim = SimRuntime(sink)
+        val sim = SimRuntime(sink, control)
         val (status, error) = sim.execute(code)
         return RunResult(
             status = status,
@@ -23,11 +23,19 @@ object Runner {
         )
     }
 
-    fun runTests(project: Project, only: List<String>? = null, sink: SimSink? = null): List<TestResult> {
+    fun runTests(
+        project: Project,
+        only: List<String>? = null,
+        sink: SimSink? = null,
+        control: RunControl = RunControl()
+    ): List<TestResult> {
         val code = CodeGen.code(project)
         val tests = if (only == null) project.tests else project.tests.filter { it.id in only }
         return tests.map { t ->
-            val sim = SimRuntime(sink)
+            if (control.cancelled) {
+                return@map TestResult(t.id, t.name, ok = false, error = SimAbort.STOPPED_MESSAGE, logs = emptyList())
+            }
+            val sim = SimRuntime(sink, control)
             // $run() replays the main program inside the same simulated device.
             val harness = ScriptableHarness(sim, code)
             harness.install()

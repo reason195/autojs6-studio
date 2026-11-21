@@ -53,7 +53,8 @@ fun TestPane(state: StudioState, modifier: Modifier = Modifier) {
             Spacer(Modifier.weight(1f))
             SmallButton("+ 用例") { state.repo.addTest(); state.commit() }
             Spacer(Modifier.width(5.dp))
-            SmallButton("运行全部", primary = true) { state.runTests() }
+            if (state.testsRunning) SmallButton("■ 停止", primary = true) { state.stopRun() }
+            else SmallButton("运行全部", primary = true) { state.runTests() }
         }
 
         LazyColumn(Modifier.weight(1f).padding(horizontal = 10.dp)) {
@@ -350,7 +351,7 @@ fun HelpPane(modifier: Modifier = Modifier, beginner: Boolean = false, onGuide: 
         HelpItem("6. 「⌕ 体检」(F8) 逐个校验项目里所有选择器；「● 录制」(F9) 把手机操作转成积木。")
 
         HelpSection("快捷键")
-        HelpItem("F5 运行 · F6 测试 · F7 诊断 · F8 体检 · F9 录制")
+        HelpItem("F5 运行 · Shift+F5 停止 · F6 测试 · F7 诊断 · F8 体检 · F9 录制")
         HelpItem("Ctrl+S 保存 · Ctrl+Z 撤销 · Ctrl+E 导出 JS · Ctrl+K 搜索积木")
         HelpItem("Delete 删除选中积木 · Esc 关闭面板/取消选中")
 
