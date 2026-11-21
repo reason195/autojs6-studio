@@ -1,0 +1,134 @@
+package cn.dumate.a6studio.catalog
+
+import cn.dumate.a6studio.model.Block
+import cn.dumate.a6studio.model.ParamValue
+import cn.dumate.a6studio.model.Project
+
+/** Parameter editor kind, mirroring the web `kind` field. */
+enum class ParamKind { TEXT, EXPR, NUMBER, SELECT, CODE, CHECKBOX }
+
+data class SelectOption(val value: String, val label: String)
+
+data class ParamDef(
+    val key: String,
+    val label: String,
+    val kind: ParamKind,
+    val default: ParamValue = ParamValue.Text(""),
+    val options: List<SelectOption> = emptyList()
+)
+
+data class SlotDef(val key: String, val label: String)
+
+data class Category(val id: String, val name: String, val color: Long)
+
+data class BlockDef(
+    val type: String,
+    val cat: String,
+    val name: String,
+    val params: List<ParamDef> = emptyList(),
+    val slots: List<SlotDef> = emptyList(),
+    val gen: (Block, GenContext) -> String
+)
+
+/**
+ * Code-generation context. Kept intentionally close to the original JS `c` helper so the
+ * emitted scripts stay byte-for-byte compatible with what the web build produced.
+ */
+class GenContext(
+    val project: Project,
+    val markers: Boolean = false
+) {
+    private var counter = 0
+
+    fun value(block: Block, key: String): ParamValue {
+        val def = Catalog.byType(block.type)?.params?.firstOrNull { it.key == key }
+        val raw = block.params[key]
+        return if (raw == null || raw.isBlank()) (def?.default ?: ParamValue.Text("")) else raw
+    }
+
+    fun str(block: Block, key: String): String = value(block, key).asText()
+
+    fun num(block: Block, key: String): Double = value(block, key).asNumber()
+
+    /** JSON.stringify equivalent — used everywhere the original wrote `c.q(...)`. */
+    fun quote(text: String?): String = Js.quote(text ?: "")
+
+    fun newVar(prefix: String = "v"): String {
+        counter += 1
+        return "_" + prefix + counter
+    }
+
+    fun has(block: Block, slot: String): Boolean = !block.children[slot].isNullOrEmpty()
+
+    fun body(block: Block, slot: String, level: Int): String = Js.indentLines(
+        CodeGen.generateList(block.children[slot].orEmpty(), project, this), level
+    )
+
+    /** Selector expression for a UI block: an explicit `expr` wins, then by/value. */
+    fun selector(block: Block): String {
+        val expr = block.params["expr"]?.asText()?.trim()
+        if (!expr.isNullOrEmpty()) return "($expr)"
+        val by = block.params["by"]?.asText() ?: "text"
+        val value = block.params["value"]?.asText() ?: ""
+        val fn = when (by) {
+            "id" -> "id"
+            "idMatches" -> "idMatches"
+            "className" -> "className"
+            "classNameMatches" -> "classNameMatches"
+            "textContains" -> "textContains"
+            "textMatches" -> "textMatches"
+            "descContains" -> "descContains"
+            "descMatches" -> "descMatches"
+            "desc" -> "desc"
+            else -> "text"
+        }
+        return "$fn(${quote(value)})"
+    }
+
+    fun callModule(block: Block): String {
+        val key = block.params["module"]?.asText() ?: ""
+        val m = project.modules.firstOrNull { it.id == key || it.name == key }
+            ?: return "// 未选择模块"
+        val args = block.params["args"]?.asText().orEmpty()
+        return Js.moduleName(m.name) + "(" + args + ");"
+    }
+}
+
+object Js {
+    /** Equivalent of JSON.stringify on a string: escapes quotes, backslashes and control chars. */
+    fun quote(text: String): String {
+        val sb = StringBuilder("\"")
+        for (ch in text) {
+            when (ch) {
+                '"' -> sb.append("\\\"")
+                '\\' -> sb.append("\\\\")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                '\b' -> sb.append("\\b")
+                '\u000C' -> sb.append("\\f")
+                else ->
+                    if (ch < ' ') sb.append("\\u%04x".format(ch.code))
+                    else sb.append(ch)
+            }
+        }
+        sb.append("\"")
+        return sb.toString()
+    }
+
+    fun indentLines(text: String, level: Int): String {
+        if (text.isEmpty() || level <= 0) return text
+        val pad = "  ".repeat(level)
+        return text.split('\n').joinToString("\n") { if (it.isEmpty()) it else pad + it }
+    }
+
+    /** `mod_<name>` with non-identifier characters replaced (keeps CJK, like the web regex). */
+    fun moduleName(name: String): String {
+        val cleaned = name.map { ch ->
+            if (ch.isLetterOrDigit() || ch == '_' || (ch.code in 0x4E00..0x9FA5)) ch else '_'
+        }.joinToString("")
+        return "mod_$cleaned"
+    }
+}
+
+internal fun indentLines(text: String, level: Int) = Js.indentLines(text, level)

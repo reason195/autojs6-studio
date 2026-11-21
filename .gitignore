@@ -8,6 +8,16 @@ task-*.md
 # 工具缓存
 .ruff_cache/
 __pycache__/
-node_modules/
 .dumate/
 .DS_Store
+
+# Gradle / Android 构建产物
+.gradle/
+build/
+*/build/
+local.properties
+.kotlin/
+captures/
+
+# 旧 Web 版的 Node 依赖（只在使用 bridge / mock 时需要）
+**/node_modules/
