@@ -15,14 +15,20 @@ Windows / macOS / Linux 桌面端用 Compose Desktop，Android 用 Jetpack Compo
 # 桌面端（Windows / macOS / Linux）
 ./gradlew :desktop:run
 
-# 桌面可分发包（Windows 出 msi，macOS 出 dmg，Linux 出 deb）
-./gradlew :desktop:packageReleaseDistributionForCurrentOS
+# 桌面可分发包（免安装目录）
+./gradlew :desktop:createDistributable
+
+# Windows 安装包（MSI，需管理员权限安装）
+./gradlew :desktop:packageMsi
+# 产物：desktop/build/compose/binaries/main/msi/AutoJs6 Studio-1.0.0.msi
+# 注意：nativeDistributions.description 必须是纯 ASCII —— jpackage 会把它写进 MSI
+# 摘要信息，WiX 3.x 遇到中文只报一个 `light.exe ... exited with 311 code`（无更多信息）。
 
 # Android APK
 ./gradlew :androidApp:assembleDebug
 # 产物：androidApp/build/outputs/apk/debug/androidApp-debug.apk
 
-# 核心逻辑单测（38 项）
+# 核心逻辑单测（61 项）
 ./gradlew :shared:jvmTest
 ```
 
@@ -34,7 +40,7 @@ node tools/legacy-gen.mjs     # 写出 build/crosscheck/legacy*.js
 ./gradlew :shared:jvmTest
 ```
 
-没有夹具时该用例会打印 SKIP 并跳过，其余 33 项照常执行。
+没有夹具时该用例会打印 `SKIP` 并直接返回，其余用例照常执行。
 
 Android 首次构建需要在仓库根目录放 `local.properties` 指向 SDK：
 
@@ -121,7 +127,7 @@ legacy-web/                 旧 Web 版（HTML/CSS/JS + Electron 壳 + MCP 转�
 
 ## 快捷键
 
-`F5` 运行 · `F6` 测试 · `F7` 诊断 · `F8` 体检 · `F9` 录制
+`F5` 运行 · `Shift+F5` 停止 · `F6` 测试 · `F7` 诊断 · `F8` 体检 · `F9` 录制
 `Ctrl+S` 保存 · `Ctrl+Z` 撤销 · `Ctrl+E` 导出 JS · `Esc` 关闭面板/取消选中
 `Delete` 删除选中积木
 
@@ -181,7 +187,13 @@ legacy-web/                 旧 Web 版（HTML/CSS/JS + Electron 壳 + MCP 转�
 2. 同页「**设置**」→ 打开「**允许局域网连接**」（默认关闭！关着时手机本地能应答、电脑连不上）。
 3. 在同一个设置页复制「**令牌 / Token**」，粘贴到 Studio 真机页的令牌框。
 
-地址填 `http://<手机IP>:9637/mcp`（手机 IP 在设置页「当前局域网地址」里直接看得到）。
+地址可填：
+- 真机直连：`http://<手机IP>:9637/mcp`（手机 IP 在设置页「当前局域网地址」里直接看得到）
+- 本机中转：先跑 `legacy-web/bridge/mcp-bridge.mjs`（带 CORS 的透明转发），再填 `http://127.0.0.1:8765/mcp`
+
+底层调用链为 `initialize` → `notifications/initialized` → `tools/call`，同时兼容普通 JSON 与 `text/event-stream`（SSE）响应；令牌走 `Authorization: Bearer`，默认只存内存。
+
+没有真机也能试拾取器：`node legacy-web/tests/mock-mcp.mjs` 可起一个假设备（内置 9 个节点，故意放两个同名「立即领取」用于验证「不唯一不允许直接填入」）。
 
 ### 实测记录（魅族 17 Pro / Android 13 / AutoJs6 6.8.0 / MCP 插件 1.3.1）
 
@@ -218,43 +230,26 @@ A6_MCP_URL=http://<手机IP>:9637/mcp A6_MCP_TOKEN=<令牌>   ./gradlew :shared:
 
 没设环境变量时该用例自动跳过，不会影响常规测试。
 
-## 真机桥接
-
-AutoJs6 插件中心启用「MCP Server」，在「真机」页填地址：
-
-- 真机直连：`http://<手机IP>:9637/mcp`
-- 或经本机中转：先跑 `legacy-web/bridge/mcp-bridge.mjs`（带 CORS 的透明转发），再填
-  `http://127.0.0.1:8765/mcp`
-
-调用链是 `initialize` → `notifications/initialized` → `tools/call`，同时兼容 JSON 与
-`text/event-stream` 响应。令牌走 `Authorization: Bearer`，默认只存内存。
-
-没真机也能试拾取器：`node legacy-web/tests/mock-mcp.mjs` 起一个假设备（内置 9 个节点，
-故意放两个同名「立即领取」验证「不唯一不允许直接填入」）。
-
 ## 已验证与未验证
 
 **已在本次改版中实测：**
 
-- `./gradlew :shared:jvmTest` 49 项通过（代码生成、树操作/撤销、模块作用域、Rhino 运行完整示例、
-  三个内置测试用例、拾取器候选/评分/兜底链/区域层级、录制解析与坐标归一化）。
+- `./gradlew :shared:jvmTest` 61 项通过（代码生成、语法守卫、旧版逐行对齐、树操作/撤销、模块作用域、
+  Rhino 后台运行完整示例、死循环超时与手动停止控制、三个内置测试用例、SSE 分帧、拾取器候选/评分/兜底链/区域层级、录制解析与坐标归一化）。
 - `./gradlew :androidApp:assembleDebug` 产出 11.8 MB debug APK。
 - `./gradlew :desktop:run` 启动成功，逐页截图核对过：代码页（含语法高亮般的基础着色与选中行高亮）、
   运行页（模拟手机跑完整流程，日志显示 3 个任务完成、空弹窗、收工）、测试页（3 个用例可见可编辑）、
   诊断页、真机页、帮助页、体检弹层、录制弹层、以及 760px 窄屏的手机布局。
-
 - 简单模式（首次向导 5 步、模板库 5 个模板、积木人话说明、报错翻译）已在桌面端与
   一加 CPH2581 / 魅族 17 Pro 上截图核对；模板「选完直接运行」的闭环在两端都跑通，
   手机端显示「跑完了（模拟用了 40s）」。
+- 真机 MCP 核心链路已在魅族 17 Pro（Android 13 / AutoJs6 6.8.0）实测跑通：Ping 366–540ms、
+  `device_info`、`ui_dump`、`current_window`、`script_run`、`console_tail` 全部连通；界面右上角显示「真机: meizu meizu 17 Pro」。
 
-**真机 MCP 已验证（2026-11-22，魅族 17 Pro）**：Ping 366–540ms、device_info、ui_dump、
-script_run 全部跑通；界面右上角显示「真机: meizu meizu 17 Pro」。
+**尚未在真机/多平台上完整验证：**
 
-**尚未在真机上验证：**
-
-- MCP 连接、拾取器取控件、体检、录制的真机链路——本机没有挂 Android 设备，只做了协议实现与
-  纯逻辑单测（用 `legacy-web/tests/mock-mcp.mjs` 的夹具数据）。上真机后的行为以 AutoJs6 为准。
-- macOS 打包（需要 Mac 环境）、Android release 签名。
+- 拾取器（截图叠热区与框选下钻）、体检一键修好、录制「读取并生成」的端到端真机交互，目前主要通过 `legacy-web/tests/mock-mcp.mjs` 夹具与纯逻辑单测覆盖。
+- macOS / Linux 安装包构建（需对应系统环境）、Android release 签名。
 
 **已知差异（相比 legacy-web）：**
 

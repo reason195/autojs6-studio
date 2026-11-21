@@ -20,12 +20,34 @@ kotlin {
 compose.desktop {
     application {
         mainClass = "cn.dumate.a6studio.desktop.MainKt"
+
+        // The Compose plugin already writes -Dskiko.library.path, the resources dir and the
+        // swing globals into the packaged .cfg. Listing them here again only duplicated them,
+        // and the resources dir ended up mangled into `$APPDIR` + `esources` (a stray `\r`).
+        // Keep just the heap size.
         jvmArgs += listOf("-Xmx2048m")
+
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "AutoJs6 Studio"
             packageVersion = "1.0.0"
-            description = "AutoJs6 可视化模块化脚本工作台"
+            // ASCII only: jpackage puts this into the MSI summary info, and WiX 3.x then fails
+            // with a bare `light.exe ... exited with 311 code` if the text is not Latin
+            // (verified on JDK 21 + WiX 3.11: Chinese description fails, ASCII succeeds).
+            // The Chinese product description lives in the app UI and the release notes.
+            description = "AutoJs6 visual scripting studio"
+            // Shown in the MSI/apps list; jpackage prints "Unknown" otherwise.
+            vendor = "reason195"
+            copyright = "MPL-2.0"
+
+            windows {
+                // Stable GUIDs so an upgrade replaces the previous install instead of stacking.
+                upgradeUuid = "7B690782-9016-39CF-9852-3AD1D1EEAFB8"
+                menuGroup = "AutoJs6 Studio"
+                shortcut = true
+                dirChooser = true
+                perUserInstall = false
+            }
         }
     }
 }
