@@ -1,0 +1,78 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    # The release artifacts are Windows-only for now (MSI + portable zip), and jpackage only
+    # produces an MSI on Windows, so one job covers tests and packaging end to end.
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # shared/ applies the Android library plugin, so the SDK must exist for :shared:jvmTest
+      # to configure, and androidApp/ needs platform 35 + build-tools 35.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform 35
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew :shared:jvmTest --console=plain
+
+      - name: Android debug APK
+        run: ./gradlew :androidApp:assembleDebug --console=plain
+
+      # jpackage needs WiX 3.x; the Compose plugin downloads 3.11.2 into build/wix311 and puts
+      # it on jpackage's PATH, so no separate WiX step is required.
+      # Note: nativeDistributions.description must stay ASCII, otherwise light.exe fails with
+      # the useless `exit 311`.
+      - name: Windows MSI
+        run: ./gradlew :desktop:packageMsi --console=plain
+
+      - name: Windows portable image
+        run: ./gradlew :desktop:createDistributable --console=plain
+
+      - name: Collect release artifacts
+        shell: pwsh
+        run: |
+          $version = '1.0.0'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "desktop/build/compose/binaries/main/msi/AutoJs6 Studio-$version.msi" "dist/AutoJs6Studio-$version-windows-x64.msi"
+          Copy-Item "androidApp/build/outputs/apk/debug/androidApp-debug.apk" "dist/AutoJs6Studio-$version-debug.apk"
+          Compress-Archive -Path "desktop/build/compose/binaries/main/app/AutoJs6 Studio" `
+            -DestinationPath "dist/AutoJs6Studio-$version-windows-x64.zip" -CompressionLevel Optimal
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/*
+          if-no-files-found: error
+
+      # jpackage only says `light.exe ... exited with 311 code`; its logs are the only way to
+      # see what actually broke, so keep them when the build fails.
+      - name: Upload jpackage logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jpackage-logs
+          path: desktop/build/compose/logs/**
+          if-no-files-found: ignore

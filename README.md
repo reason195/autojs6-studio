@@ -28,7 +28,7 @@ Windows / macOS / Linux 桌面端用 Compose Desktop，Android 用 Jetpack Compo
 ./gradlew :androidApp:assembleDebug
 # 产物：androidApp/build/outputs/apk/debug/androidApp-debug.apk
 
-# 核心逻辑单测（61 项）
+# 核心逻辑单测（63 项）
 ./gradlew :shared:jvmTest
 ```
 
@@ -41,6 +41,10 @@ node tools/legacy-gen.mjs     # 写出 build/crosscheck/legacy*.js
 ```
 
 没有夹具时该用例会打印 `SKIP` 并直接返回，其余用例照常执行。
+
+CI（`.github/workflows/ci.yml`）在 Windows runner 上跑同一套命令：单测 → Android APK →
+MSI → 免安装包，产物以 `windows-x64` 附件上传；jpackage 失败时会把 `desktop/build/compose/logs`
+一并存下来（它只会报一个 `exit 311`，日志才是线索）。
 
 Android 首次构建需要在仓库根目录放 `local.properties` 指向 SDK：
 
@@ -234,7 +238,7 @@ A6_MCP_URL=http://<手机IP>:9637/mcp A6_MCP_TOKEN=<令牌>   ./gradlew :shared:
 
 **已在本次改版中实测：**
 
-- `./gradlew :shared:jvmTest` 61 项通过（代码生成、语法守卫、旧版逐行对齐、树操作/撤销、模块作用域、
+- `./gradlew :shared:jvmTest` 63 项通过（代码生成、语法守卫、旧版逐行对齐、id 唯一性、树操作/撤销、模块作用域、
   Rhino 后台运行完整示例、死循环超时与手动停止控制、三个内置测试用例、SSE 分帧、拾取器候选/评分/兜底链/区域层级、录制解析与坐标归一化）。
 - `./gradlew :androidApp:assembleDebug` 产出 11.8 MB debug APK。
 - `./gradlew :desktop:run` 启动成功，逐页截图核对过：代码页（含语法高亮般的基础着色与选中行高亮）、
