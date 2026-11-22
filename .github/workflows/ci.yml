@@ -107,6 +107,47 @@ jobs:
           path: desktop/build/compose/logs/**
           if-no-files-found: ignore
 
+  # macOS / Linux 一直是「你自己在对应系统上构建」——README 这么写，但没人真的跑过。
+  # 这个 job 至少保证代码在 Linux 上能编译、能跑单测、能产出桌面可分发目录（不做安装包，
+  # 那需要 fakeroot 等打包工具，且没有用户会去装）。
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # shared/ 应用了 Android library 插件，即使只跑 jvmTest 也需要 SDK 存在；
+      # ubuntu runner 自带 ANDROID_HOME，用同一个脚本写 local.properties。
+      - name: Android SDK
+        shell: bash
+        run: |
+          sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          [ -n "$sdk" ] || { echo "ANDROID_HOME 未设置" >&2; exit 1; }
+          echo "sdk.dir=$sdk" > local.properties
+          echo "Android SDK: $sdk"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew :shared:jvmTest --console=plain
+
+      - name: Desktop distributable (Linux)
+        run: ./gradlew :desktop:createDistributable --console=plain
+
+      - name: Check the produced image
+        shell: bash
+        run: |
+          app="desktop/build/compose/binaries/main/app/AutoJs6 Studio"
+          ls -la "$app"
+          ls -la "$app/bin" || true
+          test -x "$app/bin/AutoJs6 Studio"
+
   # 真机链路（ping / device_info / ui_dump / script_run / console_tail）只能在能访问
   # 192.168.x.x 的机器上跑：GitHub 托管的 runner 在局域网外，连不到手机。
   #
