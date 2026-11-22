@@ -51,6 +51,14 @@ class SimRuntime(
             optimizationLevel = -1 // instruction observation only works in interpreted mode
             languageVersion = Context.VERSION_ES6
             instructionObserverThreshold = INSTRUCTION_SLICE
+            // Scripts arrive from anywhere (imported .js, pasted raw blocks). Without a shutter
+            // Rhino hands such a script the whole JVM with the user's rights — measured:
+            // `java.lang.System.getProperty('user.home')` returned a NativeJavaObject, and
+            // `Runtime.exec` / arbitrary file access follow from there. AutoJs6 *on the device*
+            // does allow Java interop, so the honest thing is to refuse it here and say so
+            // (see [JAVA_INTEROP_HINT]) instead of letting the simulator quietly behave
+            // differently.
+            setClassShutter { className -> !isJavaClass(className) }
         }
 
         override fun observeInstructionCount(cx: Context, instructionCount: Int) = checkLimits()
@@ -96,18 +104,36 @@ class SimRuntime(
             "exited" to null
         } catch (e: org.mozilla.javascript.WrappedException) {
             if (findSimExit(e)) return "exited" to null
-            "error" to (e.wrappedException?.message ?: e.message)
+            "error" to explainJavaBlock(e.wrappedException?.message ?: e.message)
         } catch (e: org.mozilla.javascript.RhinoException) {
-            "error" to ((e.details() ?: e.message ?: "") + "（行 ${e.lineNumber()}）")
+            "error" to explainJavaBlock((e.details() ?: e.message ?: "") + "（行 ${e.lineNumber()}）")
         } catch (e: Exception) {
             if (findSimExit(e)) return "exited" to null
-            "error" to (e.message ?: e.toString())
+            "error" to explainJavaBlock(e.message ?: e.toString())
         } finally {
             Context.exit()
             depth -= 1
-            cx = null
-            scope = null
+            // Only clear on the OUTERMOST frame. A nested `$run()` used to null `cx` while the
+            // outer Rhino context was still entered; helpers then fell back to a bare
+            // `Context.enter()`, which increments enterCount with no matching exit. Rhino keeps
+            // one thread-local context, so the leak made every later run on that thread reuse the
+            // old context (and its baked-in deadline) — the stop switch silently stopped working.
+            if (depth == 0) {
+                cx = null
+                scope = null
+            }
         }
+    }
+
+    /**
+     * Rhino's own wording for a blocked class ("Access to Java class … is prohibited") is
+     * technically true but tells the user nothing about what to do, so add the actionable part.
+     */
+    private fun explainJavaBlock(message: String?): String? {
+        if (message == null) return null
+        val blocked = message.contains("Java class") || message.contains("Java constructor") ||
+            message.contains("prohibited")
+        return if (blocked) message + "\n" + JAVA_INTEROP_HINT else message
     }
 
     private fun findSimExit(t: Throwable?): Boolean {
@@ -128,6 +154,7 @@ class SimRuntime(
         installSelectors(s)
         installDeviceAndApp(s)
         installDataAndDebug(s)
+        installJavaStubs(s)
         return sc
     }
 
@@ -529,8 +556,9 @@ class SimRuntime(
         }
         put(ocr, "mode") { _, _ -> null }
         put(ocr, "recognizeTextFromImage") { _, sc ->
-            val ctx = cx ?: Context.enter()
-            ctx.newArray(sc, state.buildNodes().map { it.text.ifEmpty { it.desc } }.filter { it.isNotEmpty() }.toTypedArray())
+            // Must go through makeArray: Context.newArray rejects a String[] (it insists on
+            // component type Object), so the previous toTypedArray() call always threw.
+            makeArray(sc, state.buildNodes().map { it.text.ifEmpty { it.desc } }.filter { it.isNotEmpty() })
         }
         ScriptableObject.putProperty(s, "ocr", ocr)
 
@@ -588,6 +616,23 @@ class SimRuntime(
         else -> true
     }
 
+    /**
+     * Real AutoJs6 scripts often start with `importClass(java.io.File)`. The simulator blocks
+     * Java classes (see the ClassShutter), so these must not look like a typo: they exist, log
+     * why they do nothing, and let the rest of the script run.
+     */
+    private fun installJavaStubs(s: ScriptableObject) {
+        val note = "模拟器不执行 Java 互操作（防止导入的脚本在电脑上执行任意 Java 代码）"
+        put(s, "importClass") { a, _ ->
+            log("warn", "$note：已忽略 importClass(${a.getOrNull(0)})，需要在真机上验证")
+            null
+        }
+        put(s, "importPackage") { a, _ ->
+            log("warn", "$note：已忽略 importPackage(${a.getOrNull(0)})，需要在真机上验证")
+            null
+        }
+    }
+
     /** Applies `$state().tasks = [...]` written by test code before replaying the program. */
     fun syncFromStateObject() {
         val o = stateObject ?: return
@@ -618,5 +663,15 @@ class SimRuntime(
     private companion object {
         /** Interpreted instructions between stop/timeout checks (~sub-millisecond). */
         const val INSTRUCTION_SLICE = 10_000
+
+        const val JAVA_INTEROP_HINT =
+            "（模拟器不提供 Java 互操作，避免导入的脚本在电脑上执行任意 Java 代码；这段请在真机运行）"
+
+        /** Packages a script must not reach: JDK internals, the engine itself, Kotlin runtime. */
+        fun isJavaClass(className: String): Boolean =
+            className.startsWith("java.") || className.startsWith("javax.") ||
+                className.startsWith("jdk.") || className.startsWith("sun.") ||
+                className.startsWith("com.sun.") || className.startsWith("org.mozilla.javascript") ||
+                className.startsWith("kotlin.")
     }
 }
