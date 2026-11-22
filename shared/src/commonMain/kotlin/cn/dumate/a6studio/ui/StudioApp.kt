@@ -1,5 +1,9 @@
 package cn.dumate.a6studio.ui
 
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -112,71 +116,56 @@ private fun TopBar(state: StudioState) {
             .background(Palette.panel)
             .border(width = 1.dp, color = Palette.borderSoft)
     ) {
+        // 一屏只有一个主按钮。以前这里塞了 15 个同等权重的按钮，宽屏要横向滚动、窄屏要两行，
+        // 用户每次都得在按钮堆里找目标；其余动作全收进「更多」菜单（键盘快捷键不变）。
         if (maxWidth < 820.dp) {
-            // Phone: brand + project name on row 1, actions on a scrollable row 2. Cramming
-            // everything onto one line made the name field overlap the title.
-            Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     BrandMark()
                     Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("AutoJs6 Studio", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
-                        Text("可视化 · 模块化 · 运行 / 测试 / 诊断", fontSize = 8.5.sp, color = Palette.textDim)
-                    }
-                    Spacer(Modifier.width(6.dp))
                     InlineField(
                         value = name,
                         onValueChange = { name = it; state.renameProject(it) },
                         placeholder = "项目名称",
-                        modifier = Modifier.widthIn(min = 110.dp, max = 150.dp)
+                        modifier = Modifier.weight(1f)
                     )
+                    Spacer(Modifier.width(8.dp))
+                    Badge(state.deviceStatusText, badgeKindOf(state.deviceStatusLevel))
                 }
-                Spacer(Modifier.height(6.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TopActions(state)
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    // Pinned outside the scroller: on a 360dp phone the mode switch was the last
-                    // item in the scrolled row and ended up off-screen.
-                    ModeSwitch(state)
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RunButton(state, Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    QuietAction("↶", "撤销") { state.undo() }
+                    Spacer(Modifier.width(8.dp))
+                    MoreMenu(state)
                 }
             }
         } else {
             Row(
-                Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 10.dp),
+                Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 BrandMark()
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(9.dp))
                 Column {
-                    Text("AutoJs6 Studio", fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
-                    Text("可视化 · 模块化 · 运行 / 测试 / 诊断", fontSize = 9.sp, color = Palette.textDim)
+                    Text("AutoJs6 Studio", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
+                    Text("可视化积木脚本", fontSize = 9.5.sp, color = Palette.textDim)
                 }
                 Spacer(Modifier.width(14.dp))
                 InlineField(
                     value = name,
                     onValueChange = { name = it; state.renameProject(it) },
                     placeholder = "项目名称",
-                    modifier = Modifier.width(180.dp)
+                    modifier = Modifier.width(200.dp)
                 )
+                Spacer(Modifier.weight(1f))
+                RunButton(state)
+                Spacer(Modifier.width(6.dp))
+                QuietAction("↶", "撤销") { state.undo() }
+                Spacer(Modifier.width(6.dp))
+                MoreMenu(state)
                 Spacer(Modifier.width(10.dp))
-                Row(
-                    Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    TopActions(state)
-                }
-                Spacer(Modifier.width(8.dp))
                 Badge(state.deviceStatusText, badgeKindOf(state.deviceStatusLevel))
             }
         }
@@ -191,65 +180,104 @@ private fun BrandMark() {
     ) { Text("A6", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White) }
 }
 
+/** The one primary action: run, or stop while it runs. */
 @Composable
-private fun TopActions(state: StudioState) {
-    if (state.running) TopAction("■ 停止", primary = true) { state.stopRun() }
-    else TopAction("▶ 运行", primary = true) { state.run() }
-    TopAction("📋 模板") { state.openTemplates() }
-    TopAction("? 怎么做") { state.showGuide = true }
-    if (state.beginnerMode) {
-        TopAction("检查问题") { state.showPane(Pane.DIAG) }
-        TopAction("↶ 撤销") { state.undo() }
-        TopAction("保存") { state.saveNow() }
-    } else {
-        TopAction("✓ 测试") { state.runTests() }
-        TopAction("⚕ 诊断") { state.showPane(Pane.DIAG) }
-        TopAction("⌕ 体检") { state.openAudit() }
-        TopAction("● 录制") { state.openRecorder() }
-        TopAction("↶") { state.undo() }
-        TopAction("保存") { state.saveNow() }
-        TopAction("导出 JS") { state.exportJs() }
-        TopAction("导出项目") { state.exportProject() }
-        TopAction("导入") { state.importScript() }
-    TopAction("导入项目") { state.importProject() }
-        TopAction("示例") { state.loadExample() }
-        TopAction("新建") { state.newProject() }
-    }
+private fun RunButton(state: StudioState, modifier: Modifier = Modifier) {
+    val running = state.running
+    Text(
+        if (running) "■ 停止" else "▶ 运行",
+        fontSize = 12.5.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = Color.White,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+            .clip(RoundedCornerShape(7.dp))
+            .background(if (running) Palette.err.copy(alpha = 0.9f) else Palette.accent)
+            .clickable { if (running) state.stopRun() else state.run() }
+            .padding(horizontal = 18.dp, vertical = 8.dp)
+    )
 }
 
-/** Always-visible switch between the beginner and full toolbars. */
+/** Secondary action with just a glyph: quieter than a labelled pill, still one click. */
 @Composable
-private fun ModeSwitch(state: StudioState) {
-    // Always show the CURRENT mode, not the one the click will switch to: the previous version
-    // said 「高级」 while in beginner mode, which reads as "I am in advanced" — and it used a
-    // different colour per direction, so the two states looked like different features.
-    val beginner = state.beginnerMode
+private fun QuietAction(glyph: String, hint: String, onClick: () -> Unit) {
     Text(
-        if (beginner) "简单模式" else "完整模式",
-        fontSize = 11.sp,
+        glyph,
+        fontSize = 14.sp,
         color = Palette.textDim,
         modifier = Modifier
-            .clip(RoundedCornerShape(5.dp))
+            .clip(RoundedCornerShape(7.dp))
             .background(Palette.panelAlt)
-            .border(1.dp, Palette.border, RoundedCornerShape(5.dp))
-            .clickable { state.changeBeginnerMode(!beginner) }
-            .padding(horizontal = 9.dp, vertical = 5.dp)
+            .border(1.dp, Palette.border, RoundedCornerShape(7.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 6.dp)
     )
 }
 
+/**
+ * Everything that used to sit in the toolbar, grouped so the menu reads like a table of contents
+ * instead of a button dump: 视图 / 检查 / 文件.
+ */
 @Composable
-private fun TopAction(label: String, primary: Boolean = false, onClick: () -> Unit) {
-    Text(
-        label,
-        fontSize = 11.sp,
-        color = if (primary) Color.White else Palette.text,
-        modifier = Modifier
-            .clip(RoundedCornerShape(5.dp))
-            .background(if (primary) Palette.accent.copy(alpha = 0.85f) else Palette.panelAlt)
-            .border(1.dp, if (primary) Color.Transparent else Palette.border, RoundedCornerShape(5.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 9.dp, vertical = 5.dp)
-    )
+private fun MoreMenu(state: StudioState) {
+    var open by remember { mutableStateOf(false) }
+
+    @Composable
+    fun item(label: String, danger: Boolean = false, action: () -> Unit) {
+        DropdownMenuItem(
+            text = {
+                Text(
+                    label,
+                    fontSize = 12.5.sp,
+                    color = if (danger) Palette.err else Palette.text
+                )
+            },
+            onClick = { open = false; action() },
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 9.dp)
+        )
+    }
+
+    @Composable
+    fun group(title: String) {
+        Text(
+            title,
+            fontSize = 9.5.sp,
+            color = Palette.textDim,
+            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp)
+        )
+    }
+
+    Box {
+        QuietAction("⋯", "更多") { open = true }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            group("视图")
+            item("模板库") { state.openTemplates() }
+            item("怎么做（新手引导）") { state.showGuide = true }
+            item(if (state.beginnerMode) "切换到完整模式" else "切换到简单模式") {
+                state.changeBeginnerMode(!state.beginnerMode)
+            }
+            group("检查")
+            if (state.beginnerMode) {
+                item("检查问题") { state.showPane(Pane.DIAG) }
+            } else {
+                item("跑一遍测试") { state.runTests() }
+                item("诊断") { state.showPane(Pane.DIAG) }
+                item("选择器体检") { state.openAudit() }
+                item("录制操作") { state.openRecorder() }
+            }
+            group("文件")
+            item("保存") { state.saveNow() }
+            item("导出 JS") { state.exportJs() }
+            item("导出项目") { state.exportProject() }
+            if (!state.beginnerMode) {
+                item("导入 JS 脚本") { state.importScript() }
+                item("导入项目") { state.importProject() }
+            }
+            group("项目")
+            item("载入示例") { state.loadExample() }
+            item("新建项目") { state.newProject() }
+        }
+    }
 }
 
 @Composable
@@ -368,7 +396,12 @@ fun ToastHost(state: StudioState) {
 private fun PaletteColumn(state: StudioState, modifier: Modifier) {
     val project = state.repo.current
     Column(modifier.border(width = 1.dp, color = Palette.borderSoft).background(Palette.panel)) {
-        PalettePanel(onAdd = { state.addBlock(it) }, modifier = Modifier.weight(1f), beginner = state.beginnerMode)
+        PalettePanel(
+            onAdd = { state.addBlock(it) },
+            modifier = Modifier.weight(1f),
+            beginner = state.beginnerMode,
+            onSwitchToAdvanced = { state.changeBeginnerMode(false) }
+        )
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)

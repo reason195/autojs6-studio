@@ -305,8 +305,8 @@ fun HelpPane(modifier: Modifier = Modifier, beginner: Boolean = false, onGuide: 
     Column(modifier.verticalScroll(rememberScrollState()).padding(12.dp)) {
         if (beginner) {
             HelpSection("三步做出第一个脚本")
-            HelpItem("1. 点顶栏「📋 模板」，选一个最接近你想法的现成脚本。")
-            HelpItem("2. 点「▶ 运行」，在内置模拟手机里看效果——不会碰你真实的手机。")
+            HelpItem("1. 点顶栏「⋯」→「模板库」，选一个最接近你想法的现成脚本。")
+            HelpItem("2. 点蓝色「▶ 运行」，在内置模拟手机里看效果——不会碰你真实的手机。")
             HelpItem("3. 想改成你自己的：点中间的积木，把上面的文字改成你屏幕上真实看到的字。")
 
             HelpSection("积木怎么用")
@@ -321,7 +321,7 @@ fun HelpPane(modifier: Modifier = Modifier, beginner: Boolean = false, onGuide: 
             HelpItem("实在找不到，把「点击控件」换成「点击坐标」，在截图上传坐标（换手机会失效）。")
 
             HelpSection("跑不通怎么办")
-            HelpItem("点「检查问题」，它会用人话告诉你哪里可能不行。")
+            HelpItem("点「⋯」→「检查问题」，它会用人话告诉你哪里可能不行。")
             HelpItem("看下面的日志：最后一行就是停下来的地方。")
             HelpItem("常见的三种：字写错了、页面还没加载完就点了、按钮在下一屏要往下滑。")
 
@@ -336,7 +336,7 @@ fun HelpPane(modifier: Modifier = Modifier, beginner: Boolean = false, onGuide: 
             }
             Spacer(Modifier.height(10.dp))
             Text(
-                "想看到代码、连接真机、录制操作？点顶栏「高级」切换到完整模式。",
+                "想看到代码、连接真机、录制操作？点顶栏「⋯」→「切换到完整模式」。",
                 fontSize = 10.5.sp, color = P.textDim
             )
             return@Column
@@ -345,10 +345,10 @@ fun HelpPane(modifier: Modifier = Modifier, beginner: Boolean = false, onGuide: 
         HelpSection("怎么用")
         HelpItem("1. 左侧点积木追加到画布；点积木卡片选中，右侧实时出代码并高亮对应行。")
         HelpItem("2. 点「运行」在内置模拟设备上执行生成的脚本；勾选「发送到真机」则调用 AutoJs6。")
-        HelpItem("3. 点「测试」跑用例；点「诊断」查静态风险与运行日志问题。")
+        HelpItem("3. 「⋯」→「跑一遍测试」跑用例；「诊断」查静态风险与运行日志问题。")
         HelpItem("4. 「我的模块」把一组积木固化为可复用函数。")
         HelpItem("5. 积木参数旁的 ⌖ 从真机界面树点选控件，验唯一后写回选择器或坐标。")
-        HelpItem("6. 「⌕ 体检」(F8) 逐个校验项目里所有选择器；「● 录制」(F9) 把手机操作转成积木。")
+        HelpItem("6. 「⋯」→「选择器体检」(F8) 逐个校验项目里所有选择器；「录制操作」(F9) 把手机操作转成积木。")
 
         HelpSection("快捷键")
         HelpItem("F5 运行 · Shift+F5 停止 · F6 测试 · F7 诊断 · F8 体检 · F9 录制")

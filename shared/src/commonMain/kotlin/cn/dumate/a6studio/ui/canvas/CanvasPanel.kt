@@ -79,7 +79,7 @@ fun CanvasPanel(
         Scope.Root -> project.root.children["body"].orEmpty()
     }
 
-    LazyColumn(modifier.padding(12.dp)) {
+    LazyColumn(modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
         item {
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -135,7 +135,7 @@ fun CanvasPanel(
                 onCommit = onCommit,
                 beginner = beginner
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(10.dp))
         }
     }
 }
@@ -168,7 +168,7 @@ private fun BlockCard(
                 shape = RoundedCornerShape(7.dp)
             )
             .clickable { repo.select(block.id) }
-            .padding(horizontal = 8.dp, vertical = 7.dp)
+            .padding(horizontal = 12.dp, vertical = 11.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(width = 3.dp, height = 15.dp).clip(RoundedCornerShape(2.dp)).background(accent))
@@ -199,8 +199,8 @@ private fun BlockCard(
                 },
                 contentAlignment = Alignment.Center
             ) { Text("⠿", fontSize = 11.sp, color = P.textDim.copy(alpha = 0.7f)) }
-            Spacer(Modifier.width(4.dp))
-            BlockActions(block, repo, onCommit)
+            Spacer(Modifier.width(2.dp))
+            BlockMenu(block, repo, onCommit)
         }
 
         if (beginner) {
@@ -217,16 +217,16 @@ private fun BlockCard(
         }
 
         if (def.params.isNotEmpty()) {
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(8.dp))
             ParamRow(block, def.params, repo, onPick, onCommit, beginner = beginner)
         }
 
         def.slots.forEach { slot ->
             val kids = block.children[slot.key].orEmpty()
             Column(
-                Modifier.fillMaxWidth().padding(start = 12.dp, top = 6.dp)
-                    .border(1.dp, P.borderSoft, RoundedCornerShape(5.dp))
-                    .padding(6.dp)
+                Modifier.fillMaxWidth().padding(start = 14.dp, top = 9.dp)
+                    .border(1.dp, P.borderSoft, RoundedCornerShape(6.dp))
+                    .padding(8.dp)
             ) {
                 Text("↳ ${slot.label}", fontSize = 10.sp, color = P.textDim)
                 if (kids.isEmpty()) {
@@ -234,34 +234,47 @@ private fun BlockCard(
                 }
                 kids.forEach { kid ->
                     BlockCard(kid, repo, project, selectedId, onPick, onCommit, beginner)
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
     }
 }
 
+/**
+ * 每张卡右侧以前排着 ↑ ↓ ⧉ ✕ 四个图标：一屏十张卡就是四十个点击目标，视觉噪音大、误触也多。
+ * 现在收成一个 ⋯ 菜单（长按卡片拖动排序仍然可用，快捷键也还在）。
+ */
 @Composable
-private fun BlockActions(block: Block, repo: ProjectRepo, onCommit: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        MiniAction("↑", "上移") { repo.shiftBlock(block.id, -1); onCommit() }
-        MiniAction("↓", "下移") { repo.shiftBlock(block.id, 1); onCommit() }
-        MiniAction("⧉", "复制") { repo.duplicateBlock(block.id); onCommit() }
-        MiniAction("✕", "删除", danger = true) { repo.removeBlock(block.id); onCommit() }
-    }
-}
+private fun BlockMenu(block: Block, repo: ProjectRepo, onCommit: () -> Unit) {
+    var open by remember(block.id) { mutableStateOf(false) }
 
-@Composable
-private fun MiniAction(label: String, tooltip: String, danger: Boolean = false, onClick: () -> Unit) {
-    Text(
-        label,
-        fontSize = 11.sp,
-        color = if (danger) P.err.copy(alpha = 0.85f) else P.textDim,
-        modifier = Modifier
-            .clip(RoundedCornerShape(3.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 2.dp)
-    )
+    @Composable
+    fun item(label: String, danger: Boolean = false, action: () -> Unit) {
+        DropdownMenuItem(
+            text = { Text(label, fontSize = 12.5.sp, color = if (danger) P.err else P.text) },
+            onClick = { open = false; action() },
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 9.dp)
+        )
+    }
+
+    Box {
+        Text(
+            "⋯",
+            fontSize = 14.sp,
+            color = P.textDim,
+            modifier = Modifier
+                .clip(RoundedCornerShape(5.dp))
+                .clickable { open = true }
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            item("上移") { repo.shiftBlock(block.id, -1); onCommit() }
+            item("下移") { repo.shiftBlock(block.id, 1); onCommit() }
+            item("复制") { repo.duplicateBlock(block.id); onCommit() }
+            item("删除", danger = true) { repo.removeBlock(block.id); onCommit() }
+        }
+    }
 }
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
