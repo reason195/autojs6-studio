@@ -19,7 +19,8 @@ object Catalog {
         Category("data", "数据 / 网络 / 文件", 0xFF3D8BD4),
         Category("debug", "调试与诊断", 0xFFD4A017),
         Category("jd", "京东领券中心（实战）", 0xFFD94F4F),
-        Category("module", "我的模块", 0xFF64748B)
+        Category("module", "我的模块", 0xFF64748B),
+        Category("raw", "原生代码", 0xFF7A8699)
     )
 
     val BY: List<SelectOption> = listOf(
@@ -82,6 +83,7 @@ object Catalog {
         defData()
         defDebug()
         defJd()
+        defRaw()
         defModule()
     }
 
@@ -581,6 +583,24 @@ object Catalog {
                 "}",
                 "if (emptyRounds >= $zero) { log(\"收工：连续 \" + emptyRounds + \" 轮未发现京豆任务\"); } else { log(\"仍有任务，继续处理\"); }"
             ).joinToString("\n")
+        }
+    }
+
+    // ===================== 导入的原生代码 =====================
+    /**
+     * Verbatim AutoJs6 script. Used when a script imported from `.js` contains constructs the
+     * block catalogue cannot express (helper functions, `ocr.detect()`, `app.startActivity`…):
+     * keeping the source as one block guarantees the imported project behaves exactly like the
+     * original instead of silently dropping code we failed to map.
+     */
+    private fun defRaw() {
+        def(
+            "rawJs", "raw", "原生 JavaScript 代码（导入的脚本）",
+            params = listOf(ParamDef("code", "代码", ParamKind.CODE, ParamValue.Text(""))),
+            slots = emptyList()
+        ) { b, c ->
+            val body = b.params["code"]?.asText().orEmpty()
+            if (body.isBlank()) "// （空的原生代码积木）" else body
         }
     }
 

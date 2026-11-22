@@ -297,6 +297,27 @@ class SimRuntime(
             publishRender()
             true
         }
+        // Real AutoJs6 scripts often launch via an intent instead of launchPackage
+        // (measured on a user script: app.startActivity({data:"jdmobile://...", packageName:"com.jd.jrapp"})).
+        put(app, "startActivity") { a, _ ->
+            val opts = a.getOrNull(0) as? NativeObject
+            val data = opts?.get("data")?.toString().orEmpty()
+            val pkg = opts?.get("packageName")?.toString().orEmpty()
+            log("info", "startActivity：" + listOf(pkg, data).filter { it.isNotEmpty() }.joinToString(" "))
+            when {
+                pkg == "com.jd.jrapp" -> state.screen = "jd.finance"
+                data.contains("jd.com") || data.contains("jdmobile") -> state.screen = "jd.coupon"
+            }
+            publishRender()
+            null
+        }
+        put(app, "startActivityForResult") { a, _ ->
+            log("info", "startActivityForResult")
+            null
+        }
+        put(app, "getPackageName") { a, _ ->
+            if (a.getOrNull(0)?.toString() == "京东") "com.jingdong.app.mall" else ""
+        }
         put(app, "openUrl") { a, _ ->
             val url = a.getOrNull(0)?.toString() ?: ""
             log("info", "打开 URL $url")
@@ -480,6 +501,36 @@ class SimRuntime(
         val ocr = NativeObject()
         put(ocr, "recognizeText") { _, _ ->
             state.buildNodes().map { it.text.ifEmpty { it.desc } }.filter { it.isNotEmpty() }.joinToString(" ")
+        }
+
+        // `ocr.detect()` returns an array of {label, bounds{...}} — the shape AutoJs6 scripts
+        // iterate over (measured on a real script). Bounds mirror the simulated screen nodes so
+        // OCR-driven clicking lands on the right widget.
+        put(ocr, "detect") { _, sc ->
+            val ctx = cx ?: Context.enter()
+            val items = state.buildNodes().mapNotNull { n ->
+                val label = n.text.ifEmpty { n.desc }
+                if (label.isEmpty()) return@mapNotNull null
+                val o = NativeObject()
+                o.put("label", o, label)
+                val b = NativeObject()
+                b.put("left", b, n.bounds[0])
+                b.put("top", b, n.bounds[1])
+                b.put("right", b, n.bounds[2])
+                b.put("bottom", b, n.bounds[3])
+                // Scripts call bounds.centerX()/centerY(); expose them as callables.
+                put(b, "centerX") { _, _ -> (n.bounds[0] + n.bounds[2]) / 2 }
+                put(b, "centerY") { _, _ -> (n.bounds[1] + n.bounds[3]) / 2 }
+                o.put("bounds", o, b)
+                o.put("confidence", o, 0.95)
+                o
+            }
+            makeArray(sc, items)
+        }
+        put(ocr, "mode") { _, _ -> null }
+        put(ocr, "recognizeTextFromImage") { _, sc ->
+            val ctx = cx ?: Context.enter()
+            ctx.newArray(sc, state.buildNodes().map { it.text.ifEmpty { it.desc } }.filter { it.isNotEmpty() }.toTypedArray())
         }
         ScriptableObject.putProperty(s, "ocr", ocr)
 

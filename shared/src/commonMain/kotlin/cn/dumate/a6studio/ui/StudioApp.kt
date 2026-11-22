@@ -210,7 +210,8 @@ private fun TopActions(state: StudioState) {
         TopAction("保存") { state.saveNow() }
         TopAction("导出 JS") { state.exportJs() }
         TopAction("导出项目") { state.exportProject() }
-        TopAction("导入") { state.importProject() }
+        TopAction("导入") { state.importScript() }
+    TopAction("导入项目") { state.importProject() }
         TopAction("示例") { state.loadExample() }
         TopAction("新建") { state.newProject() }
     }

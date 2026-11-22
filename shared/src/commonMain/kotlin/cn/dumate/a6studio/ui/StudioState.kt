@@ -570,6 +570,29 @@ class StudioState(
         }
     }
 
+    /**
+     * Imports a plain AutoJs6 `.js` script. The previous「导入」only understood Studio's own project
+     * JSON, so any real script failed with "导入失败" — which is what the user hit.
+     */
+    fun importScript() {
+        scope.launch {
+            val picked = platform.openTextFile(listOf("js", "txt")) ?: return@launch
+            val (fileName, content) = picked
+            val name = fileName.substringBeforeLast('.')
+            val result = cn.dumate.a6studio.importer.ScriptImporter.import(content, name)
+            if (result.total == 0) {
+                toast("这个文件是空的，没有可导入的内容")
+                return@launch
+            }
+            repo.snapshot("导入脚本")
+            repo.setProjectDirect(result.project)
+            refreshAll()
+            showPane(Pane.RUN)
+            val detail = result.notes.joinToString("；")
+            toast("已导入「$name」：$detail")
+        }
+    }
+
     fun importProject() {
         scope.launch {
             val picked = platform.openTextFile(listOf("json"))

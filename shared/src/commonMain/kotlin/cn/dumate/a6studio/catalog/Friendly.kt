@@ -28,7 +28,8 @@ object Friendly {
         FriendlyCategory("vision", "看图 / 认字", "截图、找图、识别文字", false),
         FriendlyCategory("data", "文件 / 网络", "存数据、发请求", false),
         FriendlyCategory("debug", "调试工具", "检查脚本哪里出错", false),
-        FriendlyCategory("module", "我的模块", "把一段操作打包复用", false)
+        FriendlyCategory("module", "我的模块", "把一段操作打包复用", false),
+        FriendlyCategory("raw", "原生代码", "从 .js 脚本导入、暂时无法变成积木的代码", false)
     )
 
     fun categoryName(id: String): String =
@@ -128,7 +129,10 @@ object Friendly {
         "jdFinishGuard" to "【示例】确认没有更多任务了才收工",
 
         // 模块
-        "moduleCall" to "执行你自己打包好的那段操作"
+        "moduleCall" to "执行你自己打包好的那段操作",
+
+        // 原生代码
+        "rawJs" to "从你的 .js 脚本原样搬过来的代码；能运行，但暂时不能在画布上改参数"
     )
 
     private val paramHints: Map<String, Map<String, String>> = mapOf(
