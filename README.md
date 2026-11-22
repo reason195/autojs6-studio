@@ -20,7 +20,9 @@ Windows / macOS / Linux 桌面端用 Compose Desktop，Android 用 Jetpack Compo
 
 # Windows 安装包（MSI，需管理员权限安装）
 ./gradlew :desktop:packageMsi
-# 产物：desktop/build/compose/binaries/main/msi/AutoJs6 Studio-1.0.0.msi
+# 产物：desktop/build/compose/binaries/main/msi/AutoJs6 Studio-<版本>.msi
+# 版本号只有一个来源：gradle.properties 的 a6studio.version（桌面 packageVersion 与
+# Android versionName 都读它，Android 的 versionCode 记得同步 +1）
 # 注意：nativeDistributions.description 必须是纯 ASCII —— jpackage 会把它写进 MSI
 # 摘要信息，WiX 3.x 遇到中文只报一个 `light.exe ... exited with 311 code`（无更多信息）。
 
@@ -45,6 +47,20 @@ node tools/legacy-gen.mjs     # 写出 build/crosscheck/legacy*.js
 CI（`.github/workflows/ci.yml`）在 Windows runner 上跑同一套命令：单测 → Android APK →
 MSI → 免安装包，产物以 `windows-x64` 附件上传；jpackage 失败时会把 `desktop/build/compose/logs`
 一并存下来（它只会报一个 `exit 311`，日志才是线索）。
+
+**发版就一个动作**：把 `gradle.properties` 的版本号改好、在 `docs/release-notes.md` 里加一节
+`## v<版本>`、提交后推 tag（`git tag v1.0.1 && git push origin v1.0.1`）。CI 会构建三件产物、
+算 SHA-256、创建或更新同名 Release，并把该版本小节的说明写进正文——发布说明里的哈希永远等于
+上传的文件。本地复现同一套产物：
+
+```bash
+./gradlew :shared:jvmTest :androidApp:assembleDebug :desktop:packageMsi :desktop:createDistributable
+python tools/make-zip.py --out build/release/AutoJs6Studio-<版本>-windows-x64.zip
+python tools/release-notes.py <版本> --dist build/release   # 打印 Release 正文（含哈希）
+```
+
+免安装 zip 必须用 `tools/make-zip.py` 打：`Compress-Archive` 会把条目分隔符写成反斜杠，
+在 Linux/macOS 上解压得到的是一个名字带 `\` 的文件，而不是目录树。
 
 Android 首次构建需要在仓库根目录放 `local.properties` 指向 SDK：
 

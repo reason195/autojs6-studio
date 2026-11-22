@@ -30,7 +30,9 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "AutoJs6 Studio"
-            packageVersion = "1.0.0"
+            // jpackage 与版本号的关系：MSI 文件名和升级判断都来自这里，必须与 Android 一致地取自
+            // gradle.properties，否则两处手改迟早对不上。
+            packageVersion = providers.gradleProperty("a6studio.version").get()
             // ASCII only: jpackage puts this into the MSI summary info, and WiX 3.x then fails
             // with a bare `light.exe ... exited with 311 code` if the text is not Latin
             // (verified on JDK 21 + WiX 3.11: Chinese description fails, ASCII succeeds).

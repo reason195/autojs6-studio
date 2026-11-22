@@ -14,8 +14,9 @@ android {
         applicationId = "cn.dumate.a6studio"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        // versionCode 必须随 versionName 一起涨，否则覆盖安装会被系统当成同一版。
+        versionCode = 2
+        versionName = providers.gradleProperty("a6studio.version").get()
     }
 
     buildFeatures { compose = true }

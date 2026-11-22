@@ -3,6 +3,7 @@ name: build
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -13,6 +14,8 @@ jobs:
     # produces an MSI on Windows, so one job covers tests and packaging end to end.
     runs-on: windows-latest
     timeout-minutes: 40
+    permissions:
+      contents: write # 推 tag 时要创建/更新 Release 并上传附件
 
     steps:
       - uses: actions/checkout@v4
@@ -72,20 +75,44 @@ jobs:
       - name: Collect release artifacts
         shell: pwsh
         run: |
-          $version = '1.0.0'
+          # 版本号只有一个来源：gradle.properties 的 a6studio.version
+          $version = (Select-String -Path gradle.properties -Pattern '^a6studio\.version=').Line.Split('=')[1].Trim()
+          Write-Host "version=$version"
+          "A6STUDIO_VERSION=$version" | Out-File -Append $env:GITHUB_ENV
+
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item "desktop/build/compose/binaries/main/msi/AutoJs6 Studio-$version.msi" "dist/AutoJs6Studio-$version-windows-x64.msi"
           Copy-Item "androidApp/build/outputs/apk/debug/androidApp-debug.apk" "dist/AutoJs6Studio-$version-debug.apk"
-          Compress-Archive -Path "desktop/build/compose/binaries/main/app/AutoJs6 Studio" `
-            -DestinationPath "dist/AutoJs6Studio-$version-windows-x64.zip" -CompressionLevel Optimal
+          # 用脚本打包，不用 Compress-Archive（后者写反斜杠分隔符，跨平台解压会出错）
+          python tools/make-zip.py --out "dist/AutoJs6Studio-$version-windows-x64.zip"
           Get-ChildItem dist | Format-Table Name, Length
 
-      - name: Upload release artifacts
+      - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
           path: dist/*
           if-no-files-found: error
+
+      # 推 tag 就是发版：正文取自 docs/release-notes.md 的对应小节 + 本次产物的 SHA-256，
+      # 所以「发布说明里的哈希」永远等于「上传的文件」。
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -ne "v$env:A6STUDIO_VERSION") {
+            throw "tag $tag 与 gradle.properties 的版本 $env:A6STUDIO_VERSION 不一致"
+          }
+          python tools/release-notes.py $env:A6STUDIO_VERSION --dist dist | Out-File -Encoding utf8 notes.md
+          if (gh release view $tag --json tagName 2>$null) {
+            gh release upload $tag (Get-ChildItem dist).FullName --clobber
+            gh release edit $tag --notes-file notes.md --title "AutoJs6 Studio $env:A6STUDIO_VERSION"
+          } else {
+            gh release create $tag --title "AutoJs6 Studio $env:A6STUDIO_VERSION" --notes-file notes.md (Get-ChildItem dist).FullName
+          }
 
       # jpackage only says `light.exe ... exited with 311 code`; its logs are the only way to
       # see what actually broke, so keep them when the build fails.
