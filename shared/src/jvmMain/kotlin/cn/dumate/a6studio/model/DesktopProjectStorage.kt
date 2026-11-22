@@ -17,4 +17,11 @@ class DesktopProjectStorage(private val platform: Platform) : ProjectStorage {
         file.parentFile?.mkdirs()
         file.writeText(json)
     }
+
+    /** Keeps unreadable content beside the project so a bad read cannot destroy the user's work. */
+    override fun backupBroken(raw: String): String? = runCatching {
+        val target = File(file.parentFile, "project.broken-${System.currentTimeMillis()}.json")
+        target.writeText(raw)
+        target.absolutePath
+    }.getOrNull()
 }

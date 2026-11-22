@@ -52,16 +52,41 @@ class ProjectRepo(private val storage: ProjectStorage) {
 
     val current: Project get() = _projectState
 
-    fun load() {
+    /** Last write failure, surfaced by the UI instead of being swallowed. */
+    var lastSaveError: String? = null
+        private set
+
+    /**
+     * Loads the stored project. Returns a message for the user when the stored file could not be
+     * used, or null when everything was fine.
+     *
+     * A parse failure used to fall back to the sample project silently; the next edit then wrote
+     * the sample over the user's file, turning a bad read into permanent data loss. Now the
+     * unreadable content is backed up first and the user is told where it went.
+     */
+    fun load(): String? {
         val raw = try { storage.loadRaw() } catch (e: Exception) { null }
-        _projectState = if (raw.isNullOrBlank()) Samples.exampleProject() else {
-            try {
-                val parsed = json.decodeFromString(Project.serializer(), raw)
-                if (parsed.root.type.isEmpty()) Samples.exampleProject() else normalizeProject(parsed)
-            } catch (e: Exception) {
-                Samples.exampleProject()
+        if (raw.isNullOrBlank()) {
+            _projectState = Samples.exampleProject()
+            return null
+        }
+        val parsed = try {
+            json.decodeFromString(Project.serializer(), raw)
+        } catch (e: Exception) {
+            _projectState = Samples.exampleProject()
+            val backup = runCatching { storage.backupBroken(raw) }.getOrNull()
+            return if (backup != null) {
+                "上次的项目文件读不出来，已载入示例项目；原内容备份在 $backup"
+            } else {
+                "上次的项目文件读不出来，已载入示例项目（原内容无法备份）"
             }
         }
+        if (parsed.root.type.isEmpty()) {
+            _projectState = Samples.exampleProject()
+            return null
+        }
+        _projectState = normalizeProject(parsed)
+        return null
     }
 
     private fun normalizeProject(p: Project): Project = p.copy(
@@ -73,8 +98,19 @@ class ProjectRepo(private val storage: ProjectStorage) {
         children = b.children.mapValues { (_, kids) -> kids.map(::normalizeBlock) }
     )
 
-    fun save() {
-        try { storage.saveRaw(json.encodeToString(Project.serializer(), current)) } catch (e: Exception) { /* ignore */ }
+    /**
+     * Persists the project. Returns false on failure and records why in [lastSaveError].
+     *
+     * Silently swallowing this meant "已保存" was shown while the file on disk was stale (full
+     * disk, revoked SAF permission, locked file) — the user's work was gone on next launch.
+     */
+    fun save(): Boolean = try {
+        storage.saveRaw(json.encodeToString(Project.serializer(), current))
+        lastSaveError = null
+        true
+    } catch (e: Exception) {
+        lastSaveError = e.message ?: e.toString()
+        false
     }
 
     fun toast(msg: String) { _toastState = msg }

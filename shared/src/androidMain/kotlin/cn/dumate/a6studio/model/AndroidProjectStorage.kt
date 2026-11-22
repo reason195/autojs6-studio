@@ -9,7 +9,15 @@ class AndroidProjectStorage(private val context: Context) : ProjectStorage {
     override fun loadRaw(): String? =
         if (file.exists()) runCatching { file.readText() }.getOrNull() else null
 
+    // Throws on failure so directory-full / revoked-storage cases reach the user instead of
+    // looking like a successful save.
     override fun saveRaw(json: String) {
-        runCatching { file.writeText(json) }
+        file.writeText(json)
     }
+
+    override fun backupBroken(raw: String): String? = runCatching {
+        val target = java.io.File(file.parentFile, "project.broken-${System.currentTimeMillis()}.json")
+        target.writeText(raw)
+        target.absolutePath
+    }.getOrNull()
 }

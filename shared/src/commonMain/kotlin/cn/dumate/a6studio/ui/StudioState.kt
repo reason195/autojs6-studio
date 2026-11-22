@@ -62,6 +62,11 @@ class StudioState(
     engineFactory: HttpClientEngineFactory<*>,
     private val engine: RunEngine
 ) {
+    // Reused across import/export: constructing a Json format per call is measurable when
+    // exporting a large project, and the compiler flags it.
+    private val prettyJson = Json { prettyPrint = true }
+    private val lenientJson = Json { ignoreUnknownKeys = true }
+
     val repo = ProjectRepo(storage)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -195,7 +200,10 @@ class StudioState(
 
     // ---- lifecycle ----------------------------------------------------------
     fun init() {
-        repo.load()
+        // A stored project that cannot be parsed must not disappear silently: the sample project
+        // would then be saved over the user's file on the next edit. `load()` returns a message
+        // when that happened (and keeps a backup when the host supports it).
+        val loadWarning = repo.load()
         bridgeUrl = repo.current.bridge.url.ifBlank { cn.dumate.a6studio.config.AppConfig.defaultUrl }
         rememberToken = platform.readTextFile(rememberMarkerPath()) == "1"
         if (rememberToken) loadRememberedTokens()
@@ -213,6 +221,10 @@ class StudioState(
 
         refreshCode()
         recomputeDiag()
+        loadWarning?.let {
+            statusHint = it
+            toast(it)
+        }
         platform.setWindowTitle("AutoJs6 Studio · ${repo.current.name}")
     }
 
@@ -287,6 +299,22 @@ class StudioState(
         refreshCode()
         recomputeDiag()
         repo.save()
+        reportSaveFailure()
+    }
+
+    /** Shown once per distinct failure: commits happen on every keystroke. */
+    private var lastSaveFailShown: String? = null
+
+    private fun reportSaveFailure() {
+        val err = repo.lastSaveError
+        if (err == null) {
+            lastSaveFailShown = null
+            return
+        }
+        if (err != lastSaveFailShown) {
+            lastSaveFailShown = err
+            toast("保存失败：$err（改动还在，修好后可再点保存）")
+        }
     }
 
     // ---- editor intents ------------------------------------------------------
@@ -593,7 +621,7 @@ class StudioState(
 
     fun exportProject() {
         scope.launch {
-            val json = Json { prettyPrint = true }.encodeToString(
+            val json = prettyJson.encodeToString(
                 cn.dumate.a6studio.model.Project.serializer(), repo.current
             )
             val name = (repo.current.name.ifBlank { "autojs6" }) + ".a6proj.json"
@@ -630,9 +658,12 @@ class StudioState(
             val picked = platform.openTextFile(listOf("json"))
             if (picked == null) return@launch
             try {
-                val p = Json { ignoreUnknownKeys = true }.decodeFromString(
+                val p = lenientJson.decodeFromString(
                     cn.dumate.a6studio.model.Project.serializer(), picked.second
                 )
+                // Every other destructive path snapshots first; without this, importing the wrong
+                // .a6proj.json overwrote the project with no way back (save() also persisted it).
+                repo.snapshot("导入项目")
                 repo.setProjectDirect(p)
                 refreshAll()
                 toast("已导入：${p.name}")
@@ -664,7 +695,11 @@ class StudioState(
 
     fun saveNow() {
         repo.save()
-        toast("已保存到本机")
+        if (repo.lastSaveError == null) toast("已保存到本机")
+        else {
+            lastSaveFailShown = repo.lastSaveError
+            toast("保存失败：${repo.lastSaveError}")
+        }
     }
 
     fun copyCode() {

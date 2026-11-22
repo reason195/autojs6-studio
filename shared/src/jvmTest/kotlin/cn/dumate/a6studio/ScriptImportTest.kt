@@ -7,6 +7,7 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ScriptImportTest {
@@ -136,5 +137,34 @@ class ScriptImportTest {
         if (run.status == "error") {
             println("IMPORT run error: ${run.error}")
         }
+    }
+}
+
+/** A corrupt stored project must never be replaced quietly — that is how work disappears. */
+class BrokenProjectLoadTest {
+
+    private class FailingSaveStorage : cn.dumate.a6studio.model.ProjectStorage {
+        override fun loadRaw(): String? = null
+        override fun saveRaw(json: String) = throw IllegalStateException("disk full")
+    }
+
+    @Test
+    fun `unreadable project is backed up and reported`() {
+        val storage = cn.dumate.a6studio.model.MemoryProjectStorage("{not json")
+        val repo = cn.dumate.a6studio.store.ProjectRepo(storage)
+        val warning = repo.load()
+        assertTrue(warning != null && warning.contains("备份"), "warning=$warning")
+        assertEquals(1, storage.backups.size)
+        assertEquals("{not json", storage.backups.single())
+        // Still usable: the sample project is loaded so the app is not stuck.
+        assertTrue(repo.current.root.children["body"]!!.isNotEmpty())
+    }
+
+    @Test
+    fun `save failure is reported instead of swallowed`() {
+        val repo = cn.dumate.a6studio.store.ProjectRepo(FailingSaveStorage())
+        repo.load()
+        assertFalse(repo.save())
+        assertTrue(repo.lastSaveError!!.contains("disk full"))
     }
 }
