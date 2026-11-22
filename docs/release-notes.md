@@ -15,6 +15,10 @@ CI 在打 tag 时把对应小节连同产物的 SHA-256 一起写进 GitHub Rele
   不用再手工 `gh release upload --clobber`
 - 免安装 zip 由 `tools/make-zip.py` 生成，条目分隔符固定为 `/`；原来 CI 用的 `Compress-Archive`
   与本地产物分隔符不一致
+- **Android 签名固定了**：以前用每台机器/每个 CI runner 各自生成的 `~/.android/debug.keystore`，
+  同名版本换个来源签名就变，覆盖安装报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`。现在统一用仓库里的
+  `tools/debug.keystore`（公开的 debug-only 密钥），本地与 CI 的包可以互相覆盖升级。
+  **装过 1.0.0 的话需要卸载一次**（数据可用 `pm uninstall -k` 保留），之后就能直接升级
 
 ### 下载
 
