@@ -2,6 +2,8 @@ package cn.dumate.a6studio.picker
 
 import cn.dumate.a6studio.bridge.McpClient
 import cn.dumate.a6studio.bridge.parseNodes
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -81,6 +83,7 @@ class PickerController(
 
     suspend fun refresh() {
         if (state.target == null) return
+        currentCoroutineContext().ensureActive()
         update { it.copy(busy = true, error = null, selected = null, candidates = emptyList(), chosen = null, coord = null) }
         try {
             if (!bridge.isReady) bridge.ping()

@@ -7,6 +7,8 @@ import cn.dumate.a6studio.model.Block
 import cn.dumate.a6studio.model.Project
 import cn.dumate.a6studio.picker.Candidate
 import cn.dumate.a6studio.picker.PickerLogic
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -85,15 +87,21 @@ class AuditController(
     suspend fun run(project: Project) {
         if (busy) return
         busy = true
-        rows = collect(project)
-        onRows(rows, if (rows.isEmpty()) "项目里没有 by/value 选择器积木" else "正在逐个校验…")
-        if (rows.isEmpty()) { busy = false; return }
+        try {
+            rows = collect(project)
+            onRows(rows, if (rows.isEmpty()) "项目里没有 by/value 选择器积木" else "正在逐个校验…")
+            if (rows.isEmpty()) return
 
-        for (i in rows.indices) {
-            rows = rows.toMutableList().also { it[i] = auditOne(it[i]) }
-            onRows(rows, "体检中 ${i + 1}/${rows.size}…")
+            for (i in rows.indices) {
+                // Each auditOne is a phone round-trip (up to 15 s); stop promptly when the user
+                // closes the panel instead of grinding through the remaining rows.
+                currentCoroutineContext().ensureActive()
+                rows = rows.toMutableList().also { it[i] = auditOne(it[i]) }
+                onRows(rows, "体检中 ${i + 1}/${rows.size}…")
+            }
+        } finally {
+            busy = false
         }
-        busy = false
         val bad = rows.count { it.status in setOf(AuditStatus.MULTIPLE, AuditStatus.MISSING, AuditStatus.ERROR) }
         onRows(
             rows,

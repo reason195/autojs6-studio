@@ -713,24 +713,38 @@ class StudioState(
     }
 
     // ---- picker --------------------------------------------------------------
+    // The picker/audit talk to the phone, and a single `ui_find` can sit for 15 s. Without a
+    // handle the work outlived the panel: closing it and reopening another block queued a second
+    // dump behind the first, so the UI felt frozen and stale results could arrive late.
+    private var pickerJob: Job? = null
+    private var auditJob: Job? = null
+
+    private fun launchPicker(block: suspend () -> Unit) {
+        pickerJob?.cancel()
+        pickerJob = scope.launch { block() }
+    }
+
     fun openPicker(blockId: String, paramKey: String, kind: PickKind) {
         overlay = Overlay.PICKER
         applyBridgeConfig()
-        scope.launch { picker.open(PickTarget(blockId, paramKey, kind)) }
+        launchPicker { picker.open(PickTarget(blockId, paramKey, kind)) }
     }
 
     fun closeOverlay() {
         overlay = Overlay.NONE
+        // Closing must actually stop the phone calls, not just hide the panel.
+        pickerJob?.cancel()
+        auditJob?.cancel()
         picker.close()
     }
 
-    fun pickerSetView(v: cn.dumate.a6studio.picker.PickerView) { scope.launch { picker.setView(v) } }
+    fun pickerSetView(v: cn.dumate.a6studio.picker.PickerView) { launchPicker { picker.setView(v) } }
     fun pickerSetQuery(q: String) { picker.setQuery(q) }
     fun pickerSetOnlyClickable(v: Boolean) { picker.setOnlyClickable(v) }
-    fun pickerRefresh() { scope.launch { picker.refresh() } }
-    fun pickerSelect(node: cn.dumate.a6studio.picker.UiNode) { scope.launch { picker.selectNode(node) } }
-    fun pickerCapture() { scope.launch { picker.capture() } }
-    fun pickerDrill(l: Int, t: Int, r: Int, b: Int) { scope.launch { picker.drill(l, t, r, b) } }
+    fun pickerRefresh() { launchPicker { picker.refresh() } }
+    fun pickerSelect(node: cn.dumate.a6studio.picker.UiNode) { launchPicker { picker.selectNode(node) } }
+    fun pickerCapture() { launchPicker { picker.capture() } }
+    fun pickerDrill(l: Int, t: Int, r: Int, b: Int) { launchPicker { picker.drill(l, t, r, b) } }
     fun pickerClearRegion() { picker.clearRegion() }
     fun pickerCoord(x: Int, y: Int) { picker.setCoord(x, y) }
     fun pickerSwipePoint(x: Int, y: Int) { picker.takeSwipePoint(x, y) }
@@ -776,12 +790,23 @@ class StudioState(
     fun openAudit() {
         overlay = Overlay.AUDIT
         applyBridgeConfig()
-        scope.launch { audit.run(repo.current) }
+        startAudit()
     }
 
     fun rerunAudit() {
         applyBridgeConfig()
-        scope.launch { audit.run(repo.current) }
+        startAudit()
+    }
+
+    /** Restarting stops the previous pass first: two passes interleaved their row updates. */
+    private fun startAudit() {
+        auditJob?.cancel()
+        auditJob = scope.launch { audit.run(repo.current) }
+    }
+
+    fun cancelAudit() {
+        auditJob?.cancel()
+        auditNote = "已停止体检"
     }
 
     fun applyAuditFixes() {
