@@ -60,6 +60,16 @@ private class DesktopPlatform : Platform {
         val f = resolve(path) ?: return false
         f.parentFile?.mkdirs()
         f.writeText(content)
+        // The remembered tokens are credentials: keep them owner-only. Windows has no POSIX
+        // mode (the call is a no-op there; %USERPROFILE% is already per-user).
+        if (f.name.startsWith("a6studio.tokens")) {
+            runCatching {
+                java.nio.file.Files.setPosixFilePermissions(
+                    f.toPath(),
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+                )
+            }
+        }
         true
     }.getOrDefault(false)
 

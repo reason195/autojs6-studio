@@ -137,20 +137,12 @@ object PickerLogic {
     fun toExpr(candidate: Candidate): String =
         fnName(candidate.by) + "(" + quote(candidate.value) + ")"
 
-    fun quote(text: String): String {
-        val sb = StringBuilder("\"")
-        for (ch in text) {
-            when (ch) {
-                '"' -> sb.append("\\\"")
-                '\\' -> sb.append("\\\\")
-                '\n' -> sb.append("\\n")
-                '\r' -> sb.append("\\r")
-                '\t' -> sb.append("\\t")
-                else -> sb.append(ch)
-            }
-        }
-        return sb.append("\"").toString()
-    }
+    /**
+     * One escaper for the whole app: the picker and the code generator used to have separate
+     * copies that drifted (, , control chars and U+2028/29 were only handled in one), so a
+     * control character in a widget label could break the generated script.
+     */
+    fun quote(text: String): String = cn.dumate.a6studio.catalog.Js.quote(text)
 
     /** Highest-scoring unique candidate, else the highest score overall. */
     fun bestOf(candidates: List<Candidate>): Candidate? {

@@ -72,11 +72,23 @@ class MainActivity : ComponentActivity() {
         override val name = "android"
         override val supportsFileDialogs = true
 
+        /**
+         * Relative storage names are confined to filesDir, mirroring the desktop platform: the
+         * callers all pass internal constants today, but `../` must not be able to write outside
+         * the app's private directory.
+         */
+        private fun resolve(path: String): java.io.File? {
+            val base = ctx.filesDir.canonicalFile
+            val target = java.io.File(base, path).canonicalFile
+            val inside = target.path == base.path || target.path.startsWith(base.path + java.io.File.separator)
+            return if (inside) target else null
+        }
+
         override fun readTextFile(path: String): String? =
-            runCatching { java.io.File(ctx.filesDir, path).readText() }.getOrNull()
+            resolve(path)?.let { runCatching { it.readText() }.getOrNull() }
 
         override fun writeTextFile(path: String, content: String): Boolean = runCatching {
-            val f = java.io.File(ctx.filesDir, path)
+            val f = resolve(path) ?: return false
             f.parentFile?.mkdirs()
             f.writeText(content)
             true

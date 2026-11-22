@@ -176,8 +176,10 @@ object Catalog {
             "funcDef", "flow", "定义函数 {name}({args})",
             listOf(
                 text("name", "函数名", "doTask"),
-                text("args", "参数列表", "task"),
-                chk("isAsync", "生成 async 函数", false)
+                // No "生成 async 函数" switch: Rhino 1.9.2 (what AutoJs6 ships) does not support
+                // `async`, so the checkbox had no effect and turning it on produced a script the
+                // device rejects.
+                text("args", "参数列表", "task")
             ),
             listOf(SlotDef("body", "函数体"))
         ) { b, c ->

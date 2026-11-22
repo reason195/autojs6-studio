@@ -534,7 +534,12 @@ class SimRuntime(
         // iterate over (measured on a real script). Bounds mirror the simulated screen nodes so
         // OCR-driven clicking lands on the right widget.
         put(ocr, "detect") { _, sc ->
+            // Entering a Context without exiting it leaks one per direct `ocr.detect()` call
+            // (the script's own context is already current during execution, so this only fires
+            // for API calls made outside a script). Pair it instead of leaking.
+            val own = cx == null
             val ctx = cx ?: Context.enter()
+            try {
             val items = state.buildNodes().mapNotNull { n ->
                 val label = n.text.ifEmpty { n.desc }
                 if (label.isEmpty()) return@mapNotNull null
@@ -553,6 +558,9 @@ class SimRuntime(
                 o
             }
             makeArray(sc, items)
+            } finally {
+                if (own) Context.exit()
+            }
         }
         put(ocr, "mode") { _, _ -> null }
         put(ocr, "recognizeTextFromImage") { _, sc ->

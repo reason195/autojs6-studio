@@ -170,9 +170,16 @@ class ProjectRepo(private val storage: ProjectStorage) {
 
     /** Finds the list + index containing [id], so callers can move or delete it. */
     fun locate(id: String): cn.dumate.a6studio.model.LocatedBlock? {
+        // `list` is always a live child list from the model (MutableList), but the parameter is
+        // typed List<Block>; the old `as MutableList` would have thrown ClassCastException on an
+        // immutable input instead of just finding nothing.
         fun search(list: List<Block>, parentId: String, slot: String): cn.dumate.a6studio.model.LocatedBlock? {
+            val mutable = list as? MutableList<Block>
             list.forEachIndexed { i, b ->
-                if (b.id == id) return cn.dumate.a6studio.model.LocatedBlock(b, list as MutableList<Block>, i, parentId, slot)
+                if (b.id == id) {
+                    if (mutable == null) return null
+                    return cn.dumate.a6studio.model.LocatedBlock(b, mutable, i, parentId, slot)
+                }
                 b.children.forEach { (k, kids) -> search(kids, b.id, k)?.let { return it } }
             }
             return null

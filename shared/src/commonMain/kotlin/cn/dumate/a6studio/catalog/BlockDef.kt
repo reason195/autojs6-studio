@@ -112,7 +112,7 @@ object Js {
                 '\u2028' -> sb.append("\\u2028")
                 '\u2029' -> sb.append("\\u2029")
                 else ->
-                    if (ch < ' ') sb.append("\\u%04x".format(ch.code))
+                    if (ch < ' ') sb.append("\\u" + ch.code.toString(16).padStart(4, '0'))
                     else sb.append(ch)
             }
         }

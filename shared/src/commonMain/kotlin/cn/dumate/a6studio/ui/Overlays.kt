@@ -423,6 +423,9 @@ private fun PickerDetail(state: StudioState) {
 
     // selector mode
     val sel = s.selected
+    // Every branch below writes into the picked parameter; without a target there is nowhere to
+    // write, and `target!!` would have crashed the whole overlay instead of just doing nothing.
+    val t = target ?: return
     if (sel == null) {
         EmptyHint("点一个控件查看候选选择器；或切到「截图」取坐标")
         return
@@ -442,7 +445,7 @@ private fun PickerDetail(state: StudioState) {
     s.candidates.forEach { c ->
         CandidateRow(c, chosen = c === s.chosen) {
             state.applyPick(
-                PickResult(target!!.blockId, PickKind.SELECTOR, by = c.by, value = c.value)
+                PickResult(t.blockId, PickKind.SELECTOR, by = c.by, value = c.value)
             )
         }
     }
@@ -462,22 +465,22 @@ private fun PickerDetail(state: StudioState) {
     Spacer(Modifier.height(10.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         SmallButton("填入积木", primary = chosen != null) {
-            if (chosen != null) state.applyPick(PickResult(target!!.blockId, PickKind.SELECTOR, by = chosen.by, value = chosen.value))
+            if (chosen != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, by = chosen.by, value = chosen.value))
         }
         SmallButton("填入为表达式", primary = false) {
             val expr = chosen?.let { PickerLogic.toExpr(it) } ?: PickerLogic.bestOf(s.candidates)?.let { PickerLogic.toExpr(it) }
-            if (expr != null) state.applyPick(PickResult(target!!.blockId, PickKind.SELECTOR, expr = expr))
+            if (expr != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, expr = expr))
         }
     }
     Spacer(Modifier.height(4.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         SmallButton("填入兜底表达式") {
             val expr = PickerLogic.chainExpr(s.candidates)
-            if (expr != null) state.applyPick(PickResult(target!!.blockId, PickKind.SELECTOR, expr = expr))
+            if (expr != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, expr = expr))
         }
         SmallButton("强制写入最稳候选") {
             val best = PickerLogic.bestOf(s.candidates)
-            if (best != null) state.applyPick(PickResult(target!!.blockId, PickKind.SELECTOR, by = best.by, value = best.value))
+            if (best != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, by = best.by, value = best.value))
         }
     }
 }
