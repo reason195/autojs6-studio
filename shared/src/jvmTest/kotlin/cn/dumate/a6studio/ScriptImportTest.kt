@@ -6,9 +6,13 @@ import cn.dumate.a6studio.runtime.Runner
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContains
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class ScriptImportTest {
+
+    private val NL = "
+"
 
     private fun fixture(name: String): String? {
         val f = listOf(File("build/fixture/$name"), File("../build/fixture/$name"))
@@ -64,6 +68,60 @@ class ScriptImportTest {
         val r = ScriptImporter.import("sleep(13*1000);", "t")
         val code = CodeGen.code(r.project, markers = false)
         assertContains(code, "sleep(13000);")
+    }
+
+    @Test
+    fun `statements keep their source order`() {
+        val r = ScriptImporter.import("let a = 1" + NL + "sleep(100)" + NL, "order")
+        val code = CodeGen.code(r.project, markers = false)
+        println("ORDER code=" + code.replace(NL, " | "))
+        assertTrue(
+            code.indexOf("let a = 1") < code.indexOf("sleep(100)"),
+            "raw chunk was emitted after the block it precedes: $code"
+        )
+    }
+
+    @Test
+    fun `statements inside a block stay inside the block`() {
+        val src = """
+            if (ready) {
+              let b = 2
+              toast('x')
+            }
+        """.trimIndent()
+        val r = ScriptImporter.import(src, "nest")
+        val code = CodeGen.code(r.project, markers = false)
+        println("NEST code=" + code.replace(NL, " | "))
+        val open = code.indexOf("if (ready) {")
+        val toast = code.indexOf("toast(")
+        val close = code.indexOf("}", toast)
+        assertTrue(open >= 0, "if-block lost: $code")
+        assertTrue(toast > open, "toast escaped the if-block: $code")
+        assertTrue(close > toast, "if-block closing brace lost: $code")
+        // The toast must not have become a real block, because a block cannot be re-nested later.
+        assertTrue(r.mappedCount == 0, "mapped=${r.mappedCount}")
+    }
+
+    @Test
+    fun `calls spanning several lines are not mapped`() {
+        val src = """
+            doSomething(
+              sleep(100)
+            )
+        """.trimIndent()
+        val r = ScriptImporter.import(src, "multiline")
+        assertTrue(r.mappedCount == 0, "mapped inside open parens: ${r.mappedCount}")
+        val code = CodeGen.code(r.project, markers = false)
+        assertContains(code, "sleep(100)")
+    }
+
+    @Test
+    fun `crlf input imports like lf input`() {
+        val lf = ScriptImporter.import("let a = 1" + NL + "sleep(100)" + NL, "crlf")
+        val crlf = ScriptImporter.import("let a = 1\r\n" + "sleep(100)\r\n", "crlf")
+        assertEquals(lf.mappedCount, crlf.mappedCount)
+        assertEquals(lf.rawCount, crlf.rawCount)
+        assertTrue(CodeGen.code(crlf.project).indexOf("let a = 1") < CodeGen.code(crlf.project).indexOf("sleep(100)"))
     }
 
     @Test

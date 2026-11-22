@@ -220,16 +220,19 @@ private fun TopActions(state: StudioState) {
 /** Always-visible switch between the beginner and full toolbars. */
 @Composable
 private fun ModeSwitch(state: StudioState) {
-    val toFull = state.beginnerMode
+    // Always show the CURRENT mode, not the one the click will switch to: the previous version
+    // said 「高级」 while in beginner mode, which reads as "I am in advanced" — and it used a
+    // different colour per direction, so the two states looked like different features.
+    val beginner = state.beginnerMode
     Text(
-        if (toFull) "高级" else "简单",
+        if (beginner) "简单模式" else "完整模式",
         fontSize = 11.sp,
-        color = if (toFull) Palette.accent else Palette.ok,
+        color = Palette.textDim,
         modifier = Modifier
             .clip(RoundedCornerShape(5.dp))
             .background(Palette.panelAlt)
-            .border(1.dp, if (toFull) Palette.accent.copy(alpha = 0.5f) else Palette.border, RoundedCornerShape(5.dp))
-            .clickable { state.changeBeginnerMode(!toFull) }
+            .border(1.dp, Palette.border, RoundedCornerShape(5.dp))
+            .clickable { state.changeBeginnerMode(!beginner) }
             .padding(horizontal = 9.dp, vertical = 5.dp)
     )
 }

@@ -100,6 +100,69 @@ object ScriptImporter {
 
     private val commentLine = Regex("""^\s*//(.*)$""")
 
+    /**
+     * Tracks cross-line structure so a recognised statement is never lifted out of the block it
+     * belongs to.
+     *
+     * Example of what went wrong before: `if (a) {` / `let b = 2` / `toast('x')` / `}` used to
+     * emit `toast("x"); if (a) { let b = 2 }`, i.e. the toast fired unconditionally. Keeping
+     * everything inside an open `{`/`(`/`[` as raw text preserves the original control flow, which
+     * is the whole point of the raw block.
+     */
+    private class Scanner {
+        var depth = 0
+            private set
+        var inBlockComment = false
+            private set
+        private var quote: Char? = null
+        private var escaped = false
+
+        /** True while we are inside an unfinished construct (block, call arguments, comment). */
+        val insideConstruct: Boolean get() = depth > 0 || inBlockComment || quote != null
+
+        fun scan(text: String) {
+            var i = 0
+            while (i < text.length) {
+                val ch = text[i]
+                if (inBlockComment) {
+                    if (ch == '*' && i + 1 < text.length && text[i + 1] == '/') {
+                        inBlockComment = false
+                        i += 2
+                        continue
+                    }
+                    i++
+                    continue
+                }
+                val q = quote
+                if (q != null) {
+                    when {
+                        escaped -> escaped = false
+                        ch == BS[0] -> escaped = true
+                        ch == q -> quote = null
+                    }
+                    i++
+                    continue
+                }
+                when {
+                    ch == '/' && i + 1 < text.length && text[i + 1] == '/' -> return // line comment
+                    ch == '/' && i + 1 < text.length && text[i + 1] == '*' -> {
+                        inBlockComment = true
+                        i += 2
+                        continue
+                    }
+                    ch == '"' || ch == SYM_SQUOTE || ch == SYM_BACKTICK -> quote = ch
+                    ch == '(' || ch == '{' || ch == '[' -> depth++
+                    ch == ')' || ch == '}' || ch == ']' -> if (depth > 0) depth--
+                }
+                i++
+            }
+            // A quote never survives a real line break in JS, so drop it at end of line: that
+            // keeps one malformed line from swallowing the whole rest of the file.
+            quote = null
+            escaped = false
+        }
+    }
+
     /** Maps [source] into a project: recognised statements become blocks, the rest is kept raw. */
     fun import(source: String, name: String): ImportResult {
         val body = mutableListOf<Block>()
@@ -121,16 +184,13 @@ object ScriptImporter {
             pendingRaw = StringBuilder()
         }
 
-        fun mapStatement(stmt: String): Boolean {
-            val block = rules.firstNotNullOfOrNull { rule ->
+        /** Maps one already-trimmed statement, or returns null when it is not recognised. */
+        fun mapStatement(stmt: String): Block? =
+            rules.firstNotNullOfOrNull { rule ->
                 rule.regex.matchEntire(stmt)?.let { rule.build(it) }
             }
-            return if (block != null) {
-                body += block
-                mapped++
-                true
-            } else false
-        }
+
+        val scanner = Scanner()
 
         for (line in source.lines()) {
             if (line.isBlank()) {
@@ -138,8 +198,10 @@ object ScriptImporter {
                 continue
             }
 
-            // Whole-line comment -> note block, but never split an ongoing raw chunk.
-            val asComment = commentLine.matchEntire(line)?.groupValues?.get(1)?.trim()
+            // Whole-line comment -> note block, but never split an ongoing raw chunk and never
+            // treat a comment inside a construct as a top-level note.
+            val asComment = if (scanner.insideConstruct) null
+            else commentLine.matchEntire(line)?.groupValues?.get(1)?.trim()
             if (asComment != null) {
                 if (pendingRaw.isNotEmpty()) {
                     pendingRaw.append(line).append('\n')
@@ -149,23 +211,25 @@ object ScriptImporter {
                 continue
             }
 
-            // Several statements can share a line (`sleep(13*1000);back();`).
-            val parts = splitTopLevelStatements(line)
-            if (parts.size > 1) {
-                flushRaw()
-                parts.forEach { stmt ->
-                    if (!mapStatement(stmt)) {
-                        body += newBlock("rawJs", mapOf("code" to ParamValue.Text(stmt.trim())))
-                        raw++
-                    }
-                }
-                continue
-            }
+            // Several statements can share a line (`sleep(13*1000);back();`), but a line that is
+            // part of an open construct must stay as one piece.
+            val parts = if (scanner.insideConstruct) listOf(line) else splitTopLevelStatements(line)
 
-            if (mapStatement(line)) {
-                flushRaw()
-            } else {
-                pendingRaw.append(line).append('\n')
+            for (part in parts) {
+                // Capture the state *before* this part: a statement that starts inside a block,
+                // a comment or a multi-line call must never be turned into its own block.
+                val startsAtTop = !scanner.insideConstruct
+                scanner.scan(part)
+
+                val block = if (startsAtTop) mapStatement(part.trim()) else null
+                if (block != null) {
+                    // Flush the pending raw chunk *first*: the source had it before this statement.
+                    flushRaw()
+                    body += block
+                    mapped++
+                } else {
+                    pendingRaw.append(part).append('\n')
+                }
             }
         }
         flushRaw()
