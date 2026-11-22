@@ -60,6 +60,15 @@ python tools/live-check.py --config ~/mcp.json
 2026-11-22 实测：一加 CPH2581（Android 16 / API 36）ping 341–455ms，魅族 17 Pro（Android 13 /
 API 33）ping 455–771ms，两台 `script_run` 都是 `finished` 且控制台回读到标记。
 
+想让它也跑在 CI 里，需要一台和手机同网段的自托管 runner（托管 runner 出不去局域网）：
+
+1. 在一台常开的机器上装 self-hosted runner，打上标签 `a6studio-lan`
+2. 把 `mcp.txt` 的内容存成仓库 secret `A6_MCP_CONFIG`
+3. 把仓库变量 `LIVE_DEVICES` 设为 `true`（不设就跳过该 job，避免任务在队列里干等）
+
+然后手动触发 workflow（Actions → build → Run workflow）。`live-devices` job 会写临时 `mcp.txt`、
+跑 `tools/live-check.py`、结束时删掉它；令牌只在 secret 与 runner 的临时工作目录里出现。
+
 CI（`.github/workflows/ci.yml`）在 Windows runner 上跑同一套命令：单测 → Android APK →
 MSI → 免安装包，产物以 `windows-x64` 附件上传；jpackage 失败时会把 `desktop/build/compose/logs`
 一并存下来（它只会报一个 `exit 311`，日志才是线索）。
