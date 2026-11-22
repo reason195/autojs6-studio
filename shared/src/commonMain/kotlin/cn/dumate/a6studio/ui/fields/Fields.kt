@@ -35,7 +35,8 @@ fun InlineField(
     placeholder: String = "",
     mono: Boolean = false,
     singleLine: Boolean = true,
-    minLines: Int = 1
+    minLines: Int = 1,
+    maxLines: Int = Int.MAX_VALUE
 ) {
     // `wrapContentHeight` keeps the field one line tall even when its parent row is stretched
     // by a taller sibling (measured on device: the project-name field grew to 129px).
@@ -55,6 +56,9 @@ fun InlineField(
             onValueChange = onValueChange,
             singleLine = singleLine,
             minLines = minLines,
+            // A long imported script must not turn one card into a full screen: cap the height
+            // and let the field scroll internally (BasicTextField scrolls when maxLines is hit).
+            maxLines = maxLines,
             textStyle = TextStyle(
                 fontSize = 11.5.sp,
                 color = P.text,

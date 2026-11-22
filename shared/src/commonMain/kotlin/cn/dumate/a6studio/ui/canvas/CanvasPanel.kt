@@ -283,6 +283,13 @@ private fun ParamRow(
     ) {
         params.forEach { param ->
             val value = block.params[param.key]?.takeUnless { it.isBlank() } ?: param.default
+            if (param.kind == ParamKind.CODE) {
+                // Raw code (imported script chunks, shell commands, JSON payloads) is multi-line by
+                // nature. A single-line field showed only the first line and could not accept
+                // Enter, so an imported script was effectively read-only. Give it its own row.
+                CodeParamField(block, param, value, repo, onCommit)
+                return@forEach
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (param.kind == ParamKind.CHECKBOX) {
                     CheckChip(param.label, value.asBool()) {
@@ -309,7 +316,7 @@ private fun ParamRow(
                             mono = true,
                             modifier = Modifier.width(64.dp)
                         )
-                        ParamKind.EXPR, ParamKind.CODE -> InlineField(
+                        ParamKind.EXPR -> InlineField(
                             value = value.asText(),
                             onValueChange = { repo.updateParam(block.id, param.key, ParamValue.Text(it)); onCommit() },
                             placeholder = param.label,
@@ -338,6 +345,35 @@ private fun ParamRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CodeParamField(
+    block: Block,
+    param: ParamDef,
+    value: ParamValue,
+    repo: ProjectRepo,
+    onCommit: () -> Unit
+) {
+    val lines = value.asText().lines().size
+    Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(param.label, fontSize = 10.sp, color = P.textDim, maxLines = 1, softWrap = false)
+            Spacer(Modifier.width(6.dp))
+            Text("$lines 行 · 可换行编辑", fontSize = 9.sp, color = P.textDim.copy(alpha = 0.7f))
+        }
+        Spacer(Modifier.height(2.dp))
+        InlineField(
+            value = value.asText(),
+            onValueChange = { repo.updateParam(block.id, param.key, ParamValue.Text(it)); onCommit() },
+            placeholder = param.label,
+            mono = true,
+            singleLine = false,
+            minLines = if (lines > 3) 3 else lines.coerceAtLeast(1),
+            maxLines = 14,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
