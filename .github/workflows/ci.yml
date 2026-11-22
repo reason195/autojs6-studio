@@ -24,12 +24,32 @@ jobs:
           java-version: '21'
 
       # shared/ applies the Android library plugin, so the SDK must exist for :shared:jvmTest
-      # to configure, and androidApp/ needs platform 35 + build-tools 35.
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # to configure at all, and androidApp/ needs compileSdk 35.
+      #
+      # windows-latest ships the SDK (ANDROID_HOME set, licenses accepted), but this used to go
+      # through android-actions/setup-android@v3, which runs `sdkmanager tools` — a package that
+      # no longer exists. Every run died there in 20 s with
+      # `Warning: Failed to find package 'tools'` before compiling a single line.
+      - name: Android SDK
+        shell: pwsh
+        run: |
+          $sdk = $env:ANDROID_HOME
+          if (-not $sdk) { $sdk = $env:ANDROID_SDK_ROOT }
+          if (-not $sdk) { throw 'Neither ANDROID_HOME nor ANDROID_SDK_ROOT is set on this runner' }
+          Write-Host "Android SDK: $sdk"
+          "sdk.dir=$($sdk -replace '\\','/')" | Out-File -Encoding ascii -NoNewline local.properties
 
-      - name: Install Android platform 35
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          $missing = @('platforms;android-35', 'build-tools;35.0.0' | Where-Object {
+            -not (Test-Path (Join-Path $sdk ($_.Replace(';', '/'))))
+          })
+          Write-Host "Missing: $($missing -join ', ')"
+          if ($missing.Count -gt 0) {
+            $sdkmanager = Get-ChildItem (Join-Path $sdk 'cmdline-tools') -Recurse -Filter sdkmanager.bat -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            if (-not $sdkmanager) { throw "sdkmanager.bat not found, cannot install: $($missing -join ', ')" }
+            & $sdkmanager.FullName "--sdk_root=$sdk" @missing
+            if ($LASTEXITCODE -ne 0) { throw "sdkmanager failed with exit code $LASTEXITCODE" }
+          }
 
       - uses: gradle/actions/setup-gradle@v4
 
