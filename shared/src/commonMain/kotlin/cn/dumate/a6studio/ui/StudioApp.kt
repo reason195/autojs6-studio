@@ -4,6 +4,21 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -223,17 +238,19 @@ private fun MoreMenu(state: StudioState) {
     var open by remember { mutableStateOf(false) }
 
     @Composable
-    fun item(label: String, danger: Boolean = false, action: () -> Unit) {
+    fun item(label: String, icon: ImageVector, action: () -> Unit) {
         DropdownMenuItem(
-            text = {
-                Text(
-                    label,
-                    fontSize = 12.5.sp,
-                    color = if (danger) Palette.err else Palette.text
+            text = { Text(label, fontSize = 12.5.sp, color = Palette.text) },
+            leadingIcon = {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = Palette.textDim,
+                    modifier = Modifier.size(16.dp)
                 )
             },
             onClick = { open = false; action() },
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 9.dp)
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 9.dp)
         )
     }
 
@@ -251,31 +268,31 @@ private fun MoreMenu(state: StudioState) {
         QuietAction("⋯", "更多") { open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             group("视图")
-            item("模板库") { state.openTemplates() }
-            item("怎么做（新手引导）") { state.showGuide = true }
-            item(if (state.beginnerMode) "切换到完整模式" else "切换到简单模式") {
+            item("模板库", Icons.Filled.List) { state.openTemplates() }
+            item("怎么做（新手引导）", Icons.Filled.Info) { state.showGuide = true }
+            item(if (state.beginnerMode) "切换到完整模式" else "切换到简单模式", Icons.Filled.Settings) {
                 state.changeBeginnerMode(!state.beginnerMode)
             }
             group("检查")
             if (state.beginnerMode) {
-                item("检查问题") { state.showPane(Pane.DIAG) }
+                item("检查问题", Icons.Filled.Warning) { state.showPane(Pane.DIAG) }
             } else {
-                item("跑一遍测试") { state.runTests() }
-                item("诊断") { state.showPane(Pane.DIAG) }
-                item("选择器体检") { state.openAudit() }
-                item("录制操作") { state.openRecorder() }
+                item("跑一遍测试", Icons.Filled.Check) { state.runTests() }
+                item("诊断", Icons.Filled.Warning) { state.showPane(Pane.DIAG) }
+                item("选择器体检", Icons.Filled.Search) { state.openAudit() }
+                item("录制操作", Icons.Filled.PlayArrow) { state.openRecorder() }
             }
             group("文件")
-            item("保存") { state.saveNow() }
-            item("导出 JS") { state.exportJs() }
-            item("导出项目") { state.exportProject() }
+            item("保存", Icons.Filled.Done) { state.saveNow() }
+            item("导出 JS", Icons.Filled.Share) { state.exportJs() }
+            item("导出项目", Icons.Filled.Share) { state.exportProject() }
             if (!state.beginnerMode) {
-                item("导入 JS 脚本") { state.importScript() }
-                item("导入项目") { state.importProject() }
+                item("导入 JS 脚本", Icons.Filled.Add) { state.importScript() }
+                item("导入项目", Icons.Filled.Add) { state.importProject() }
             }
             group("项目")
-            item("载入示例") { state.loadExample() }
-            item("新建项目") { state.newProject() }
+            item("载入示例", Icons.Filled.Star) { state.loadExample() }
+            item("新建项目", Icons.Filled.AddCircle) { state.newProject() }
         }
     }
 }

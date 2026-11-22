@@ -269,10 +269,10 @@ private fun BlockMenu(block: Block, repo: ProjectRepo, onCommit: () -> Unit) {
                 .padding(horizontal = 8.dp, vertical = 2.dp)
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            item("上移") { repo.shiftBlock(block.id, -1); onCommit() }
-            item("下移") { repo.shiftBlock(block.id, 1); onCommit() }
-            item("复制") { repo.duplicateBlock(block.id); onCommit() }
-            item("删除", danger = true) { repo.removeBlock(block.id); onCommit() }
+            item("↑  上移") { repo.shiftBlock(block.id, -1); onCommit() }
+            item("↓  下移") { repo.shiftBlock(block.id, 1); onCommit() }
+            item("⧉  复制") { repo.duplicateBlock(block.id); onCommit() }
+            item("✕  删除", danger = true) { repo.removeBlock(block.id); onCommit() }
         }
     }
 }

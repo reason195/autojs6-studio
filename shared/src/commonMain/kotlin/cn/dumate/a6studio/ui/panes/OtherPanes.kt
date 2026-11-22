@@ -61,6 +61,15 @@ fun TestPane(state: StudioState, modifier: Modifier = Modifier) {
             if (project.tests.isEmpty()) {
                 item { EmptyHint("还没有用例，点右上「+ 用例」") }
             }
+            if (project.tests.isNotEmpty()) {
+                item {
+                    Text(
+                        "可用：\$setScreen / \$state / \$run / \$log / assert",
+                        fontSize = 9.5.sp, color = P.textDim,
+                        modifier = Modifier.padding(top = 6.dp, bottom = 10.dp)
+                    )
+                }
+            }
             items(count = project.tests.size) { i ->
                 val t = project.tests[i]
                 var name by remember(t.id) { mutableStateOf(t.name) }
@@ -82,6 +91,11 @@ fun TestPane(state: StudioState, modifier: Modifier = Modifier) {
                             placeholder = "用例名",
                             modifier = Modifier.weight(1f)
                         )
+                        // 结果放在标题行：一列用例扫一眼就知道哪个挂了，不用逐张卡片找底部徽标。
+                        result?.let {
+                            Spacer(Modifier.width(6.dp))
+                            Badge(if (it.ok) "通过" else "失败", if (it.ok) BadgeKind.OK else BadgeKind.ERR)
+                        }
                         Spacer(Modifier.width(5.dp))
                         Text(
                             "✕", fontSize = 11.sp, color = P.err.copy(alpha = 0.8f),
@@ -101,12 +115,6 @@ fun TestPane(state: StudioState, modifier: Modifier = Modifier) {
                     Spacer(Modifier.height(5.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         SmallButton("运行此用例") { state.runTests(listOf(t.id)) }
-                        Spacer(Modifier.width(8.dp))
-                        Text("可用：\$setScreen / \$state / \$run / \$log / assert", fontSize = 9.5.sp, color = P.textDim)
-                        Spacer(Modifier.weight(1f))
-                        result?.let {
-                            Badge(if (it.ok) "通过" else "失败", if (it.ok) BadgeKind.OK else BadgeKind.ERR)
-                        }
                     }
                     result?.takeIf { !it.ok && it.error.isNotEmpty() }?.let {
                         Text(
@@ -164,6 +172,15 @@ fun DiagPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolea
                     )
                 }
             }
+            if (issues.isNotEmpty()) {
+                item {
+                    Text(
+                        "点任意一行跳到对应积木；改完再回来检查一次",
+                        fontSize = 10.sp, color = P.textDim,
+                        modifier = Modifier.padding(bottom = 6.dp)
+                    )
+                }
+            }
             items(count = issues.size) { i ->
                 val issue = issues[i]
                 val color = when (issue.level) {
@@ -172,13 +189,13 @@ fun DiagPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolea
                     Level.INFO -> P.info
                 }
                 Row(
-                    Modifier.fillMaxWidth().padding(vertical = 3.dp)
-                        .clip(RoundedCornerShape(5.dp))
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                        .clip(RoundedCornerShape(6.dp))
                         .background(color.copy(alpha = 0.07f))
                         .clickable {
                             issue.blockId?.let { state.repo.select(it) }
                         }
-                        .padding(7.dp)
+                        .padding(9.dp)
                 ) {
                     Text(
                         when (issue.level) {
