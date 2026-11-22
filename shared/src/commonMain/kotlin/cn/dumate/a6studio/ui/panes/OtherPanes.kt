@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -99,7 +100,13 @@ fun TestPane(state: StudioState, modifier: Modifier = Modifier) {
                         Spacer(Modifier.width(5.dp))
                         Text(
                             "✕", fontSize = 11.sp, color = P.err.copy(alpha = 0.8f),
-                            modifier = Modifier.clickable { state.repo.removeTest(t.id); state.commit() }.padding(3.dp)
+                            // 删用例是没确认步骤的（跟积木卡片一致），但至少要立刻说清楚能撤销，
+                            // 否则手机上误触一次就以为代码没了。
+                            modifier = Modifier.clickable {
+                                state.repo.removeTest(t.id)
+                                state.commit()
+                                state.toast("已删除用例，点 ↶ 可撤销")
+                            }.padding(3.dp)
                         )
                     }
                     Spacer(Modifier.height(5.dp))
@@ -243,10 +250,13 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 手机上这块只有 300 多 dp：去掉 http:// 和 /mcp，型号 + IP:端口 才放得下。
                     Text(
-                        project.bridge.devices.firstOrNull { it.url == project.bridge.url }?.let { "${it.name} · ${it.url.removePrefix("http://")}" }
-                            ?: "— 已保存设备（${project.bridge.devices.size}）—",
-                        fontSize = 11.sp, color = P.text, maxLines = 1, modifier = Modifier.weight(1f)
+                        project.bridge.devices.firstOrNull { it.url == project.bridge.url }?.let {
+                            val host = it.url.removePrefix("http://").removePrefix("https://").removeSuffix("/mcp")
+                            "${it.name} · $host"
+                        } ?: "已保存设备（${project.bridge.devices.size}）",
+                        fontSize = 11.sp, color = P.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
                     )
                     Text("▾", fontSize = 9.sp, color = P.textDim)
                 }
@@ -262,20 +272,22 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
             Spacer(Modifier.width(6.dp))
             SmallButton("保存当前") { state.saveCurrentDevice() }
         }
-        Text("保存多台设备后在这里切换；地址写进项目，令牌默认只在内存。", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(top = 3.dp))
 
         Spacer(Modifier.height(10.dp))
         Text("MCP 桥接地址", fontSize = 11.sp, color = P.textDim)
         Spacer(Modifier.height(4.dp))
         InlineField(state.bridgeUrl, { state.updateBridgeUrl(it) }, placeholder = "http://127.0.0.1:8765/mcp", mono = true, modifier = Modifier.fillMaxWidth())
-        Text("AutoJs6 插件中心开启「MCP Server」，或填真机直连地址 http://<手机IP>:9637/mcp。", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(top = 3.dp))
+        Text("从 AutoJs6「插件中心 → MCP Server」复制，或直连 http://手机IP:9637/mcp", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(top = 3.dp))
 
         Spacer(Modifier.height(10.dp))
         Text("令牌（可选，默认只存内存）", fontSize = 11.sp, color = P.textDim)
         Spacer(Modifier.height(4.dp))
-        InlineField(state.bridgeToken, { state.updateBridgeToken(it) }, placeholder = "粘贴 mcpServers 里的 Bearer token", mono = true, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(4.dp))
-        TinyToggle("记住令牌（写进本机存储，公用电脑别勾）", state.rememberToken) { state.changeRememberToken(it) }
+        InlineField(state.bridgeToken, { state.updateBridgeToken(it) }, placeholder = "Bearer token（没有就留空）", mono = true, modifier = Modifier.fillMaxWidth())
+        // 「记住令牌」只在真有令牌时才有意义，空着的时候它只是多一个要读的开关。
+        if (state.bridgeToken.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            TinyToggle("记住令牌（写进本机存储，公用电脑别勾）", state.rememberToken) { state.changeRememberToken(it) }
+        }
 
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -297,8 +309,11 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
 
         Spacer(Modifier.height(10.dp))
         Text("真机输出", fontSize = 11.sp, color = P.textDim)
+        if (state.deviceLog.isEmpty()) {
+            Text("连接后这里显示真机返回的内容", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(top = 3.dp))
+            return@Column
+        }
         Column(Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(5.dp)).background(P.codeBg).padding(6.dp)) {
-            if (state.deviceLog.isEmpty()) EmptyHint("暂无输出")
             state.deviceLog.forEach { l ->
                 Text(
                     l.msg,
