@@ -724,6 +724,15 @@ class StudioState(
         pickerJob = scope.launch { block() }
     }
 
+    /**
+     * 桌面截图/布局核对用：给拾取器塞一份固定样本，省得为了看一个面板去连真机。
+     * 只被 desktop 的 A6STUDIO_SCREENSHOT_ACTION=picker 调用。
+     */
+    fun previewPicker(preview: cn.dumate.a6studio.picker.PickerState) {
+        pickerState = preview
+        overlay = Overlay.PICKER
+    }
+
     fun openPicker(blockId: String, paramKey: String, kind: PickKind) {
         overlay = Overlay.PICKER
         applyBridgeConfig()

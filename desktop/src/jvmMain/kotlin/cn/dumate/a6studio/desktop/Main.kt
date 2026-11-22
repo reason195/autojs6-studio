@@ -188,6 +188,57 @@ fun main() = application {
                     "tests" -> state.runTests()
                     "audit" -> state.openAudit()
                     "recorder" -> state.openRecorder()
+                    // 拾取器要连真机才有数据；截图核对布局时用一份固定样本，避免依赖设备。
+                    "picker" -> {
+                        state.changeBeginnerMode(false)
+                        val body = state.repo.current.root.children["body"].orEmpty()
+                        val anchor = body.firstOrNull { it.params.containsKey("value") } ?: body.firstOrNull()
+                        val nodes = listOf(
+                            cn.dumate.a6studio.picker.UiNode(
+                                0, "android.widget.FrameLayout", left = 0, top = 0, right = 1080, bottom = 2376
+                            ),
+                            cn.dumate.a6studio.picker.UiNode(
+                                1, "android.widget.TextView", text = "京东金融 · 签到", left = 40, top = 180, right = 640, bottom = 260
+                            ),
+                            cn.dumate.a6studio.picker.UiNode(
+                                2, "android.widget.Button", text = "立即领取", desc = "领券按钮",
+                                left = 120, top = 560, right = 960, bottom = 680, clickable = true
+                            ),
+                            cn.dumate.a6studio.picker.UiNode(
+                                3, "android.widget.Button", text = "更多任务", left = 120, top = 720, right = 960, bottom = 840, clickable = true
+                            ),
+                            cn.dumate.a6studio.picker.UiNode(
+                                4, "androidx.recyclerview.widget.RecyclerView", desc = "任务列表",
+                                left = 0, top = 900, right = 1080, bottom = 2200, scrollable = true
+                            )
+                        )
+                        // 截图页要一张图才看得出布局；给个本地 PNG 路径塞进去，免得为了截图去连真机。
+                        val shotPathEnv = System.getenv("A6STUDIO_PICKER_SHOT").orEmpty()
+                        val shot = if (shotPathEnv.isEmpty()) null else runCatching {
+                            java.util.Base64.getEncoder().encodeToString(java.io.File(shotPathEnv).readBytes())
+                        }.getOrNull()
+                        val candidates = listOf(
+                            cn.dumate.a6studio.picker.Candidate("id", "btn_claim", "id(btn_claim)", count = 1, score = 96),
+                            cn.dumate.a6studio.picker.Candidate("text", "立即领取", "text(立即领取)", count = 1, score = 100),
+                            cn.dumate.a6studio.picker.Candidate("textContains", "领取", "textContains(领取)", count = 3, score = 70)
+                        )
+                        state.previewPicker(cn.dumate.a6studio.picker.PickerState(
+                            target = cn.dumate.a6studio.picker.PickTarget(
+                                blockId = anchor?.id.orEmpty(),
+                                paramKey = "value",
+                                kind = cn.dumate.a6studio.picker.PickKind.SELECTOR
+                            ),
+                            nodes = nodes,
+                            selected = nodes[2],
+                            candidates = candidates,
+                            chosen = candidates[1],
+                            meta = "1080x2376 · 5 个节点",
+                            view = if (shot != null) cn.dumate.a6studio.picker.PickerView.SHOT else cn.dumate.a6studio.picker.PickerView.LIST,
+                            shotBase64 = shot,
+                            deviceWidth = 1080,
+                            deviceHeight = 2376
+                        ))
+                    }
                 }
                 delay(if (shotAction == null) 2500 else 4000)
                 if (shotAction in setOf("templates", "audit", "recorder", "template-run", "connect")) delay(if (shotAction == "template-run") 5000 else 1200)

@@ -358,14 +358,21 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text("在截图上传坐标：输入或点选设备坐标后填入", fontSize = 10.sp, color = Palette.textDim)
+        // 大部分人是「在图上点一下」，手动输入坐标是少数场景：默认收起，点开才出现。
+        var manual by remember { mutableStateOf(false) }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            var x by remember { mutableStateOf("0") }
-            var y by remember { mutableStateOf("0") }
-            InlineField(x, { x = it }, placeholder = "x", mono = true, modifier = Modifier.width(70.dp))
-            InlineField(y, { y = it }, placeholder = "y", mono = true, modifier = Modifier.width(70.dp))
-            SmallButton("取坐标") { state.pickerCoord(x.toIntOrNull() ?: 0, y.toIntOrNull() ?: 0) }
             SmallButton("重新截图") { state.pickerCapture() }
+            SmallButton(if (manual) "收起手动输入" else "手动输入坐标") { manual = !manual }
+        }
+        if (manual) {
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                var x by remember { mutableStateOf("0") }
+                var y by remember { mutableStateOf("0") }
+                InlineField(x, { x = it }, placeholder = "x", mono = true, modifier = Modifier.width(70.dp))
+                InlineField(y, { y = it }, placeholder = "y", mono = true, modifier = Modifier.width(70.dp))
+                SmallButton("取坐标") { state.pickerCoord(x.toIntOrNull() ?: 0, y.toIntOrNull() ?: 0) }
+            }
         }
         if (s.coord != null) {
             Text("已取点 ${s.coord.first}, ${s.coord.second}", fontSize = 10.5.sp, color = Palette.accent)
@@ -432,11 +439,14 @@ private fun PickerDetail(state: StudioState) {
     }
     Text(PickerLogic.shortClass(sel.className), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
     Text(sel.text.ifEmpty { sel.desc }, fontSize = 10.5.sp, color = Palette.textDim)
-    Spacer(Modifier.height(6.dp))
-    KV("id", sel.id.ifEmpty { "—" })
-    KV("desc", sel.desc.ifEmpty { "—" })
-    KV("bounds", "${sel.left}, ${sel.top}, ${sel.right}, ${sel.bottom}")
-    KV("center", "${sel.centerX}, ${sel.centerY}")
+    Spacer(Modifier.height(4.dp))
+    // 原来 id / desc / bounds / center 各占一行（四行都是短值），压成两行：
+    // 判重主要看哪个控件，位置只要够判断「是不是它」。
+    Text("id ${sel.id.ifEmpty { "—" }}", fontSize = 10.sp, color = Palette.textDim, fontFamily = FontFamily.Monospace)
+    Text(
+        "desc ${sel.desc.ifEmpty { "—" }} · ${sel.left},${sel.top} → ${sel.right},${sel.bottom} · 中心 ${sel.centerX},${sel.centerY}",
+        fontSize = 10.sp, color = Palette.textDim, fontFamily = FontFamily.Monospace
+    )
     Spacer(Modifier.height(8.dp))
 
     if (s.candidates.isEmpty()) {
@@ -463,22 +473,33 @@ private fun PickerDetail(state: StudioState) {
     }
 
     Spacer(Modifier.height(10.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    // 四个同等权重的按钮（填入积木 / 填入为表达式 / 填入兜底表达式 / 强制写入最稳候选）
+    // 让「我到底该点哪个」变成一道选择题。默认动作只留一个，其余是备选。
+    var more by remember { mutableStateOf(false) }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         SmallButton("填入积木", primary = chosen != null) {
             if (chosen != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, by = chosen.by, value = chosen.value))
         }
-        SmallButton("填入为表达式", primary = false) {
-            val expr = chosen?.let { PickerLogic.toExpr(it) } ?: PickerLogic.bestOf(s.candidates)?.let { PickerLogic.toExpr(it) }
+        // 备选填法不用弹出菜单：面板只有 320-400dp 宽，内联展开既不会被裁掉，
+        // 也能一眼看见三种写法分别是什么。
+        SmallButton(if (more) "收起备选" else "其他填法…") { more = !more }
+    }
+    if (more) {
+        Spacer(Modifier.height(6.dp))
+        Text("备选填法", fontSize = 10.sp, color = Palette.textDim)
+        Spacer(Modifier.height(4.dp))
+        SmallButton("填入为表达式") {
+            val expr = chosen?.let { PickerLogic.toExpr(it) }
+                ?: PickerLogic.bestOf(s.candidates)?.let { PickerLogic.toExpr(it) }
             if (expr != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, expr = expr))
         }
-    }
-    Spacer(Modifier.height(4.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        SmallButton("填入兜底表达式") {
+        Spacer(Modifier.height(4.dp))
+        SmallButton("填入兜底表达式（多个条件依次试）") {
             val expr = PickerLogic.chainExpr(s.candidates)
             if (expr != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, expr = expr))
         }
-        SmallButton("强制写入最稳候选") {
+        Spacer(Modifier.height(4.dp))
+        SmallButton("强制写入分数最高的候选") {
             val best = PickerLogic.bestOf(s.candidates)
             if (best != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, by = best.by, value = best.value))
         }
