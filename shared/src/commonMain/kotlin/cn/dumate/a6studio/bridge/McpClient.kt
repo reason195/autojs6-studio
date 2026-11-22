@@ -56,10 +56,21 @@ class McpClient(
     val currentUrl: String get() = url
     val isReady: Boolean get() = ready
 
+    /**
+     * Canonical address form used as the auth-map key. `setUrl` and `setAuthFor` must agree on
+     * this: normalising in one place only meant "http://ip:9637/mcp/" stored a token the request
+     * never picked up — the device answered 401 and the UI wrongly blamed the token.
+     */
+    private fun normalizeUrl(addr: String): String = addr.trim().trimEnd('/')
+
+    /** Effective Authorization header for the current address (null when none). */
+    fun currentAuthHeader(): String? = authHeader
+
+    /** Same header as a map, for tests and diagnostics. */
     fun headersSnapshot(): Map<String, String> = authHeader?.let { mapOf("Authorization" to it) } ?: emptyMap()
 
     fun setUrl(newUrl: String) {
-        url = newUrl.trim().trimEnd('/')
+        url = normalizeUrl(newUrl)
         ready = false
         sessionId = ""
         authHeader = authByUrl[url]
@@ -77,7 +88,7 @@ class McpClient(
     }
 
     fun setAuthFor(addr: String, token: String) {
-        val key = addr.trim()
+        val key = normalizeUrl(addr)
         if (key.isEmpty()) return
         val t = token.trim()
         if (t.isEmpty()) {
@@ -94,7 +105,9 @@ class McpClient(
 
     fun setAuthMap(map: Map<String, String>) {
         authByUrl.clear()
-        authByUrl.putAll(map)
+        // Keys may come from storage written by an older build (with a trailing slash); fold
+        // them onto the canonical form so lookups keep working.
+        map.forEach { (k, v) -> authByUrl[normalizeUrl(k)] = v }
         authHeader = authByUrl[url]
     }
 
@@ -199,15 +212,14 @@ class McpClient(
         timeoutMs: Long
     ): String {
         val channel = response.bodyAsChannel()
-        val raw = StringBuilder()
+        val acc = SseAccumulator()
         val buffer = ByteArray(4096)
         try {
             withTimeout(timeoutMs) {
                 while (true) {
                     val n = channel.readAvailable(buffer, 0, buffer.size)
                     if (n <= 0) break
-                    raw.append(String(buffer, 0, n, Charsets.UTF_8))
-                    SseFrames.extractPayload(raw.toString())?.let { return@withTimeout it }
+                    acc.feed(buffer, n)?.let { return@withTimeout it }
                 }
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -215,26 +227,13 @@ class McpClient(
         } finally {
             runCatching { channel.cancel(null) }
         }
-        return SseFrames.extractPayload(raw.toString()) ?: ""
+        return SseFrames.extractPayload(acc.text()) ?: ""
     }
 
     private fun parseJsonOrThrow(text: String): JsonElement? = try {
         json.parseToJsonElement(text)
     } catch (e: Exception) {
         throw BridgeException("返回内容不是 JSON：${text.take(120)}", "BAD_RESPONSE")
-    }
-
-    private fun parseSse(text: String): JsonElement? {
-        var last: JsonElement? = null
-        text.lineSequence().forEach { line ->
-            if (line.startsWith("data:")) {
-                val data = line.removePrefix("data:").trim()
-                if (data.isNotEmpty() && data != "[DONE]") {
-                    runCatching { json.parseToJsonElement(data) }.getOrNull()?.let { last = it }
-                }
-            }
-        }
-        return last
     }
 
     private fun timeoutMessage(target: String, ms: Long): String {
@@ -550,6 +549,32 @@ fun parseNodes(nodesJson: String): List<JsonObject> {
 }
 
 private val JsonElement.doubleValue: Double? get() = (this as? JsonPrimitive)?.doubleOrNull
+
+/**
+ * Incremental SSE byte buffer.
+ *
+ * Socket reads split wherever the kernel feels like it, and decoding each chunk on its own
+ * corrupts any multi-byte character that straddles the boundary: a 3-byte Chinese character cut
+ * in half became two U+FFFD, so `ui_dump` labels (and every selector synthesised from them) came
+ * back as garbage. Bytes are therefore buffered and the *whole* buffer is decoded when checking
+ * for a payload, so a character split across two reads is intact once its tail arrives.
+ */
+class SseAccumulator(initialCapacity: Int = 8 * 1024) {
+    private var data = ByteArray(initialCapacity)
+    private var size = 0
+
+    /** Appends [length] bytes from [chunk]; returns the first complete payload, if any. */
+    fun feed(chunk: ByteArray, length: Int = chunk.size): String? {
+        if (size + length > data.size) {
+            data = data.copyOf(maxOf(data.size * 2, size + length))
+        }
+        chunk.copyInto(data, size, 0, length)
+        size += length
+        return SseFrames.extractPayload(text())
+    }
+
+    fun text(): String = data.decodeToString(0, size)
+}
 
 /**
  * SSE framing helpers, kept separate so they can be unit-tested without a socket.
