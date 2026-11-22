@@ -44,6 +44,22 @@ node tools/legacy-gen.mjs     # 写出 build/crosscheck/legacy*.js
 
 没有夹具时该用例会打印 `SKIP` 并直接返回，其余用例照常执行。
 
+真机链路（握手 / device_info / ui_dump / script_run / console_tail）只能在本机跑：GitHub 的
+runner 在局域网外，连不到 `192.168.x.x`，令牌也不该进仓库。把 AutoJs6 插件页导出的 MCP 配置
+存成仓库根目录的 `mcp.txt`（支持多段 JSON，已在 `.gitignore` 里），然后：
+
+```bash
+python tools/live-check.py                 # 默认读 ./mcp.txt
+python tools/live-check.py --config ~/mcp.json
+```
+
+脚本会逐台设置 `A6_MCP_URL` / `A6_MCP_TOKEN` 跑 `LiveMcpTest`，打印每台的 ping 延迟、设备型号、
+`ui_dump` 与 `script_run` 结果，令牌在输出里打码。`shared/build.gradle.kts` 把这两个变量声明成了
+测试任务的输入，换设备不会再用上一次的缓存结果。
+
+2026-11-22 实测：一加 CPH2581（Android 16 / API 36）ping 341–455ms，魅族 17 Pro（Android 13 /
+API 33）ping 455–771ms，两台 `script_run` 都是 `finished` 且控制台回读到标记。
+
 CI（`.github/workflows/ci.yml`）在 Windows runner 上跑同一套命令：单测 → Android APK →
 MSI → 免安装包，产物以 `windows-x64` 附件上传；jpackage 失败时会把 `desktop/build/compose/logs`
 一并存下来（它只会报一个 `exit 311`，日志才是线索）。
