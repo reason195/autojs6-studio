@@ -13,8 +13,6 @@ import cn.dumate.a6studio.model.newBlock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.Json
 
 /**
@@ -29,19 +27,25 @@ class ProjectRepo(private val storage: ProjectStorage) {
         prettyPrint = false
     }
 
-    // Compose `mutableStateOf` rather than StateFlow: the UI reads these directly
-    // (`repo.current`, `repo.scope.value`), and a StateFlow would need a collectAsState() in
-    // every call site — measured bug: clicking 「+ 模块」 changed the Flow but never recomposed,
-    // so new modules only appeared after some unrelated state change.
+    // Compose `mutableStateOf`: the UI reads these directly, so a write recomposes immediately.
+    //
+    // (An earlier version exposed `val project: StateFlow<X> get() = MutableStateFlow(...)`, which
+    // built a NEW flow on every property access — reads always "worked" by accident while the
+    // observable was thrown away, so nothing ever collected it. Plain Compose state is both
+    // cheaper and honest about what it is.)
     private var _projectState by mutableStateOf(Project())
     private var _selectedState by mutableStateOf<String?>(null)
     private var _scopeState by mutableStateOf<Scope>(Scope.Root)
     private var _toastState by mutableStateOf<String?>(null)
 
-    val project: StateFlow<Project> get() = MutableStateFlow(_projectState)
-    val selected: StateFlow<String?> get() = MutableStateFlow(_selectedState)
-    val scope: StateFlow<Scope> get() = MutableStateFlow(_scopeState)
-    val toast: StateFlow<String?> get() = MutableStateFlow(_toastState)
+    /** Current selection id; [null] means nothing selected. */
+    val selectedId: String? get() = _selectedState
+
+    /** Active editing scope (main program or one module). */
+    val currentScope: Scope get() = _scopeState
+
+    /** Transient message for the host UI, if any. */
+    val toastMessage: String? get() = _toastState
 
     private val undoStack = ArrayDeque<Pair<String, String>>()
     private val maxUndo = 60
@@ -78,8 +82,17 @@ class ProjectRepo(private val storage: ProjectStorage) {
     fun clearToast() { _toastState = null }
 
     // ---- undo ---------------------------------------------------------------
+    /**
+     * Records an undo point. A serialisation failure must never abort the edit the user asked
+     * for, so it is caught: losing one undo step is far better than losing the action.
+     */
     fun snapshot(label: String) {
-        undoStack.addLast(label to json.encodeToString(Project.serializer(), current))
+        val encoded = try {
+            json.encodeToString(Project.serializer(), current)
+        } catch (e: Exception) {
+            return
+        }
+        undoStack.addLast(label to encoded)
         while (undoStack.size > maxUndo) undoStack.removeFirst()
     }
 

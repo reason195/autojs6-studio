@@ -51,8 +51,8 @@ import cn.dumate.a6studio.ui.panes.TestPane
 @Composable
 fun StudioApp(state: StudioState) {
     val project = state.repo.current
-    val selected = state.repo.selected.value
-    val scope = state.repo.scope.value
+    val selected = state.repo.selectedId
+    val scope = state.repo.currentScope
 
     Column(
         Modifier.fillMaxSize().background(Palette.bg).systemBarPadding().studioShortcuts(state)
@@ -252,7 +252,7 @@ private fun TopAction(label: String, primary: Boolean = false, onClick: () -> Un
 @Composable
 private fun ScopeTabs(state: StudioState) {
     val project = state.repo.current
-    val scope = state.repo.scope.value
+    val scope = state.repo.currentScope
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
         ScopeTab(
             label = "主程序",
@@ -380,7 +380,7 @@ private fun PaletteColumn(state: StudioState, modifier: Modifier) {
 @Composable
 private fun CanvasColumn(state: StudioState, modifier: Modifier) {
     val project = state.repo.current
-    val selected = state.repo.selected.value
+    val selected = state.repo.selectedId
     Column(modifier.background(Palette.bg)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),

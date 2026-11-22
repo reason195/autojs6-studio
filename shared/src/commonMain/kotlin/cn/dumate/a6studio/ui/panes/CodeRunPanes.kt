@@ -44,7 +44,7 @@ import cn.dumate.a6studio.ui.components.SectionTitle
 @Composable
 fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
     val lines = state.codeMarkers
-    val selected = state.repo.selected.value
+    val selected = state.repo.selectedId
     val project = state.repo.current
 
     // Which lines belong to the selected block (its own code plus every descendant's).

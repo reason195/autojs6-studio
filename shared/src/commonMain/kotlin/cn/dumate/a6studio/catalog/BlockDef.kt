@@ -107,6 +107,10 @@ object Js {
                 '\t' -> sb.append("\\t")
                 '\b' -> sb.append("\\b")
                 '\u000C' -> sb.append("\\f")
+                // U+2028 / U+2029 are JS line terminators. Modern engines (ES2019) accept
+                // them inside literals, but older Rhino builds choke — escaping is free.
+                '\u2028' -> sb.append("\\u2028")
+                '\u2029' -> sb.append("\\u2029")
                 else ->
                     if (ch < ' ') sb.append("\\u%04x".format(ch.code))
                     else sb.append(ch)

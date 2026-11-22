@@ -36,7 +36,7 @@ fun Modifier.studioShortcuts(state: StudioState): Modifier {
                 ctrl && ev.key == Key.E -> { state.exportJs(); true }
                 ev.key == Key.Escape -> { state.closeOverlay(); true }
                 ev.key == Key.Delete -> {
-                    if (state.repo.selected.value != null) { state.removeSelected(); true } else false
+                    if (state.repo.selectedId != null) { state.removeSelected(); true } else false
                 }
                 else -> false
             }

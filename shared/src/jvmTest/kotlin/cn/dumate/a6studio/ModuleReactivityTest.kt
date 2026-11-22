@@ -48,16 +48,16 @@ class ModuleReactivityTest {
         assertEquals(countBefore, r.current.modules.size)
     }
 
-    /** The UI reads `repo.scope.value`; a scope change must be visible immediately. */
+    /** The UI reads `repo.currentScope`; a scope change must be visible immediately. */
     @Test
     fun `scope value reflects setScope synchronously`() {
         val r = repo()
         r.addModule("模块A")
         val id = r.current.modules.first { it.name == "模块A" }.id
         r.setScope(cn.dumate.a6studio.model.Scope.Module(id))
-        val scope = r.scope.value
+        val scope = r.currentScope
         assertTrue(scope is cn.dumate.a6studio.model.Scope.Module && scope.id == id, "scope not applied: $scope")
         r.setScope(cn.dumate.a6studio.model.Scope.Root)
-        assertTrue(r.scope.value is cn.dumate.a6studio.model.Scope.Root)
+        assertTrue(r.currentScope is cn.dumate.a6studio.model.Scope.Root)
     }
 }

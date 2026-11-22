@@ -36,15 +36,28 @@ private class DesktopPlatform : Platform {
     override val name = "desktop"
     override val supportsFileDialogs = true
 
-    // Resolve the same way as [writeTextFile]: bare names live under ~/.a6studio, otherwise
-    // the marker written by writeTextFile could never be read back.
-    private fun resolve(path: String): File =
-        if (File(path).isAbsolute) File(path) else File(System.getProperty("user.home"), ".a6studio/$path")
+    /** App-private directory for markers, remembered tokens and the project file. */
+    private val configDir: File
+        get() = File(System.getProperty("user.home"), ".a6studio")
 
-    override fun readTextFile(path: String): String? = runCatching { resolve(path).readText() }.getOrNull()
+    /**
+     * Resolves a storage path. A relative name lives under [configDir] and is **confined** to it:
+     * every caller passes an internal constant today, but this is the API other code will use and
+     * `../` in a name must not escape into the user's home.
+     */
+    private fun resolve(path: String): File? {
+        if (File(path).isAbsolute) return File(path)
+        val base = configDir.canonicalFile
+        val target = File(configDir, path).canonicalFile
+        val inside = target.path == base.path || target.path.startsWith(base.path + File.separator)
+        return if (inside) target else null
+    }
+
+    override fun readTextFile(path: String): String? =
+        resolve(path)?.let { runCatching { it.readText() }.getOrNull() }
 
     override fun writeTextFile(path: String, content: String): Boolean = runCatching {
-        val f = if (File(path).isAbsolute) File(path) else File(System.getProperty("user.home"), ".a6studio/$path")
+        val f = resolve(path) ?: return false
         f.parentFile?.mkdirs()
         f.writeText(content)
         true
@@ -93,7 +106,11 @@ fun main() = application {
     val windowState = rememberWindowState(width = widthDp, height = heightDp)
 
     Window(
-        onCloseRequest = ::exitApplication,
+        onCloseRequest = {
+            // Release the coroutine scope and connection pool before the process exits.
+            state.dispose()
+            exitApplication()
+        },
         title = "AutoJs6 Studio",
         state = windowState
     ) {

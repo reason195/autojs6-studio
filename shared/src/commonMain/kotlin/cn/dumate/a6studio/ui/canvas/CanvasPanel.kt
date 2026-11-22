@@ -72,7 +72,7 @@ fun CanvasPanel(
     onShowPalette: () -> Unit = {},
     onShowGuide: () -> Unit = {}
 ) {
-    val scope = repo.scope.value
+    val scope = repo.currentScope
     val module = repo.currentModule()
     val body = when (scope) {
         is Scope.Module -> module?.children?.get("body").orEmpty()

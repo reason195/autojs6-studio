@@ -38,6 +38,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -64,8 +65,17 @@ class StudioState(
     val repo = ProjectRepo(storage)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    // Timeouts are installed once here; McpClient overrides them per request via
+    // HttpTimeoutCapability. Previously McpClient called http.config{} on every request, which
+    // creates a NEW client (with its own connection pool) that was never closed — a leak that
+    // grew with every MCP call.
     private val http = HttpClient(engineFactory) {
         expectSuccess = false
+        install(io.ktor.client.plugins.HttpTimeout) {
+            requestTimeoutMillis = 15_000
+            connectTimeoutMillis = 8_000
+            socketTimeoutMillis = 15_000
+        }
     }
     val bridge = McpClient(http)
 
@@ -145,6 +155,28 @@ class StudioState(
     private var diagJob: Job? = null
     private var bubbleJob: Job? = null
     private var tickJob: Job? = null
+
+    private var disposed = false
+
+    /**
+     * Releases the coroutine scope and the HTTP client.
+     *
+     * Both outlive individual screens: the scope drives the recorder poller and the run/test
+     * jobs, and the client owns the connection pool. Without this, closing a desktop window or
+     * leaving the Android activity left the poller firing and sockets open until GC.
+     * Safe to call more than once.
+     */
+    fun dispose() {
+        if (disposed) return
+        disposed = true
+        diagJob?.cancel()
+        bubbleJob?.cancel()
+        tickJob?.cancel()
+        runControl?.cancel()
+        testControl?.cancel()
+        scope.cancel()
+        runCatching { http.close() }
+    }
 
     /** Stop switches for the simulation / test run in flight (null when idle). */
     private var runControl: RunControl? = null
@@ -265,7 +297,7 @@ class StudioState(
     }
 
     fun removeSelected() {
-        val id = repo.selected.value ?: return
+        val id = repo.selectedId ?: return
         repo.removeBlock(id)
         commit()
     }

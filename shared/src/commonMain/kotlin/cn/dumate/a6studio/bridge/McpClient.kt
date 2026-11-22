@@ -3,6 +3,7 @@ package cn.dumate.a6studio.bridge
 import cn.dumate.a6studio.platform.nowMillis
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -112,19 +113,17 @@ class McpClient(
             putAll(extraHeaders)
         }
 
-        val client = http.config {
-            install(HttpTimeout) {
-                requestTimeoutMillis = timeoutMs
-                connectTimeoutMillis = minOf(timeoutMs, 8_000)
-                socketTimeoutMillis = timeoutMs
-            }
-        }
-
+        // Per-request timeout on the *shared* client: no derived client, no leaked pool.
         val response: HttpResponse = try {
-            client.post(target) {
+            http.post(target) {
                 contentType(ContentType.Application.Json)
                 headers.forEach { (k, v) -> header(k, v) }
                 setBody(payload.toString())
+                timeout {
+                    requestTimeoutMillis = timeoutMs
+                    connectTimeoutMillis = minOf(timeoutMs, 8_000)
+                    socketTimeoutMillis = timeoutMs
+                }
             }
         } catch (e: io.ktor.client.plugins.HttpRequestTimeoutException) {
             throw BridgeException(timeoutMessage(target, timeoutMs), "TIMEOUT")

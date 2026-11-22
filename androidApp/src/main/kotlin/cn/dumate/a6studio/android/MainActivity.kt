@@ -120,6 +120,11 @@ class MainActivity : ComponentActivity() {
                     engine = RhinoRunEngine
                 ).also { it.init() }
             }
+            // The activity can be recreated (rotation, process death); release the scope and the
+            // OkHttp pool so the old instance stops polling and holding sockets.
+            androidx.compose.runtime.DisposableEffect(Unit) {
+                onDispose { state.dispose() }
+            }
             StudioTheme {
                 Surface(Modifier.fillMaxSize(), color = Palette.bg) {
                     androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().padding(0.dp)) {
