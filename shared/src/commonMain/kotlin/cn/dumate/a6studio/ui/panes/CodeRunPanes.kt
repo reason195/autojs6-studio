@@ -249,7 +249,9 @@ fun LogList(
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
     }
-    LazyColumn(modifier.background(P.codeBg).padding(horizontal = 8.dp), state = listState) {
+    // LazyColumn 不写 fillMaxWidth 时会按内容宽度收缩，空日志时「暂无日志」就变成一块
+    // 贴着左边的窄方块，右边露出面板底色。
+    LazyColumn(modifier.fillMaxWidth().background(P.codeBg).padding(horizontal = 8.dp), state = listState) {
         if (logs.isEmpty()) {
             item { EmptyHint("暂无日志") }
         }
