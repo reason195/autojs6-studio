@@ -41,14 +41,19 @@ def main() -> int:
     out.unlink(missing_ok=True)
 
     files = sorted(p for p in src.rglob("*") if p.is_file())
+    # 保留顶层目录：解压出来是 `AutoJs6 Studio/…`，而不是把 exe/app/runtime 撒进当前目录。
+    # 发布说明里写的就是这个路径，两边必须一致。
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for p in files:
-            z.write(p, p.relative_to(src).as_posix())
+            z.write(p, f"{src.name}/{p.relative_to(src).as_posix()}")
 
     names = zipfile.ZipFile(out).namelist()
     backslashes = [n for n in names if "\\" in n]
     if backslashes:
         print(f"条目里有反斜杠，解压会出错：{backslashes[:3]}", file=sys.stderr)
+        return 1
+    if not all(n.startswith(src.name + "/") for n in names):
+        print("有文件落在顶层目录之外，解压布局会和发布说明不一致", file=sys.stderr)
         return 1
     print(f"{out}  {len(files)} 个文件  {out.stat().st_size / 1048576:.1f} MB")
     return 0
