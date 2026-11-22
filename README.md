@@ -28,7 +28,7 @@ Windows / macOS / Linux 桌面端用 Compose Desktop，Android 用 Jetpack Compo
 ./gradlew :androidApp:assembleDebug
 # 产物：androidApp/build/outputs/apk/debug/androidApp-debug.apk
 
-# 核心逻辑单测（63 项）
+# 核心逻辑单测（90 项）
 ./gradlew :shared:jvmTest
 ```
 
@@ -238,8 +238,10 @@ A6_MCP_URL=http://<手机IP>:9637/mcp A6_MCP_TOKEN=<令牌>   ./gradlew :shared:
 
 **已在本次改版中实测：**
 
-- `./gradlew :shared:jvmTest` 63 项通过（代码生成、语法守卫、旧版逐行对齐、id 唯一性、树操作/撤销、模块作用域、
-  Rhino 后台运行完整示例、死循环超时与手动停止控制、三个内置测试用例、SSE 分帧、拾取器候选/评分/兜底链/区域层级、录制解析与坐标归一化）。
+- `./gradlew :shared:jvmTest` 90 项通过（代码生成、语法守卫、旧版逐行对齐、id 唯一性、树操作/撤销、模块作用域、
+  Rhino 后台运行完整示例、死循环超时与手动停止控制、三个内置测试用例、SSE 分帧与分块 UTF-8 解码、导入脚本的
+  语句顺序与嵌套、模拟器 Java 互操作拦截、拾取器候选/评分/兜底链/区域层级、录制解析与坐标归一化、坏项目文件
+  备份与保存失败上报、转义一致性）。
 - `./gradlew :androidApp:assembleDebug` 产出 11.8 MB debug APK。
 - `./gradlew :desktop:run` 启动成功，逐页截图核对过：代码页（含语法高亮般的基础着色与选中行高亮）、
   运行页（模拟手机跑完整流程，日志显示 3 个任务完成、空弹窗、收工）、测试页（3 个用例可见可编辑）、
@@ -262,6 +264,14 @@ A6_MCP_URL=http://<手机IP>:9637/mcp A6_MCP_TOKEN=<令牌>   ./gradlew :shared:
   厂商弹窗）只能在真机上验证。
 - 示例项目全部用表达式定位京东页面，因此「体检」对示例项目显示 0 个可体检项——这是预期行为，
   自己拖入 `clickNode` 这类用 `by/value` 的积木后才有体检对象。
+
+## 模拟器的边界（安全设计，不是缺陷）
+
+模拟运行在电脑上执行脚本，所以它**不提供 Java 互操作**：`java.*` / `javax.*` / `jdk.*` /
+`com.sun.*` 等包名一律被 Rhino 的 ClassShutter 拦下，`importClass` / `importPackage` 会记录一条
+「模拟器不执行 Java 互操作，需要在真机验证」的日志后继续执行。否则任何一个导入的 `.js`——你不知道
+它里面写了什么——点一下运行就能以你的身份在电脑上 `Runtime.exec`、删文件。用到 Java 类的脚本请在
+真机上跑（勾选「发送到真机」）。
 
 ## 边界（沿用旧版实测结论）
 
