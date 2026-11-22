@@ -11,8 +11,7 @@ import kotlin.test.assertTrue
 
 class ScriptImportTest {
 
-    private val NL = "
-"
+    private val NL = "\n"
 
     private fun fixture(name: String): String? {
         val f = listOf(File("build/fixture/$name"), File("../build/fixture/$name"))
