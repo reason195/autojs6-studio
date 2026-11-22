@@ -19,9 +19,25 @@ android {
         versionName = providers.gradleProperty("a6studio.version").get()
     }
 
+    // 固定的 debug 签名。默认的 ~/.android/debug.keystore 每台机器、每个 CI runner 都是新生成的，
+    // 于是同一个版本号的 APK 签名各不相同：装过上一版的人无法覆盖升级（INSTALL_FAILED_UPDATE_
+    // INCOMPATIBLE），每跑一次 CI 就要先卸载。这里放一把公开的、只用于 debug 的密钥，本地与 CI
+    // 签出来的包才能互换升级。**它不是发布密钥**，正式上架必须换成自己的 release key。
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("tools/debug.keystore")
+            storePassword = "a6studio"
+            keyAlias = "a6studio"
+            keyPassword = "a6studio"
+        }
+    }
+
     buildFeatures { compose = true }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
         }
