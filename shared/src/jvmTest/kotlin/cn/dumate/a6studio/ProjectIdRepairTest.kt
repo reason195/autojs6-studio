@@ -14,6 +14,9 @@ import kotlin.test.assertTrue
 /** M15: every block id must be unique after loading, or one edit hits several blocks. */
 class ProjectIdRepairTest {
 
+    private val json = Json { encodeDefaults = true }
+
+
     @Test
     fun `duplicate and empty ids are repaired on load`() {
         val a = newBlock("log")
@@ -23,7 +26,7 @@ class ProjectIdRepairTest {
                 children = mapOf("body" to listOf(a, a.copy(), a.copy(id = "")))
             )
         )
-        val raw = Json { encodeDefaults = true }.encodeToString(Project.serializer(), broken)
+        val raw = json.encodeToString(Project.serializer(), broken)
         val repo = ProjectRepo(MemoryProjectStorage(raw))
         repo.load()
 

@@ -19,6 +19,9 @@ import kotlin.test.assertTrue
 /** L10 (module matching) and L11 (identifier params). */
 class IdentifierAndModuleTest {
 
+    private val json = kotlinx.serialization.json.Json { encodeDefaults = true }
+
+
     private fun projectWith(vararg blocks: cn.dumate.a6studio.model.Block, modules: List<StudioModule> = emptyList()): Project {
         val base = Samples.emptyProject()
         return base.copy(root = base.root.copy(children = mapOf("body" to blocks.toList())), modules = modules)
@@ -64,7 +67,7 @@ class IdentifierAndModuleTest {
     fun `old projects storing a module name are migrated to its id on load`() {
         val m = StudioModule(id = "m1", name = "签到")
         val p = projectWith(newBlock("moduleCall", mapOf("module" to ParamValue.Text("签到"))), modules = listOf(m))
-        val raw = kotlinx.serialization.json.Json { encodeDefaults = true }.encodeToString(Project.serializer(), p)
+        val raw = json.encodeToString(Project.serializer(), p)
         val repo = ProjectRepo(MemoryProjectStorage(raw))
         repo.load()
         val call = repo.current.root.children["body"].orEmpty().single()
