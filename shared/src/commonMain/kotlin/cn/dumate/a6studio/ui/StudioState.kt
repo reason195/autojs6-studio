@@ -169,14 +169,13 @@ class StudioState(
 
     private var diagJob: Job? = null
     private var bubbleJob: Job? = null
-    private var tickJob: Job? = null
 
     private var disposed = false
 
     /**
      * Releases the coroutine scope and the HTTP client.
      *
-     * Both outlive individual screens: the scope drives the recorder poller and the run/test
+     * Both outlive individual screens: the scope drives the run/test jobs and UI intents,
      * jobs, and the client owns the connection pool. Without this, closing a desktop window or
      * leaving the Android activity left the poller firing and sockets open until GC.
      * Safe to call more than once.
@@ -186,7 +185,6 @@ class StudioState(
         disposed = true
         diagJob?.cancel()
         bubbleJob?.cancel()
-        tickJob?.cancel()
         runControl?.cancel()
         testControl?.cancel()
         scope.cancel()
@@ -896,11 +894,12 @@ class StudioState(
     fun recorderStart() {
         applyBridgeConfig()
         scope.launch { recorder.start() }
-        startTick()
+        // 录制期间刻意不轮询：脚本一旦常驻触摸监听，同进程的 MCP Server 就不再应答，
+        // 之前的 900ms tick 会把状态从 RECORDING 改成 FETCHING/DONE/ERROR，
+        // 界面显示「读取失败」，而手机其实还在录。
     }
 
     fun recorderStop() {
-        tickJob?.cancel()
         scope.launch { recorder.stop() }
     }
 
@@ -939,25 +938,6 @@ class StudioState(
         recorder.markInserted()
         commit()
         toast("已生成 ${blocks.size} 个积木")
-    }
-
-    private fun startTick() {
-        tickJob?.cancel()
-        tickJob = scope.launch {
-            var fails = 0
-            while (recorderState.status == cn.dumate.a6studio.recorder.RecorderStatus.RECORDING) {
-                delay(900)
-                try {
-                    recorder.fetchEvents()
-                    fails = 0
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e // M1: cancellation must propagate, or Stop/close never takes effect
-                } catch (e: Exception) {
-                    fails++
-                    if (fails >= 3) break
-                }
-            }
-        }
     }
 
     val auditController: AuditController get() = audit

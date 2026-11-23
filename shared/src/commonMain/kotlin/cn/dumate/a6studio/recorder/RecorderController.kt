@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -79,7 +80,9 @@ var ARGS = (engines.myEngine().execArgv && engines.myEngine().execArgv) || {};
 var OUT = ARGS.out || "/sdcard/studio-record.jsonl";
 var MAX = Number(ARGS.max || 300);
 var n = 0;
-try { files.ensureDir(OUT); } catch (e) {}
+// 每次开始录制先清空：之前只 append，第二次录制读到的是「上一轮 + 这一轮」，
+// 而随后的生成逻辑按 inserted=0 计算，旧操作会被再生成一遍积木。
+try { files.write(OUT, ""); } catch (e) { try { files.remove(OUT); } catch (e2) {} }
 function emit(o) {
   if (n >= MAX) return;
   n++;
@@ -161,6 +164,19 @@ try { events.onKeyDown("volume_down", function () { try { toast("录制已停止
 setInterval(function () {}, 1000);
 """.trimIndent()
 
+        /**
+         * Execution id from `script_run`'s reply. AutoJs6 hands out a Long that can exceed Int
+         * (the old `intOrNull` then produced null, so the recording script could never be
+         * stopped). Pure so it can be tested without a bridge.
+         */
+        fun parseExecutionId(raw: String): Long? = runCatching {
+            val lenient = Json { ignoreUnknownKeys = true; isLenient = true }
+            lenient.parseToJsonElement(raw).jsonObject.let { o ->
+                o["executionId"]?.jsonPrimitive?.longOrNull
+                    ?: o["id"]?.jsonPrimitive?.longOrNull
+            }
+        }.getOrNull()
+
         val EXPORT_BANNER: String = """
 /* AutoJs6 Studio · 录制脚本（离线版）
  * 用法：把本文件放到手机，用 AutoJs6 打开并运行；操作手机即可录制。
@@ -189,12 +205,7 @@ setInterval(function () {}, 1000);
                 put("max", 300)
             }
             val raw = bridge.scriptRun(DEVICE_SCRIPT, "a6studio-record", args, waitForCompletion = false)
-            val id = runCatching {
-                json.parseToJsonElement(raw).jsonObject.let { o ->
-                    o["executionId"]?.jsonPrimitive?.intOrNull?.toLong()
-                        ?: o["id"]?.jsonPrimitive?.intOrNull?.toLong()
-                }
-            }.getOrNull()
+            val id = parseExecutionId(raw)
             update {
                 it.copy(
                     executionId = id,
