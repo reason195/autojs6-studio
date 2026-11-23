@@ -29,12 +29,26 @@ object CodeGen {
 
     fun moduleName(name: String): String = Js.moduleName(name)
 
-    fun generateList(list: List<Block>, project: Project, ctx: GenContext): String =
-        list.mapNotNull { b ->
-            val text = generateBlock(b, project, ctx)
+    /**
+     * Blocks whose templates declare fixed top-level names (`let signNode`, `let _nodes`, …).
+     * Two of them in one list redeclared the same `let`, which is a SyntaxError that stops the
+     * WHOLE script from running (M4). From the second occurrence on, the block is wrapped in
+     * its own `{ }` scope. The first stays unwrapped, so single-use output is unchanged and the
+     * legacy parity fixtures still match.
+     */
+    private val fixedNameTypes = setOf("dumpUi", "jdSign", "jdOpenPanel", "jdTaskLoop", "jdFinishGuard")
+
+    fun generateList(list: List<Block>, project: Project, ctx: GenContext): String {
+        val seen = mutableSetOf<String>()
+        return list.mapNotNull { b ->
+            var text = generateBlock(b, project, ctx)
+            if (text.isNotEmpty() && b.type in fixedNameTypes && !seen.add(b.type)) {
+                text = "{\n" + Js.indentLines(text, 1) + "\n}"
+            }
             if (text.isEmpty()) null
             else if (ctx.markers) "//@${b.id}\n$text" else text
         }.joinToString("\n")
+    }
 
     private fun generateBlock(block: Block, project: Project, ctx: GenContext): String {
         val def = Catalog.byType(block.type) ?: return ""

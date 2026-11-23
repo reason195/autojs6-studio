@@ -146,4 +146,19 @@ class GeneratedSyntaxTest {
         assertTrue(code.contains("for (let "), "forOf must emit let: $code")
         assertFalse(code.contains("for (const "), "forOf must not emit const: $code")
     }
+
+    @Test
+    fun `the same fixed-name block twice in one scope still parses`() {
+        // M4: jdSign / dumpUi … declare fixed `let` names; two in a row used to be a
+        // redeclaration SyntaxError that stopped the whole script.
+        val failures = mutableListOf<String>()
+        for (type in listOf("dumpUi", "jdSign", "jdOpenPanel", "jdTaskLoop", "jdFinishGuard")) {
+            val base = Samples.emptyProject()
+            val twice = base.copy(
+                root = base.root.copy(children = mapOf("body" to listOf(newBlock(type), newBlock(type))))
+            )
+            parses(CodeGen.code(twice, markers = false))?.let { failures += "$type: $it" }
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
 }
