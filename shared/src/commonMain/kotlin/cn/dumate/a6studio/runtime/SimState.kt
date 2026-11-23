@@ -22,7 +22,7 @@ class SimState {
         }
     var signed: Boolean = false
     var packageName: String = "com.jingdong.app.mall"
-    var activity: String = "MainActivity"
+    var activity: String = "BabelActivity"
     var clip: String = ""
     var clock: Long = 0
     val tasks: MutableList<Task> = seedTasks().toMutableList()
@@ -177,7 +177,8 @@ class SimState {
     fun back() {
         val map = mapOf(
             "jd.popup" to "jd.panel", "jd.panel" to "jd.coupon",
-            "jd.finance" to "jd.panel", "jd.coupon" to "jd.mall"
+            "jd.finance" to "jd.panel", "jd.coupon" to "jd.mall",
+            "jd.service" to "jd.mall"
         )
         val next = map[screen] ?: screen
         add("info", "按返回键（$screen → $next）")

@@ -31,6 +31,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.dumate.a6studio.ai.LlmProviderId
+import cn.dumate.a6studio.bridge.McpTransport
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -107,30 +108,67 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
             }
         }
 
-        // 1. ProxyPin 抓包 MCP
+        // 1. 双 MCP JSON-RPC 2.0 网关（AutoJs6 设备 MCP + ProxyPin 抓包 MCP）
         Surface(
             color = Palette.panelAlt,
             shape = RoundedCornerShape(8.dp),
             border = BorderStroke(1.dp, Palette.border)
         ) {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("ProxyPin 抓包 MCP（自动脱敏）", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
+                Text("双 MCP JSON-RPC 2.0 网关（自动脱敏）", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val visibleTransports = if (state.devMode) {
+                        McpTransport.entries
+                    } else {
+                        listOf(McpTransport.HTTP_JSONRPC)
+                    }
+                    visibleTransports.forEach { tr ->
+                        FilterChip(
+                            selected = state.mcpTransport == tr,
+                            onClick = { state.mcpTransport = tr },
+                            label = { Text(tr.label, fontSize = 11.sp) }
+                        )
+                    }
+                    FilterChip(
+                        selected = state.devMode,
+                        onClick = { state.toggleDevMode(!state.devMode) },
+                        label = { Text("开发者合成调测", fontSize = 11.sp) }
+                    )
+                }
+
+                if (state.mcpTransport == McpTransport.HTTP_JSONRPC) {
+                    OutlinedTextField(
+                        value = state.proxyPinUrl,
+                        onValueChange = { state.proxyPinUrl = it },
+                        label = { Text("ProxyPin MCP 地址（AutoJs6 地址复用「真机」页签配置）", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = state.proxyPinToken,
+                        onValueChange = { state.proxyPinToken = it },
+                        label = { Text("ProxyPin 鉴权 Token（仅内存持有）", fontSize = 11.sp) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 OutlinedTextField(
-                    value = state.proxyPinUrl,
-                    onValueChange = { state.proxyPinUrl = it },
-                    label = { Text("ProxyPin MCP 地址", fontSize = 11.sp) },
+                    value = state.proxyPinDomainFilter,
+                    onValueChange = { state.proxyPinDomainFilter = it },
+                    label = { Text("抓包域名过滤（可选，如 ms.jr.jd.com）", fontSize = 11.sp) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                OutlinedTextField(
-                    value = state.proxyPinToken,
-                    onValueChange = { state.proxyPinToken = it },
-                    label = { Text("鉴权 Token（仅内存持有）", fontSize = 11.sp) },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
-                )
+
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { state.fetchAutoJsDeviceState() },
+                        enabled = !state.aiBusy
+                    ) {
+                        Text("采集 AutoJs6 状态", fontSize = 12.sp)
+                    }
                     Button(
                         onClick = { state.fetchProxyPinTraffic() },
                         enabled = !state.aiBusy,
@@ -138,14 +176,23 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                     ) {
                         Text("拉取并脱敏流量", fontSize = 12.sp)
                     }
-                    state.lastTrafficReport?.let { rep ->
-                        Text(
-                            "已脱敏：键 ${rep.stats.redactedKeyCount} / 掩码 ${rep.stats.maskedPatternCount}",
-                            fontSize = 11.sp,
-                            color = Palette.ok,
-                            modifier = Modifier.padding(top = 10.dp)
-                        )
-                    }
+                }
+
+                state.lastAutoJsStateReport?.let { devRep ->
+                    val synTag = if (state.lastAutoJsIsSynthetic) "【合成数据】" else ""
+                    Text(
+                        "${synTag}AutoJs6 状态已就绪（脱敏键 ${devRep.stats.redactedKeyCount} / 掩码 ${devRep.stats.maskedPatternCount}）",
+                        fontSize = 11.sp,
+                        color = if (state.lastAutoJsIsSynthetic) Palette.warn else Palette.ok
+                    )
+                }
+                state.lastTrafficReport?.let { rep ->
+                    val synTag = if (state.lastTrafficIsSynthetic) "【合成数据】" else ""
+                    Text(
+                        "${synTag}ProxyPin 流量已就绪（脱敏键 ${rep.stats.redactedKeyCount} / 掩码 ${rep.stats.maskedPatternCount}）",
+                        fontSize = 11.sp,
+                        color = if (state.lastTrafficIsSynthetic) Palette.warn else Palette.ok
+                    )
                 }
             }
         }
@@ -213,8 +260,12 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                         Text(if (state.aiBusy) "处理中…" else "开始提炼", fontSize = 12.sp)
                     }
                     if (state.lastRefineOutput != null) {
-                        OutlinedButton(onClick = { state.applyRefinedToSelectedOrInsert() }) {
-                            Text("护栏回填到积木", fontSize = 12.sp)
+                        val isSyn = state.lastRefineIsSynthetic || state.lastAutoJsIsSynthetic || state.lastTrafficIsSynthetic
+                        OutlinedButton(
+                            onClick = { state.applyRefinedToSelectedOrInsert() },
+                            enabled = !isSyn
+                        ) {
+                            Text(if (isSyn) "合成数据禁止回填" else "护栏回填到积木", fontSize = 12.sp)
                         }
                     }
                 }

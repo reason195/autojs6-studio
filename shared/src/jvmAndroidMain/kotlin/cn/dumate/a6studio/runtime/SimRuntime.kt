@@ -600,7 +600,15 @@ class SimRuntime(
         }
         put(filesObj, "append") { a, _ ->
             val k = a.getOrNull(0)?.toString() ?: ""
-            files[k] = (files[k] ?: "") + (a.getOrNull(1)?.toString() ?: "")
+            val addition = a.getOrNull(1)?.toString() ?: ""
+            // N-L7：只对模拟器日志文件（jdstudio_*.log）限制大小，避免长时间运行时 O(n²) 累积
+            val existing = files[k] ?: ""
+            val MAX_LOG_CHARS = 65_536
+            files[k] = if (k.contains("jdstudio_") && k.endsWith(".log") && existing.length > MAX_LOG_CHARS) {
+                existing.takeLast(MAX_LOG_CHARS / 2) + addition
+            } else {
+                existing + addition
+            }
             true
         }
         put(filesObj, "remove") { a, _ -> files.remove(a.getOrNull(0)?.toString()); true }

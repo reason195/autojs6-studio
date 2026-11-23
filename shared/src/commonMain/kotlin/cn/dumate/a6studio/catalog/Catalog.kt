@@ -622,22 +622,27 @@ object Catalog {
             listOf(
                 text("pkg", "目标包名", "com.jingdong.app.mall"),
                 text("name", "脚本名称", "京东任务"),
-                num("maxRuntimeMs", "总超时毫秒", 900000.0)
+                num("maxRuntimeMs", "总超时毫秒", 900000.0),
+                // N-M9：导入 IR 时原样保存的 policy JSON。只能在默认护栏基础上加严（见 KitPolicy）
+                text("policyJson", "附加护栏策略 (JSON，可空)", "")
             )
         ) { b, c ->
             val pkg = c.quote(c.str(b, "pkg").ifEmpty { "com.jingdong.app.mall" })
-            val name = c.quote(c.str(b, "name").ifEmpty { "京东任务" })
+            val rawName = c.str(b, "name").ifEmpty { "京东任务" }
+            val name = c.quote(rawName)
+            // N-L6：id 用于日志文件名（'jdstudio_'+id+'.log'），必须过滤掉路径穿越字符和控制字符。
+            // 只保留 [A-Za-z0-9_-]；全部过滤完为空时用 "kit" 兜底。
+            val safeId = rawName.replace(Regex("[^A-Za-z0-9_-]"), "").ifEmpty { "kit" }
+            val idLit = c.quote(safeId)
             val maxMs = c.num(b, "maxRuntimeMs").toLong().let { if (it <= 0) 900000L else it }
-            listOf(
-                "var \$kit = Kit.boot({",
-                "  id: $name, name: $name, pkg: $pkg,",
-                "  policy: {",
-                "    maxRuntimeMs: $maxMs,",
-                "    riskyActivityRe: \"Settlement|Checkout|ConfirmOrder|OrderSubmit|Pay|Cart|trade|permissioncontroller|GrantPermissions\",",
-                "    forbiddenZones: [[2130, 2400]],",
-                "    skipKeywords: [\"下单\", \"支付\", \"绑卡\", \"邀请好友\", \"开通\"]",
-                "  }",
-                "});"
+            (
+                listOf(
+                    "var \$kit = Kit.boot({",
+                    "  id: $idLit, name: $name, pkg: $pkg,",
+                    "  policy: {"
+                ) +
+                    KitPolicy.renderJs(c.str(b, "policyJson"), maxMs) +
+                    listOf("  }", "});")
             ).joinToString("\n")
         }
 
@@ -730,7 +735,8 @@ object Catalog {
             val graceSec = c.num(b, "graceSec").toLong().let { if (it < 0) 2L else it }
             listOf(
                 "var _cd = \$kit.waitCountdown({ fallbackDwellMs: ${minSec * 1000L}, graceMs: ${graceSec * 1000L} });",
-                "if (!_cd) { \$kit.backToBean(); }"
+                // R-4：返回 null 既可能是「没看到返回按钮」也可能是「护栏拦截」；后者必须停，不能继续导航
+                "if (!_cd) { if (\$kit.overBudget() || \$kit.atRisk()) { \$kit.finish(\"failed\"); exit(); } \$kit.backToBean(); }"
             ).joinToString("\n")
         }
 

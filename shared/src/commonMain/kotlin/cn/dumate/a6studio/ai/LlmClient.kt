@@ -1,5 +1,6 @@
 package cn.dumate.a6studio.ai
 
+import cn.dumate.a6studio.catalog.Js
 import cn.dumate.a6studio.security.Redaction
 import cn.dumate.a6studio.security.RedactionStats
 import cn.dumate.a6studio.security.UrlSecurity
@@ -11,6 +12,7 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.encodeURLPathPart
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -193,7 +195,7 @@ class LlmClient(private val http: HttpClient) {
         val key = config.geminiApiKey.trim()
         require(key.isNotEmpty()) { "未配置 Gemini API Key" }
         val model = config.geminiModel.ifBlank { "gemini-2.5-flash" }
-        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/${model.encodeURLPathPart()}:generateContent"
         val userPrompt = buildUserPrompt(input, sanitizedState, sanitizedTraffic)
 
         val payload = buildJsonObject {
@@ -219,7 +221,7 @@ class LlmClient(private val http: HttpClient) {
         }
         val rawText = resp.bodyAsText()
         if (resp.status.value !in 200..299) {
-            error("HTTP ${resp.status.value}: ${rawText.take(180)}")
+            error("HTTP ${resp.status.value}: ${Redaction.redactTextPatterns(rawText.take(180)).text}")
         }
         val root = json.parseToJsonElement(rawText).jsonObject
         val text = root["candidates"]?.jsonArray?.firstOrNull()?.jsonObject
@@ -246,7 +248,8 @@ class LlmClient(private val http: HttpClient) {
         if (pid == LlmProviderId.OPENAI_COMPATIBLE) {
             require(apiKey.isNotBlank()) { "未配置 OpenAI 兼容 API Key" }
         }
-        val check = UrlSecurity.validateEndpointUrl(rawBaseUrl, allowLocal = allowLocal)
+        // N-M1：解析 DNS 后逐个地址校验，挡住指向元数据/内网的域名
+        val check = UrlSecurity.validateEndpointUrlResolved(rawBaseUrl, allowLocal = allowLocal)
         if (!check.valid || check.normalizedUrl == null) {
             error(check.reason ?: "URL 校验失败")
         }
@@ -270,7 +273,7 @@ class LlmClient(private val http: HttpClient) {
         }
         val rawText = resp.bodyAsText()
         if (resp.status.value !in 200..299) {
-            error("HTTP ${resp.status.value}: ${rawText.take(180)}")
+            error("HTTP ${resp.status.value}: ${Redaction.redactTextPatterns(rawText.take(180)).text}")
         }
         val root = json.parseToJsonElement(rawText).jsonObject
         val text = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
@@ -415,7 +418,7 @@ class LlmClient(private val http: HttpClient) {
         val sortedKeywords = scores.entries
             .sortedByDescending { it.value }
             .map { it.key }
-        val waitMs = (maxBrowseSec + 2) * 1000
+        val waitMs = ((maxBrowseSec + 2) * 1000).coerceIn(1_000, 120_000)
         val branches = listOf(
             BranchConditionHint("屏幕出现「安全验证 / 拖动滑块」", "停手等待人工验证", "触发风控保护机制"),
             BranchConditionHint("落地页存在倒计时", "轮询归零后再等 2s 返回", "防止浏览时长不足"),
@@ -423,7 +426,7 @@ class LlmClient(private val http: HttpClient) {
         )
         val snippet = buildString {
             appendLine("// 由确定性规则引擎生成（已脱敏）")
-            appendLine("var targetKeywords = [${sortedKeywords.joinToString(", ") { "\"$it\"" }}];")
+            appendLine("var targetKeywords = [${sortedKeywords.joinToString(", ") { Js.quote(it) }}];")
             append("var recommendedWaitMs = $waitMs;")
         }
 

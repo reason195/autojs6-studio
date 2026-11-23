@@ -168,17 +168,26 @@ fun main() = application {
             if (enable) {
                 val port = (System.getenv("A6STUDIO_MCP_PORT") ?: System.getProperty("a6studio.mcpPort"))
                     ?.toIntOrNull() ?: 0
-                runCatching {
+                // R-3：MCP 线程等 EDT 必须有上限。EDT 卡住/正在关闭时，HTTP 线程（池里只有 2 个）
+                // 不能被永久挂死；超时就抛出，由 DesktopMcpServer 的 catch 转成 JSON-RPC -32603。
+                fun <T> onMain(block: () -> T): T = kotlinx.coroutines.runBlocking {
+                    kotlinx.coroutines.withTimeout(5_000) {
+                        kotlinx.coroutines.withContext(Dispatchers.Main) { block() }
+                    }
+                }
+                // 原先 runCatching 会把 NoClassDefFoundError（打包缺 jdk.httpserver）和
+                // BindException 一起静默吞掉（N-M10）；这里分类捕获并把原因显示给用户。
+                try {
                     DesktopMcpServer(
-                        getProject = { kotlinx.coroutines.runBlocking(Dispatchers.Main) { state.repo.current } },
+                        getProject = { onMain { state.repo.current } },
                         setProject = { p ->
-                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                            onMain {
                                 state.applyExternalMcpProject(p)
                             }
                         },
                         port = port,
                         mutateProjectSync = { transform ->
-                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                            onMain {
                                 val res = transform(state.repo.current)
                                 if (res.accepted) {
                                     state.applyExternalMcpProject(res.project)
@@ -191,8 +200,15 @@ fun main() = application {
                         mcpServerHolder[0] = it
                         state.attachLocalMcpEndpoint(it.endpointUrl, it.authToken)
                     }
-                }.onFailure {
+                } catch (e: LinkageError) {
                     state.attachLocalMcpEndpoint(null, null)
+                    state.toast("本地 MCP 启动失败：运行时缺少 jdk.httpserver 模块（${e::class.simpleName}），请使用新版安装包")
+                } catch (e: java.net.BindException) {
+                    state.attachLocalMcpEndpoint(null, null)
+                    state.toast("本地 MCP 启动失败：端口 $port 已被占用")
+                } catch (e: Exception) {
+                    state.attachLocalMcpEndpoint(null, null)
+                    state.toast("本地 MCP 启动失败：${e.message ?: e::class.simpleName}")
                 }
             } else {
                 state.attachLocalMcpEndpoint(null, null)
@@ -368,6 +384,9 @@ fun main() = application {
                     println("SCREENSHOT ok=${bmp.width}x${bmp.height} -> $shotPath")
                 }.onFailure { println("SCREENSHOT FAILED: $it") }
                 delay(200)
+                // N-L12：截图冒烟退出前先释放资源，避免 jdk.httpserver 调度线程阻止 JVM 退出
+                runCatching { mcpServerHolder[0]?.stop() }
+                state.dispose()
                 exitApplication()
             }
         }

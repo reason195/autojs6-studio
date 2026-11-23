@@ -29,6 +29,10 @@ compose.desktop {
 
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
+            // jlink 只打进显式列出的 JDK 模块。DesktopMcpServer 用 com.sun.net.httpserver（jdk.httpserver），
+            // 漏掉它在 IDE 里正常、MSI 里会 NoClassDefFoundError（N-M10）。
+            // 其余模块请用 `./gradlew :desktop:suggestRuntimeModules` 核对后补进这里。
+            modules("java.instrument", "java.management", "jdk.dynalink", "jdk.httpserver", "jdk.unsupported")
             packageName = "AutoJs6 Studio"
             // jpackage 与版本号的关系：MSI 文件名和升级判断都来自这里，必须与 Android 一致地取自
             // gradle.properties，否则两处手改迟早对不上。

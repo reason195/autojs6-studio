@@ -255,7 +255,9 @@ object Templates {
                 newBlock("kitWaitFor", mapOf("by" to ParamValue.Text("desc"), "match" to ParamValue.Text("contains"), "value" to ParamValue.Text(channelDesc), "timeoutMs" to ParamValue.Num(12000.0))),
                 newBlock("kitClick", mapOf("by" to ParamValue.Text("desc"), "match" to ParamValue.Text("contains"), "value" to ParamValue.Text(channelDesc))),
                 newBlock("kitWaitFor", mapOf("by" to ParamValue.Text("text"), "match" to ParamValue.Text("contains"), "value" to ParamValue.Text(actionText), "timeoutMs" to ParamValue.Num(8000.0))),
-                newBlock("kitClick", mapOf("by" to ParamValue.Text("text"), "match" to ParamValue.Text("contains"), "value" to ParamValue.Text(actionText))),
+                // N-L8：只有「立即刮卡」需要精确匹配（运行时注释里的子串撞车事故）；
+                // 其他频道的「去完成」等按钮文案常带后缀（如「去完成 >」），保持 contains
+                newBlock("kitClick", mapOf("by" to ParamValue.Text("text"), "match" to ParamValue.Text(if (actionText == "立即刮卡") "eq" else "contains"), "value" to ParamValue.Text(actionText))),
                 newBlock("kitFinish", mapOf("result" to ParamValue.Text("auto")))
             )
         )

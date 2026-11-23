@@ -13,8 +13,12 @@ import cn.dumate.a6studio.ai.LlmRefineOutput
 import cn.dumate.a6studio.audit.AuditController
 import cn.dumate.a6studio.audit.AuditRow
 import cn.dumate.a6studio.bridge.BridgeException
+import cn.dumate.a6studio.bridge.CallMcpGatewayOptions
 import cn.dumate.a6studio.bridge.DeviceInfo
+import cn.dumate.a6studio.bridge.DualMcpGateway
 import cn.dumate.a6studio.bridge.McpClient
+import cn.dumate.a6studio.bridge.McpServerId
+import cn.dumate.a6studio.bridge.McpTransport
 import cn.dumate.a6studio.bridge.ProxyPinBridge
 import cn.dumate.a6studio.security.Redaction
 import cn.dumate.a6studio.security.RedactionReport
@@ -103,16 +107,28 @@ class StudioState(
         }
     }
     val bridge = McpClient(http)
-    val proxyPin = ProxyPinBridge(http)
+    val proxyPin = ProxyPinBridge(http, autojsClient = bridge)
+    val mcpGateway: DualMcpGateway get() = proxyPin.gateway
     val llmClient = LlmClient(http)
 
+    var devMode by mutableStateOf(false)
     var llmProvider by mutableStateOf(LlmProviderId.AUTO)
     var llmConfig by mutableStateOf(LlmConfig())
+    var mcpTransport by mutableStateOf(McpTransport.HTTP_JSONRPC)
     var proxyPinUrl by mutableStateOf("http://127.0.0.1:9000/mcp")
     var proxyPinToken by mutableStateOf("")
+    var proxyPinDomainFilter by mutableStateOf("")
+    var lastAutoJsStateReport by mutableStateOf<RedactionReport?>(null)
+        private set
+    var lastAutoJsIsSynthetic by mutableStateOf(false)
+        private set
     var lastTrafficReport by mutableStateOf<RedactionReport?>(null)
         private set
+    var lastTrafficIsSynthetic by mutableStateOf(false)
+        private set
     var lastRefineOutput by mutableStateOf<LlmRefineOutput?>(null)
+        private set
+    var lastRefineIsSynthetic by mutableStateOf(false)
         private set
     var aiBusy by mutableStateOf(false)
         private set
@@ -128,8 +144,9 @@ class StudioState(
     var localMcpEnabled by mutableStateOf(false)
         private set
     var onToggleLocalMcp: ((Boolean) -> Unit)? = null
-    var hasExternalMcpChanges by mutableStateOf(false)
-        private set
+    /** R-2：从工程本身派生（已持久化），不再是只存在内存里的标记。 */
+    val hasExternalMcpChanges: Boolean
+        get() = repo.current.externalPatchPending
     var pendingExternalDeviceConfirm by mutableStateOf(false)
         private set
 
@@ -158,13 +175,15 @@ class StudioState(
 
     fun applyExternalMcpProject(p: cn.dumate.a6studio.model.Project) {
         repo.snapshot("外部 MCP 补丁")
-        repo.setProjectDirect(p)
-        hasExternalMcpChanges = true
+        // setProjectDirect 内部会 save()，标记随工程一起写盘
+        repo.setProjectDirect(p.copy(externalPatchPending = true))
         refreshAll()
     }
 
     fun confirmAndRunOnDevice() {
-        hasExternalMcpChanges = false
+        // 不用 setProjectDirect：它会重置作用域和选中状态，这里只需清标记并落盘
+        repo.markExternalPatchConfirmed()
+        commit()
         pendingExternalDeviceConfirm = false
         runOnDevice()
     }
@@ -819,16 +838,102 @@ class StudioState(
         }
     }
 
+    fun toggleDevMode(enable: Boolean) {
+        devMode = enable
+        if (!enable && mcpTransport == McpTransport.LOCAL_BRIDGE) {
+            mcpTransport = McpTransport.HTTP_JSONRPC
+        }
+    }
+
+    fun fetchAutoJsDeviceState() {
+        scope.launch {
+            aiBusy = true
+            aiStatusMsg = "正在通过 AutoJs6 MCP 采集设备与控件树状态…"
+            try {
+                val effectiveTransport = if (!devMode && mcpTransport == McpTransport.LOCAL_BRIDGE) {
+                    McpTransport.HTTP_JSONRPC
+                } else mcpTransport
+                if (effectiveTransport == McpTransport.HTTP_JSONRPC) {
+                    applyBridgeConfig()
+                }
+                val resp = withContext(Dispatchers.Default) {
+                    mcpGateway.call(
+                        CallMcpGatewayOptions(
+                            serverId = McpServerId.AUTOJS6,
+                            transport = effectiveTransport,
+                            endpointUrl = bridgeUrl,
+                            method = "tools/call",
+                            toolName = "get_device_state",
+                            allowLocal = true,
+                            authToken = bridgeToken,
+                            devMode = devMode
+                        )
+                    )
+                }
+                if (!resp.ok) {
+                    aiStatusMsg = "AutoJs6 MCP 采集失败：${resp.errorMessage}"
+                    toast(aiStatusMsg)
+                } else {
+                    lastAutoJsStateReport = resp.redactionReport ?: Redaction.redactTrafficPayload(resp.data)
+                    lastAutoJsIsSynthetic = resp.isSynthetic
+                    val tag = if (resp.isSynthetic) "【合成数据】" else ""
+                    aiStatusMsg = "${tag}已采集 AutoJs6 设备状态（耗时 ${resp.latencyMs}ms）"
+                    toast("${tag}AutoJs6 设备状态已载入")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                aiStatusMsg = "AutoJs6 状态采集失败：${e.message}"
+                toast(aiStatusMsg)
+            } finally {
+                aiBusy = false
+            }
+        }
+    }
+
     fun fetchProxyPinTraffic() {
         scope.launch {
             aiBusy = true
             aiStatusMsg = "正在连接 ProxyPin MCP 并拉取流量…"
             try {
-                proxyPin.configure(proxyPinUrl, proxyPinToken, allowLocal = true)
-                val report = withContext(Dispatchers.Default) { proxyPin.fetchRedactedTraffic() }
-                lastTrafficReport = report
-                aiStatusMsg = "已获取并脱敏：屏蔽键 ${report.stats.redactedKeyCount}，掩码 ${report.stats.maskedPatternCount}"
-                toast("ProxyPin 流量已脱敏载入")
+                val effectiveTransport = if (!devMode && mcpTransport == McpTransport.LOCAL_BRIDGE) {
+                    McpTransport.HTTP_JSONRPC
+                } else mcpTransport
+                if (effectiveTransport == McpTransport.HTTP_JSONRPC) {
+                    proxyPin.configure(proxyPinUrl, proxyPinToken, allowLocal = true)
+                }
+                val resp = withContext(Dispatchers.Default) {
+                    proxyPin.listHttpFlows(
+                        domain = proxyPinDomainFilter,
+                        limit = 20,
+                        transport = effectiveTransport,
+                        devMode = devMode
+                    )
+                }
+                if (!resp.ok) {
+                    // G-5：仅当远端明确返回「工具不存在」时才回退到 get_flows
+                    if (effectiveTransport == McpTransport.HTTP_JSONRPC &&
+                        DualMcpGateway.isToolNotFoundMessage(resp.errorKind, resp.errorMessage)
+                    ) {
+                        val fallbackReport = withContext(Dispatchers.Default) {
+                            proxyPin.fetchRedactedTraffic(toolName = "get_flows", transport = effectiveTransport, devMode = devMode)
+                        }
+                        lastTrafficReport = fallbackReport
+                        lastTrafficIsSynthetic = false
+                        aiStatusMsg = "已获取并脱敏：屏蔽键 ${fallbackReport.stats.redactedKeyCount}，掩码 ${fallbackReport.stats.maskedPatternCount}"
+                        toast("ProxyPin 流量已脱敏载入")
+                    } else {
+                        aiStatusMsg = "ProxyPin 拉取失败：${resp.errorMessage}"
+                        toast(aiStatusMsg)
+                    }
+                } else {
+                    val report = resp.redactionReport ?: Redaction.redactTrafficPayload(resp.data)
+                    lastTrafficReport = report
+                    lastTrafficIsSynthetic = resp.isSynthetic
+                    val tag = if (resp.isSynthetic) "【合成数据】" else ""
+                    aiStatusMsg = "${tag}已获取并脱敏（${resp.latencyMs}ms）：屏蔽键 ${report.stats.redactedKeyCount}，掩码 ${report.stats.maskedPatternCount}"
+                    toast("${tag}ProxyPin 流量已脱敏载入")
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -850,11 +955,15 @@ class StudioState(
 
     fun requestAiRefine(goal: String) {
         if (mayUseCloudProvider() && pendingCloudPreview == null) {
+            val devState = lastAutoJsStateReport?.redactedPayload ?: kotlinx.serialization.json.JsonNull
             val traffic = lastTrafficReport?.redactedPayload ?: kotlinx.serialization.json.JsonNull
-            val redacted = Redaction.redactTrafficPayload(traffic).redactedPayload.toString()
+            val combined = buildJsonObject {
+                put("autojsDeviceState", Redaction.redactTrafficPayload(devState).redactedPayload)
+                put("proxypinTraffic", Redaction.redactTrafficPayload(traffic).redactedPayload)
+            }
             pendingCloudGoal = goal
-            pendingCloudPreview = redacted.take(1200)
-            aiStatusMsg = "即将发送往云端模型，请先核对下方脱敏预览并点「确认发送云端」"
+            pendingCloudPreview = combined.toString().take(1200)
+            aiStatusMsg = "即将把双 MCP 脱敏上下文发送往云端模型，请先核对下方脱敏预览并点「确认发送云端」"
             return
         }
         pendingCloudPreview = null
@@ -875,25 +984,39 @@ class StudioState(
     fun runAiRefine(goal: String) {
         scope.launch {
             aiBusy = true
-            aiStatusMsg = "正在提炼…"
+            aiStatusMsg = "正在联合双 MCP 上下文提炼…"
             try {
+                val devState = lastAutoJsStateReport?.redactedPayload ?: kotlinx.serialization.json.JsonNull
                 val traffic = lastTrafficReport?.redactedPayload ?: kotlinx.serialization.json.JsonNull
+                // N-L16：从工程里的 kitBoot 读包名，找不到时用默认值
+                val kitBootBlock = cn.dumate.a6studio.ai.BlockPatch.locateBlock(repo.current,
+                    repo.current.root.children["body"].orEmpty()
+                        .firstOrNull { it.type == "kitBoot" }?.id.orEmpty()
+                ) ?: repo.current.root.children["body"].orEmpty().firstOrNull { it.type == "kitBoot" }
+                val appPackage = kitBootBlock?.params?.get("pkg")?.asText()?.ifBlank { null }
+                    ?: "com.jingdong.app.mall"
                 val out = withContext(Dispatchers.Default) {
                     llmClient.refine(
                         LlmRefineInput(
                             goal = goal.ifBlank { "提取可执行任务按钮与推荐等待时长" },
                             workflowName = repo.current.name,
-                            appPackage = "com.jingdong.app.mall",
+                            appPackage = appPackage,
                             fallbackKeywords = listOf("去完成", "立即签到", "去浏览"),
+                            autojsState = devState,
                             proxypinTraffic = traffic,
                             provider = llmProvider
                         ),
                         llmConfig
                     )
                 }
+                val isSyn = (lastAutoJsStateReport != null && lastAutoJsIsSynthetic) ||
+                    (lastTrafficReport != null && lastTrafficIsSynthetic) ||
+                    (devMode && mcpTransport == McpTransport.LOCAL_BRIDGE)
                 lastRefineOutput = out
-                aiStatusMsg = out.routingNote
-                toast("提炼完成（${out.providerUsed.label}）")
+                lastRefineIsSynthetic = isSyn
+                val tag = if (isSyn) "【合成数据】" else ""
+                aiStatusMsg = tag + out.routingNote
+                toast("${tag}提炼完成（${out.providerUsed.label}）")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -907,6 +1030,10 @@ class StudioState(
 
     fun applyRefinedToSelectedOrInsert() {
         val out = lastRefineOutput ?: return
+        if (lastRefineIsSynthetic || lastAutoJsIsSynthetic || lastTrafficIsSynthetic) {
+            toast("合成数据仅供调测预览，禁止回填到工程积木")
+            return
+        }
         val keyword = out.refinedKeywords.firstOrNull() ?: return
         val selId = repo.selectedId
         val selBlock = selId?.let { BlockPatch.locateBlock(repo.current, it) }
@@ -957,7 +1084,14 @@ class StudioState(
             val picked = platform.openTextFile(listOf("js", "json", "txt")) ?: return@launch
             val (fileName, content) = picked
             val name = fileName.substringBeforeLast('.')
-            val result = cn.dumate.a6studio.importer.ScriptImporter.import(content, name)
+            // N-M9：与 importProject 一致，导入失败给出明确提示，而不是落到全局 handler 只显示「内部错误」
+            val result = try {
+                cn.dumate.a6studio.importer.ScriptImporter.import(content, name)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                toast("导入失败：${e.message ?: e::class.simpleName}"); return@launch
+            }
             if (result.total == 0) {
                 toast("这个文件是空的，没有可导入的内容")
                 return@launch

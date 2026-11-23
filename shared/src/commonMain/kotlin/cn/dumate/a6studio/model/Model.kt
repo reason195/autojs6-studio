@@ -116,7 +116,13 @@ data class Project(
     val modules: List<StudioModule> = emptyList(),
     val tests: List<TestCase> = emptyList(),
     val bridge: BridgeSettings = BridgeSettings(),
-    @SerialName("createdAt") val createdAt: Long = 0L
+    @SerialName("createdAt") val createdAt: Long = 0L,
+    /**
+     * R-2：工程被外部 MCP 补丁改过、且用户尚未确认。随工程一起落盘，重启/重新导入后仍然有效，
+     * 真机运行前必须先确认。默认 false，旧工程文件无此字段时按 false 读取（向后兼容）。
+     * 撤销到补丁前的快照时会自然恢复为 false。
+     */
+    @SerialName("externalPatchPending") val externalPatchPending: Boolean = false
 ) {
     companion object {
         fun rootBlock() = Block(

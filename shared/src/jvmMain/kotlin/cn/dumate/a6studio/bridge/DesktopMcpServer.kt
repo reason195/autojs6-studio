@@ -127,6 +127,11 @@ class DesktopMcpServer(
 
         val body = rawBytes.toString(Charsets.UTF_8)
         val respText = handleJsonRpc(body)
+        if (respText.isEmpty()) {
+            // JSON-RPC 通知：202 No Content（MCP spec: notifications 不期待响应）
+            exchange.sendResponseHeaders(202, -1)
+            return
+        }
         val bytes = respText.toByteArray(Charsets.UTF_8)
         exchange.responseHeaders.set("Content-Type", "application/json; charset=utf-8")
         exchange.sendResponseHeaders(200, bytes.size.toLong())
@@ -174,7 +179,11 @@ class DesktopMcpServer(
                         put("tools", buildJsonObject { })
                     })
                 })
-                "notifications/initialized" -> rpcResult(id, buildJsonObject { })
+                "notifications/initialized" -> {
+                    // JSON-RPC 通知不期待响应：用 202 返回空 body（MCP 规范）
+                    // handleExchange 检查返回空字符串时会走 202 分支
+                    return ""
+                }
                 "tools/list" -> rpcResult(id, buildJsonObject {
                     put("tools", buildJsonArray {
                         add(toolDef("studio_get_project", "读取当前工程 JSON 结构"))
@@ -202,8 +211,12 @@ class DesktopMcpServer(
     private fun handleToolCall(id: JsonElement, name: String, args: JsonObject): String {
         return when (name) {
             "studio_get_project" -> {
-                val pJson = json.encodeToString(getProject())
-                toolOk(id, pJson)
+                // N-L11：rawJs 积木里可能含有用户粘贴的凭据；脱敏后再回传。
+                // 不能对整段 JSON 文本跑正则：header_line 是按行匹配到行尾，单行 JSON 会被从 "Cookie:" 一直吃到结尾；
+                // redactTextPatterns 还会把 >64KB 的输入截断，大工程返回的就不是合法 JSON。
+                // 所以逐个字符串值脱敏，结构保持不变。
+                val tree = json.encodeToJsonElement(Project.serializer(), getProject())
+                toolOk(id, redactStrings(tree).toString())
             }
             "studio_diagnose" -> {
                 val issues = Diagnose.scan(getProject())
@@ -251,10 +264,43 @@ class DesktopMcpServer(
         }
     }
 
+    private fun redactStrings(el: JsonElement): JsonElement = when (el) {
+        is JsonObject -> JsonObject(el.mapValues { (_, v) -> redactStrings(v) })
+        is JsonArray -> JsonArray(el.map { redactStrings(it) })
+        is JsonPrimitive -> if (el.isString) {
+            JsonPrimitive(Redaction.redactTextPatterns(el.content, maxStringLength = Int.MAX_VALUE).text)
+        } else el
+        else -> el
+    }
+
     private fun toolDef(name: String, description: String): JsonObject = buildJsonObject {
         put("name", name)
         put("description", description)
-        put("inputSchema", buildJsonObject { put("type", "object") })
+        put("inputSchema", buildJsonObject {
+            put("type", "object")
+            if (name == "studio_apply_patch") {
+                put("properties", buildJsonObject {
+                    put("ops", buildJsonObject {
+                        put("type", "array")
+                        put("description", "补丁操作数组，每项用 type 字段区分（\"add\"/\"update\"/\"remove\"/\"rename\"）")
+                        put("items", buildJsonObject {
+                            put("type", "object")
+                            put("required", buildJsonArray { add(JsonPrimitive("type")) })
+                            put("properties", buildJsonObject {
+                                put("type", buildJsonObject {
+                                    put("type", "string")
+                                    put("enum", buildJsonArray {
+                                        add(JsonPrimitive("add")); add(JsonPrimitive("update"))
+                                        add(JsonPrimitive("remove")); add(JsonPrimitive("rename"))
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+                put("required", buildJsonArray { add(JsonPrimitive("ops")) })
+            }
+        })
     }
 
     private fun toolOk(id: JsonElement, text: String): String = rpcResult(id, buildJsonObject {

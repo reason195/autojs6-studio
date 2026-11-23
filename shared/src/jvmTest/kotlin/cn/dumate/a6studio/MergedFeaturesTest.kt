@@ -28,6 +28,8 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlin.test.Test
+import cn.dumate.a6studio.catalog.CodeGen
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -117,6 +119,52 @@ class MergedFeaturesTest {
         assertFalse(UrlSecurity.validateEndpointUrl("http://127.0.0.1:11434/v1", allowLocal = false).valid)
         assertTrue(UrlSecurity.validateEndpointUrl("http://127.0.0.1:11434/v1", allowLocal = true).valid)
         assertTrue(UrlSecurity.validateEndpointUrl("https://api.openai.com/v1", allowLocal = false).valid)
+    }
+
+    @Test
+    fun urlSecurityRejectsUserinfoAndNumericIp() {
+        // N-M1 / N-T5：所有绕过写法都必须被拦截（allowLocal 默认 true 也一样拦元数据）
+        val blocked = listOf(
+            "http://x@169.254.169.254/latest/meta-data",       // userinfo
+            "http://a:b@169.254.169.254/",                      // userinfo 带密码
+            "http://2852039166/",                               // 十进制整数
+            "http://0xA9FEA9FE/",                               // 十六进制
+            "http://0251.0376.0251.0376/",                      // 八进制
+            "http://169.254.43518/",                            // 缺段
+            "http://[0:0:0:0:0:ffff:a9fe:a9fe]/",               // 完整写法 v4-mapped
+            "http://[::169.254.169.254]/",                      // v4-compat
+            "http://[fd00:ec2::254]/",                          // AWS IMDS IPv6
+            "http://100.100.100.200/",                          // 阿里云元数据
+            "http://metadata.google.internal./",                // 末尾带点
+            "http://0.0.0.0/",
+        )
+        for (u in blocked) {
+            assertFalse(UrlSecurity.validateEndpointUrl(u).valid, "应拦截：$u")
+        }
+
+        // allowLocal=false 时，IPv6 回环的各种写法都要识别
+        for (u in listOf("http://[0:0:0:0:0:0:0:1]/", "http://[::ffff:7f00:1]/", "http://[::1]:8080/", "http://localhost./")) {
+            assertFalse(UrlSecurity.validateEndpointUrl(u, allowLocal = false).valid, "应拦截本地：$u")
+        }
+
+        // 误判回归：fc/fd 开头的普通域名不是内网
+        assertTrue(UrlSecurity.validateEndpointUrl("https://fdroid.org/api", allowLocal = false).valid)
+        assertTrue(UrlSecurity.validateEndpointUrl("https://fcbarcelona.com/", allowLocal = false).valid)
+        // 局域网 Ollama 在 allowLocal=true 时仍可用
+        assertTrue(UrlSecurity.validateEndpointUrl("http://192.168.1.10:11434/v1", allowLocal = true).valid)
+        assertTrue(UrlSecurity.validateEndpointUrl("http://[::1]:1234/v1", allowLocal = true).valid)
+    }
+
+    @Test
+    fun urlSecurityParsesAddressesCorrectly() {
+        assertContentEquals(byteArrayOf(169.toByte(), 254.toByte(), 169.toByte(), 254.toByte()), UrlSecurity.parseIpv4Loose("2852039166"))
+        assertContentEquals(byteArrayOf(127, 0, 0, 1), UrlSecurity.parseIpv4Loose("127.1"))
+        assertEquals(null, UrlSecurity.parseIpv4Loose("api.openai.com"))
+        assertEquals(null, UrlSecurity.parseIpv4Loose("256.1.1.1"))
+        val v6 = UrlSecurity.parseIpv6("::ffff:1.2.3.4")!!
+        assertContentEquals(byteArrayOf(1, 2, 3, 4), v6.copyOfRange(12, 16))
+        assertEquals(null, UrlSecurity.parseIpv6("1::2::3"))
+        assertEquals(null, UrlSecurity.parseIpv6("fdroid.org"))
     }
 
     @Test
@@ -254,6 +302,40 @@ class MergedFeaturesTest {
     }
 
     @Test
+    fun blockPatchIgnoresPreexistingExprAndRawJsBlocks() {
+        // R-1 回归：工程里已有用户手工搭的 if(cond=true) 与 rawJs，补丁只碰 kit 积木时必须被接受
+        val base = Templates.byId("jdServiceKit")!!.build()
+        val userIf = newBlock("if", mapOf("cond" to ParamValue.Text("true")))
+        val userRaw = newBlock("rawJs", mapOf("code" to ParamValue.Text("log(1);")))
+        val proj = base.copy(
+            root = base.root.copy(
+                children = base.root.children + ("body" to base.root.children["body"].orEmpty() + userIf + userRaw)
+            )
+        )
+
+        val okRes = BlockPatch.guardAndApply(
+            proj,
+            listOf(BlockPatchOp.AddBlock(newBlock("kitClick", mapOf("value" to ParamValue.Text("去完成")))))
+        )
+        assertTrue(okRes.accepted, okRes.errors.joinToString())
+
+        // 改既有 if 的 cond 仍须拒绝
+        val editRes = BlockPatch.guardAndApply(
+            proj,
+            listOf(BlockPatchOp.UpdateParam(userIf.id, "cond", ParamValue.Text("java.lang.Runtime.getRuntime()")))
+        )
+        assertFalse(editRes.accepted)
+
+        // 往既有 if 里塞 rawJs 仍须拒绝
+        val nestRes = BlockPatch.guardAndApply(
+            proj,
+            listOf(BlockPatchOp.AddBlock(newBlock("rawJs", mapOf("code" to ParamValue.Text("exit();"))), parentId = userIf.id, slot = "body"))
+        )
+        assertFalse(nestRes.accepted)
+        assertTrue(nestRes.errors.any { it.contains("rawJs") })
+    }
+
+    @Test
     fun blockPatchRejectsRawJsAndExprAndNested() {
         val proj = Templates.byId("jdServiceKit")!!.build()
 
@@ -334,7 +416,7 @@ class MergedFeaturesTest {
             val patchArgs = buildJsonObject {
                 put("ops", buildJsonArray {
                     add(buildJsonObject {
-                        put("type", "cn.dumate.a6studio.ai.BlockPatchOp.RenameProject")
+                        put("type", "rename")
                         put("name", "MCP更新后项目")
                     })
                 })
@@ -478,5 +560,575 @@ class MergedFeaturesTest {
         assertEquals("测试OmniForge导入", res2.project.name)
         val body2 = res2.project.root.children["body"].orEmpty()
         assertTrue(body2.any { it.type == "kitClick" && it.params["value"]?.asText() == "立即签到" })
+    }
+
+    @Test
+    fun flowIrImporterKeepsPolicyAndMergesWithDefaults() {
+        // N-M9：IR 的护栏策略必须带进生成代码，且只能加严
+        val ir = """
+            {
+              "name": "策略透传",
+              "policy": {
+                "maxRuntimeMs": 300000,
+                "skipKeywords": ["开会员"],
+                "riskKeywords": ["滑块验证"],
+                "riskyActivityRe": "WalletActivity",
+                "forbiddenZones": [[0, 120]],
+                "riskWaitMs": 60000,
+                "evil": "ignored"
+              },
+              "flow": [ { "kind": "launch" } ]
+            }
+        """.trimIndent()
+        val res = cn.dumate.a6studio.importer.FlowIrImporter.tryImport(ir, "fb")!!
+        val code = CodeGen.code(res.project)
+        assertTrue(code.contains("maxRuntimeMs: 300000"))
+        assertTrue(code.contains("\"开会员\"") && code.contains("\"下单\""), "skipKeywords 应与默认值合并")
+        assertTrue(code.contains("\"滑块验证\"") && code.contains("\"京东验证\""), "riskKeywords 应与默认值合并")
+        assertTrue(code.contains("Settlement|Checkout") && code.contains("WalletActivity"), "危险页正则应为默认|导入")
+        assertTrue(code.contains("[2130, 2400]") && code.contains("[0, 120]"))
+        assertTrue(code.contains("riskWaitMs: 60000"))
+        assertFalse(code.contains("evil"))
+
+        // 空 policy 时与原默认输出等价
+        val plain = cn.dumate.a6studio.catalog.KitPolicy.parse(null)
+        assertEquals(cn.dumate.a6studio.catalog.KitPolicy.DEFAULT_RISKY_RE, plain.riskyActivityRe)
+    }
+
+    @Test
+    fun flowIrImporterSurvivesMalformedInputAndDeepNesting() {
+        // 畸形字段：都不能抛异常
+        val malformed = """
+            {
+              "name": {},
+              "vars": { "A": {}, "B": [1] },
+              "target": { "pkg": [] },
+              "policy": { "maxRuntimeMs": "abc", "skipKeywords": "notArray", "forbiddenZones": [[1], "x", [5, 2]] },
+              "flow": [
+                { "kind": {}, "label": [] },
+                { "kind": "click", "selector": { "value": [] } },
+                { "kind": "waitFor", "selector": [], "timeoutMs": {} },
+                "notAnObject",
+                { "kind": "probe", "label": "探测" },
+                { "kind": "ocrClick" }
+              ]
+            }
+        """.trimIndent()
+        val res = cn.dumate.a6studio.importer.FlowIrImporter.tryImport(malformed, "fb")
+        assertTrue(res != null, "畸形输入应能导入而不是抛异常")
+        assertEquals("fb", res!!.project.name)
+        assertTrue(res.rawCount >= 3, "未识别节点应计入 rawCount，实际 ${res.rawCount}")
+        assertTrue(res.notes.any { it.contains("probe") && it.contains("ocrClick") }, "notes 应列出丢弃的节点: ${res.notes}")
+        val body = res.project.root.children["body"].orEmpty()
+        assertFalse(body.count { it.type == "kitGuard" } > 0, "未知节点不应再被静默替换成 kitGuard")
+        CodeGen.code(res.project) // 生成代码也不能抛
+
+        // 深层嵌套：5000 层不应 StackOverflowError
+        val depth = 5000
+        val deep = buildString {
+            append("{\"flow\":[")
+            repeat(depth) { append("{\"kind\":\"loop\",\"steps\":[") }
+            append("{\"kind\":\"launch\"}")
+            repeat(depth) { append("]}") }
+            append("]}")
+        }
+        val deepRes = cn.dumate.a6studio.importer.FlowIrImporter.tryImport(deep, "deep")
+        // kotlinx 解析器本身对极深 JSON 可能直接失败（返回 null 也可接受），关键是不能崩
+        if (deepRes != null) assertTrue(deepRes.notes.any { it.contains("嵌套超过") })
+    }
+
+    /**
+     * N-L11 regression：studio_get_project 改用 encodeToJsonElement + redactStrings 逐值脱敏后：
+     * 1. 返回的 text 必须仍是合法 JSON（之前用 redactTextPatterns 对整段文本跑 header_line 正则，
+     *    会把 "Cookie: ..." 一直吃到行尾，把大工程文本截断到 64 KB，两种情况都产生非法 JSON）。
+     * 2. rawJs 积木里的明文 Cookie 字符串必须被脱敏（不含 pt_key=abc）。
+     * 3. 超过 64 KB 的字符串值脱敏后仍留在 JSON 结构里（不会整段截断）。
+     */
+    @Test
+    fun mcpGetProjectReturnsValidJsonAndRedactsSecrets() = runBlocking {
+        // 构造含 rawJs 积木的工程（内含 Cookie 明文和一段超过 64 KB 的无害字符串）
+        val sensitiveCode = "// Cookie: pt_key=abc; pt_pin=x\nlog('hello');"
+        val bigPadding = "a".repeat(70_000)   // 超过 HARD_MAX_INPUT_CHARS=65536
+
+        val base = cn.dumate.a6studio.model.Samples.emptyProject()
+        val proj = base.copy(
+            root = base.root.copy(
+                children = mapOf(
+                    "body" to listOf(
+                        newBlock(
+                            "rawJs",
+                            mapOf("code" to ParamValue.Text(sensitiveCode))
+                        ),
+                        newBlock(
+                            "comment",
+                            mapOf("text" to ParamValue.Text(bigPadding))
+                        )
+                    )
+                )
+            )
+        )
+
+        val server = DesktopMcpServer(
+            getProject = { proj },
+            setProject = {},
+            port = 0
+        )
+        server.start()
+        val http = HttpClient(CIO)
+        try {
+            val client = McpClient(http)
+            client.setUrl(server.endpointUrl)
+            client.setAuth(server.authToken)
+
+            val res = client.callTool("studio_get_project")
+
+            // 1. 返回的 text 必须是合法 JSON
+            val parsed = runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(res.text)
+            }
+            assertTrue(parsed.isSuccess, "studio_get_project 返回的 text 必须是合法 JSON，实际长度=${res.text.length}")
+
+            // 2. 敏感 Cookie 字段必须被脱敏
+            assertFalse(res.text.contains("pt_key=abc"), "rawJs 中的 Cookie 值应被脱敏")
+
+            // 3. 超大字符串值不应导致整段 JSON 被截断（工程名等字段必须仍然存在）
+            assertTrue(res.text.contains("\"name\""), "工程名字段在脱敏后应仍存在（大字符串值不应截断整段 JSON）")
+        } finally {
+            http.close()
+            server.stop()
+        }
+    }
+
+    @Test
+    fun dualMcpGatewaySupportsBothAutoJs6AndProxyPinWithRedaction() = runBlocking {
+        val http = HttpClient(CIO)
+        try {
+            val gw = cn.dumate.a6studio.bridge.DualMcpGateway(http)
+
+            // 1. Token 控制字符防注入校验
+            val badTokenResp = gw.call(
+                cn.dumate.a6studio.bridge.CallMcpGatewayOptions(
+                    serverId = cn.dumate.a6studio.bridge.McpServerId.AUTOJS6,
+                    transport = cn.dumate.a6studio.bridge.McpTransport.LOCAL_BRIDGE,
+                    authToken = "bad\r\ntoken"
+                )
+            )
+            assertFalse(badTokenResp.ok, "含 CR/LF 控制字符的 Token 必须被网关拒绝")
+            assertEquals(cn.dumate.a6studio.bridge.McpErrorKind.PROTOCOL_ERROR, badTokenResp.errorKind)
+
+            // 1b. G-6：__simulateToolError 在 devMode=false 时不生效，在 devMode=true 时生效
+            val simBlocked = gw.call(
+                cn.dumate.a6studio.bridge.CallMcpGatewayOptions(
+                    serverId = cn.dumate.a6studio.bridge.McpServerId.AUTOJS6,
+                    transport = cn.dumate.a6studio.bridge.McpTransport.LOCAL_BRIDGE,
+                    method = "tools/call",
+                    toolName = "get_device_state",
+                    args = buildJsonObject { put("__simulateToolError", true) },
+                    devMode = false
+                )
+            )
+            assertTrue(simBlocked.ok, "devMode=false 时 __simulateToolError 钩子不应触发错误")
+            assertTrue(simBlocked.isSynthetic, "LOCAL_BRIDGE 响应必须标记 isSynthetic=true")
+
+            val simAllowed = gw.call(
+                cn.dumate.a6studio.bridge.CallMcpGatewayOptions(
+                    serverId = cn.dumate.a6studio.bridge.McpServerId.AUTOJS6,
+                    transport = cn.dumate.a6studio.bridge.McpTransport.LOCAL_BRIDGE,
+                    method = "tools/call",
+                    toolName = "get_device_state",
+                    args = buildJsonObject { put("__simulateToolError", true) },
+                    devMode = true
+                )
+            )
+            assertFalse(simAllowed.ok, "devMode=true 时 __simulateToolError 应触发模拟错误")
+            assertEquals(cn.dumate.a6studio.bridge.McpErrorKind.TOOL_EXECUTION_ERROR, simAllowed.errorKind)
+            assertTrue(simAllowed.isSynthetic)
+
+            // 2. AutoJs6 MCP (LOCAL_BRIDGE)：get_device_state & capture_ui_tree
+            val devResp = gw.call(
+                cn.dumate.a6studio.bridge.CallMcpGatewayOptions(
+                    serverId = cn.dumate.a6studio.bridge.McpServerId.AUTOJS6,
+                    transport = cn.dumate.a6studio.bridge.McpTransport.LOCAL_BRIDGE,
+                    method = "tools/call",
+                    toolName = "get_device_state"
+                )
+            )
+            assertTrue(devResp.ok)
+            assertTrue(devResp.isSynthetic)
+            assertTrue(devResp.data.toString().contains("visibleActionTexts"))
+            assertTrue(devResp.data.toString().contains("去浏览15秒"))
+
+            // 3. ProxyPin MCP (LOCAL_BRIDGE)：list_http_flows 自动脱敏 + analyze_endpoints
+            val proxyResp = gw.call(
+                cn.dumate.a6studio.bridge.CallMcpGatewayOptions(
+                    serverId = cn.dumate.a6studio.bridge.McpServerId.PROXYPIN,
+                    transport = cn.dumate.a6studio.bridge.McpTransport.LOCAL_BRIDGE,
+                    method = "tools/call",
+                    toolName = "list_http_flows",
+                    args = buildJsonObject { put("domain", "ms.jr.jd.com") }
+                )
+            )
+            assertTrue(proxyResp.ok)
+            assertTrue(proxyResp.isSynthetic)
+            val proxyDataStr = proxyResp.data.toString()
+            assertFalse(proxyDataStr.contains("demo-session-token-9f8e7d6c5b4a3210"), "Bearer Token 必须已被网关脱敏")
+            assertFalse(proxyDataStr.contains("demo_cookie_abc123"), "Cookie pt_key 必须已被网关脱敏")
+            assertFalse(proxyDataStr.contains("13800138000"), "手机号必须已被网关脱敏")
+            assertTrue((proxyResp.redactionStats?.redactedKeyCount ?: 0) >= 3)
+
+            // 4. 双 MCP（autojsState + proxypinTraffic）联合送入 LlmClient.refine 提炼
+            val llm = LlmClient(http)
+            val refined = llm.refine(
+                LlmRefineInput(
+                    goal = "联合双 MCP 提炼任务按钮与浏览时长",
+                    workflowName = "双MCP联调",
+                    appPackage = "com.jingdong.app.mall",
+                    autojsState = devResp.data,
+                    proxypinTraffic = proxyResp.data,
+                    provider = LlmProviderId.DETERMINISTIC_RULES
+                ),
+                LlmConfig(allowLocalInference = false)
+            )
+            assertTrue(refined.refinedKeywords.contains("领取奖励"))
+            assertTrue(refined.refinedKeywords.contains("去浏览15秒"))
+            assertFalse(refined.refinedKeywords.contains("已完成"))
+            assertEquals(17_000, refined.recommendedBrowseWaitMs)
+        } finally {
+            http.close()
+        }
+    }
+
+    @Test
+    fun dualMcpGatewayOnlyDegradesOnMissingTool() {
+        val gw = cn.dumate.a6studio.bridge.DualMcpGateway
+        fun be(code: String, msg: String) = cn.dumate.a6studio.bridge.BridgeException(msg, code)
+        // 工具/方法不存在 → 允许降级
+        assertTrue(gw.isToolNotFoundError(be("RPC_ERROR", "Method not found: get_device_state")))
+        assertTrue(gw.isToolNotFoundError(be("RPC_ERROR", "-32601")))
+        assertTrue(gw.isToolNotFoundError(be("TOOL_ERROR", "unknown tool list_http_flows")))
+        // 业务层「找不到」不是缺工具 → 不能降级
+        assertFalse(gw.isToolNotFoundError(be("TOOL_ERROR", "node not found")))
+        assertFalse(gw.isToolNotFoundError(be("TOOL_ERROR", "flow not found: flow_123")))
+        assertFalse(gw.isToolNotFoundError(be("TOOL_ERROR", "element not found on screen")))
+        // 非 RPC/TOOL 错误一律不降级
+        assertFalse(gw.isToolNotFoundError(be("TIMEOUT", "Method not found")))
+        assertFalse(gw.isToolNotFoundError(be("UNAUTHORIZED", "tool not found")))
+    }
+
+    @Test
+    fun dualMcpGatewayHttpPathAndReviewFixes() = runBlocking {
+        // ---- G-3：全部错误码映射断言 ----
+        val expectedMappings = mapOf(
+            "TIMEOUT" to cn.dumate.a6studio.bridge.McpErrorKind.TIMEOUT_ERROR,
+            "INVALID_URL" to cn.dumate.a6studio.bridge.McpErrorKind.SSRF_BLOCKED,
+            "BAD_RESPONSE" to cn.dumate.a6studio.bridge.McpErrorKind.PROTOCOL_ERROR,
+            "EMPTY_BODY" to cn.dumate.a6studio.bridge.McpErrorKind.PROTOCOL_ERROR,
+            "EMPTY_RESPONSE" to cn.dumate.a6studio.bridge.McpErrorKind.PROTOCOL_ERROR,
+            "RPC_ERROR" to cn.dumate.a6studio.bridge.McpErrorKind.PROTOCOL_ERROR,
+            "INVALID_ARGUMENTS" to cn.dumate.a6studio.bridge.McpErrorKind.PROTOCOL_ERROR,
+            "RESPONSE_TOO_LARGE" to cn.dumate.a6studio.bridge.McpErrorKind.PROTOCOL_ERROR,
+            "INVALID_TOKEN" to cn.dumate.a6studio.bridge.McpErrorKind.PROTOCOL_ERROR,
+            "TOOL_ERROR" to cn.dumate.a6studio.bridge.McpErrorKind.TOOL_EXECUTION_ERROR,
+            "RATE_LIMITED" to cn.dumate.a6studio.bridge.McpErrorKind.TOOL_EXECUTION_ERROR,
+            "PAIRING_REQUIRED" to cn.dumate.a6studio.bridge.McpErrorKind.TOOL_EXECUTION_ERROR,
+            "NODE_REF_STALE" to cn.dumate.a6studio.bridge.McpErrorKind.TOOL_EXECUTION_ERROR,
+            "HOST_ERROR" to cn.dumate.a6studio.bridge.McpErrorKind.TOOL_EXECUTION_ERROR,
+            "NO_IMAGE" to cn.dumate.a6studio.bridge.McpErrorKind.TOOL_EXECUTION_ERROR,
+            "UNAUTHORIZED" to cn.dumate.a6studio.bridge.McpErrorKind.TOOL_EXECUTION_ERROR,
+            "NETWORK" to cn.dumate.a6studio.bridge.McpErrorKind.TRANSPORT_ERROR,
+            "CLEARTEXT_BLOCKED" to cn.dumate.a6studio.bridge.McpErrorKind.TRANSPORT_ERROR,
+            "NO_URL" to cn.dumate.a6studio.bridge.McpErrorKind.TRANSPORT_ERROR,
+            "SESSION_EXPIRED" to cn.dumate.a6studio.bridge.McpErrorKind.TRANSPORT_ERROR,
+            "BAD_ENDPOINT" to cn.dumate.a6studio.bridge.McpErrorKind.TRANSPORT_ERROR,
+            "HTTP_ERROR" to cn.dumate.a6studio.bridge.McpErrorKind.TRANSPORT_ERROR
+        )
+        for ((code, expectedKind) in expectedMappings) {
+            assertEquals(
+                expectedKind,
+                cn.dumate.a6studio.bridge.DualMcpGateway.mapBridgeErrorCode(code),
+                "错误码 $code 映射结果不匹配"
+            )
+        }
+
+        // 启动本地假 MCP HTTP 服务端
+        val initCount = java.util.concurrent.atomic.AtomicInteger(0)
+        val totalRequests = java.util.concurrent.atomic.AtomicInteger(0)
+        val forceUnauthorized = java.util.concurrent.atomic.AtomicBoolean(false)
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/mcp") { ex ->
+            totalRequests.incrementAndGet()
+            try {
+                if (forceUnauthorized.get()) {
+                    val errBytes = """{"error":"unauthorized"}""".toByteArray(Charsets.UTF_8)
+                    ex.responseHeaders.set("Content-Type", "application/json")
+                    ex.sendResponseHeaders(401, errBytes.size.toLong())
+                    ex.responseBody.use { it.write(errBytes) }
+                    return@createContext
+                }
+                val body = ex.requestBody.readBytes().toString(Charsets.UTF_8)
+                val req = json.parseToJsonElement(body) as kotlinx.serialization.json.JsonObject
+                val idEl = req["id"] ?: JsonPrimitive(1)
+                val method = (req["method"] as? JsonPrimitive)?.content.orEmpty()
+                val params = req["params"] as? kotlinx.serialization.json.JsonObject
+
+                val replyObj: kotlinx.serialization.json.JsonObject = when (method) {
+                    "initialize" -> {
+                        initCount.incrementAndGet()
+                        buildJsonObject {
+                            put("jsonrpc", "2.0")
+                            put("id", idEl)
+                            put("result", buildJsonObject {
+                                put("protocolVersion", "2025-03-26")
+                                put("serverInfo", buildJsonObject {
+                                    put("name", "FakeMcpServer")
+                                    put("version", "1.0.0")
+                                })
+                                put("capabilities", buildJsonObject {})
+                            })
+                        }
+                    }
+                    "notifications/initialized" -> {
+                        ex.sendResponseHeaders(202, -1)
+                        ex.close()
+                        return@createContext
+                    }
+                    "tools/call" -> {
+                        val toolName = (params?.get("name") as? JsonPrimitive)?.content.orEmpty()
+                        when (toolName) {
+                            // 模拟旧版 AutoJs6 插件不存在 get_device_state，返回 -32601 Method not found
+                            "get_device_state" -> buildJsonObject {
+                                put("jsonrpc", "2.0")
+                                put("id", idEl)
+                                put("error", buildJsonObject {
+                                    put("code", -32601)
+                                    put("message", "Method not found: unknown tool get_device_state")
+                                })
+                            }
+                            "device_info" -> buildJsonObject {
+                                put("jsonrpc", "2.0")
+                                put("id", idEl)
+                                put("result", buildJsonObject {
+                                    put("content", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("type", "text")
+                                            put("text", buildJsonObject {
+                                                put("manufacturer", "Xiaomi")
+                                                put("model", "Mi 14")
+                                                put("androidRelease", "14")
+                                                put("accessibility", buildJsonObject {
+                                                    put("operational", true)
+                                                })
+                                            }.toString())
+                                        })
+                                    })
+                                })
+                            }
+                            "ui_current_window" -> buildJsonObject {
+                                put("jsonrpc", "2.0")
+                                put("id", idEl)
+                                put("result", buildJsonObject {
+                                    put("content", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("type", "text")
+                                            put("text", buildJsonObject {
+                                                put("packageName", "com.jingdong.app.mall")
+                                                put("activityName", ".MainFrameActivity")
+                                            }.toString())
+                                        })
+                                    })
+                                })
+                            }
+                            "ui_dump" -> buildJsonObject {
+                                put("jsonrpc", "2.0")
+                                put("id", idEl)
+                                put("result", buildJsonObject {
+                                    put("content", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("type", "text")
+                                            put("text", buildJsonObject {
+                                                put("text", "根节点")
+                                                put("clickable", false)
+                                                put("children", buildJsonArray {
+                                                    // 非 clickable 节点（如用户隐私昵称）不应进入 visibleActionTexts
+                                                    add(buildJsonObject {
+                                                        put("text", "张三的私密昵称")
+                                                        put("clickable", false)
+                                                        put("visibleToUser", true)
+                                                    })
+                                                    // clickable=true 的按钮节点应进入 visibleActionTexts
+                                                    add(buildJsonObject {
+                                                        put("text", "去完成")
+                                                        put("clickable", true)
+                                                        put("visibleToUser", true)
+                                                    })
+                                                })
+                                            }.toString())
+                                        })
+                                    })
+                                })
+                            }
+                            "list_http_flows" -> buildJsonObject {
+                                put("jsonrpc", "2.0")
+                                put("id", idEl)
+                                put("result", buildJsonObject {
+                                    put("content", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("type", "text")
+                                            put("text", buildJsonObject {
+                                                put("flows", buildJsonArray {
+                                                    add(buildJsonObject {
+                                                        put("url", "https://api.m.jd.com/client.action")
+                                                        put("Authorization", "Bearer real_secret_jwt_token_987654321")
+                                                        put("Cookie", "pt_key=REAL_PT_KEY_SECRET_111; pt_pin=jd_real_user;")
+                                                        put("phone", "13812345678")
+                                                    })
+                                                })
+                                            }.toString())
+                                        })
+                                    })
+                                })
+                            }
+                            else -> buildJsonObject {
+                                put("jsonrpc", "2.0")
+                                put("id", idEl)
+                                put("result", buildJsonObject {
+                                    put("content", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("type", "text")
+                                            put("text", """{"ok":true}""")
+                                        })
+                                    })
+                                })
+                            }
+                        }
+                    }
+                    else -> buildJsonObject {
+                        put("jsonrpc", "2.0")
+                        put("id", idEl)
+                        put("result", buildJsonObject {})
+                    }
+                }
+                val bytes = replyObj.toString().toByteArray(Charsets.UTF_8)
+                ex.responseHeaders.set("Content-Type", "application/json")
+                ex.sendResponseHeaders(200, bytes.size.toLong())
+                ex.responseBody.use { it.write(bytes) }
+            } finally {
+                ex.close()
+            }
+        }
+        server.start()
+        val endpoint = "http://127.0.0.1:${server.address.port}/mcp"
+        val http = HttpClient(CIO)
+        try {
+            val autojsClient = McpClient(http)
+            val proxyPinBridge = cn.dumate.a6studio.bridge.ProxyPinBridge(http, autojsClient = autojsClient)
+            val gw = proxyPinBridge.gateway
+
+            // ---- G-1：SSRF DNS 解析后校验（userinfo 绕过 & 十进制 IP 绕过） ----
+            val beforeReqs = totalRequests.get()
+            for (maliciousUrl in listOf("http://x@169.254.169.254/", "http://2852039166/")) {
+                val ssrfResp = gw.call(
+                    cn.dumate.a6studio.bridge.CallMcpGatewayOptions(
+                        serverId = cn.dumate.a6studio.bridge.McpServerId.PROXYPIN,
+                        transport = cn.dumate.a6studio.bridge.McpTransport.HTTP_JSONRPC,
+                        endpointUrl = maliciousUrl,
+                        allowLocal = true,
+                        method = "tools/call",
+                        toolName = "list_http_flows"
+                    )
+                )
+                assertFalse(ssrfResp.ok, "恶意地址 $maliciousUrl 必须被网关拦截")
+                assertEquals(cn.dumate.a6studio.bridge.McpErrorKind.SSRF_BLOCKED, ssrfResp.errorKind)
+
+                // ProxyPinBridge.configure / listTools / fetchRedactedTraffic 同样必须拦截并抛 INVALID_URL
+                val listToolsErr = runCatching {
+                    proxyPinBridge.configure(maliciousUrl, token = "", allowLocal = true)
+                    proxyPinBridge.listTools()
+                }.exceptionOrNull()
+                assertTrue(listToolsErr is cn.dumate.a6studio.bridge.BridgeException)
+                assertEquals("INVALID_URL", (listToolsErr as cn.dumate.a6studio.bridge.BridgeException).code)
+
+                val fetchErr = runCatching {
+                    proxyPinBridge.configure(maliciousUrl, token = "", allowLocal = true)
+                    proxyPinBridge.fetchRedactedTraffic()
+                }.exceptionOrNull()
+                assertTrue(fetchErr is cn.dumate.a6studio.bridge.BridgeException)
+                assertEquals("INVALID_URL", (fetchErr as cn.dumate.a6studio.bridge.BridgeException).code)
+            }
+            assertEquals(beforeReqs, totalRequests.get(), "SSRF 拦截必须在发出任何网络请求前生效")
+
+            // ---- G-2 & G-4：同一个 McpClient 先 initialize，再走网关 HTTP 调用不重置会话，且 -32601 自动降级 ----
+            autojsClient.setUrl(endpoint)
+            autojsClient.setAuth("test_token_123")
+            autojsClient.initialize()
+            assertTrue(autojsClient.isReady, "手动 initialize 后 autojsClient.isReady 应为 true")
+            assertEquals(1, initCount.get(), "初次握手 initialize 计数应为 1")
+
+            // 用相同地址和令牌调用网关 get_device_state（服务端对 get_device_state 返回 -32601，触发降级）
+            val stateResp = gw.call(
+                cn.dumate.a6studio.bridge.CallMcpGatewayOptions(
+                    serverId = cn.dumate.a6studio.bridge.McpServerId.AUTOJS6,
+                    transport = cn.dumate.a6studio.bridge.McpTransport.HTTP_JSONRPC,
+                    endpointUrl = endpoint,
+                    authToken = "test_token_123",
+                    allowLocal = true,
+                    method = "tools/call",
+                    toolName = "get_device_state"
+                )
+            )
+            assertTrue(stateResp.ok, "get_device_state 遇到 -32601 应降级成功: ${stateResp.errorMessage}")
+            assertFalse(stateResp.isSynthetic, "HTTP 真实路径 isSynthetic 应为 false")
+            assertTrue(autojsClient.isReady, "网关调用后 autojsClient.isReady 必须保持 true")
+            assertEquals(1, initCount.get(), "相同地址与令牌调用网关不得重新触发 initialize 握手")
+
+            val stateStr = stateResp.data.toString()
+            assertTrue(stateStr.contains("去完成"), "clickable=true 的节点文本应被提取到 visibleActionTexts")
+            assertFalse(stateStr.contains("张三的私密昵称"), "clickable=false 的非交互节点文本不应进入 visibleActionTexts")
+
+            // ---- HTTP 路径脱敏验证（ProxyPin list_http_flows） ----
+            val flowResp = gw.call(
+                cn.dumate.a6studio.bridge.CallMcpGatewayOptions(
+                    serverId = cn.dumate.a6studio.bridge.McpServerId.PROXYPIN,
+                    transport = cn.dumate.a6studio.bridge.McpTransport.HTTP_JSONRPC,
+                    endpointUrl = endpoint,
+                    authToken = "test_token_123",
+                    allowLocal = true,
+                    method = "tools/call",
+                    toolName = "list_http_flows"
+                )
+            )
+            assertTrue(flowResp.ok)
+            val flowStr = flowResp.data.toString()
+            assertFalse(flowStr.contains("real_secret_jwt_token_987654321"), "HTTP 路径返回的 Bearer Token 必须被脱敏")
+            assertFalse(flowStr.contains("REAL_PT_KEY_SECRET_111"), "HTTP 路径返回的 Cookie pt_key 必须被脱敏")
+            assertFalse(flowStr.contains("13812345678"), "HTTP 路径返回的手机号必须被脱敏")
+
+            // ---- G-4 & G-5：非「工具不存在」错误（如 HTTP 401 UNAUTHORIZED）不触发降级 ----
+            forceUnauthorized.set(true)
+            val reqBefore401 = totalRequests.get()
+            val unauthResp = gw.call(
+                cn.dumate.a6studio.bridge.CallMcpGatewayOptions(
+                    serverId = cn.dumate.a6studio.bridge.McpServerId.AUTOJS6,
+                    transport = cn.dumate.a6studio.bridge.McpTransport.HTTP_JSONRPC,
+                    endpointUrl = endpoint,
+                    authToken = "test_token_123",
+                    allowLocal = true,
+                    method = "tools/call",
+                    toolName = "get_device_state"
+                )
+            )
+            assertFalse(unauthResp.ok, "401 响应必须返回 ok=false")
+            assertEquals(cn.dumate.a6studio.bridge.McpErrorKind.TOOL_EXECUTION_ERROR, unauthResp.errorKind)
+            assertEquals(
+                reqBefore401 + 1,
+                totalRequests.get(),
+                "401 错误不得触发 device_info/ui_current_window/ui_dump 降级请求（应只发 1 次请求）"
+            )
+        } finally {
+            http.close()
+            server.stop(0)
+        }
     }
 }

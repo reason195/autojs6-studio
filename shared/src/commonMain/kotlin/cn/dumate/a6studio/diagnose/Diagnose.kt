@@ -152,11 +152,38 @@ object Diagnose {
                     if (s("pkg").isBlank()) {
                         add(Level.ERROR, "护栏目标包名为空", "请填写目标应用包名（如 com.jingdong.app.mall）", it)
                     }
+                    // N-L9：kitBoot 放在模块里会让 $kit 成为函数局部变量，其他地方的 kit 积木找不到它
+                    if (it.scope != "主程序") {
+                        add(Level.ERROR, "kitBoot 不能放在模块内", "\$kit 变量必须在主程序作用域声明，否则其他积木访问不到", it)
+                    }
+                }
+                "kitWaitFor", "kitClick" -> {
+                    if (s("value").isBlank()) {
+                        add(Level.ERROR, "护栏控件定位值为空", "空值无法定位目标节点；请填写要匹配的文本 / desc / id", it)
+                    }
+                    if (b.type == "kitWaitFor" && n("timeoutMs") <= 0) {
+                        add(Level.WARN, "护栏等待超时未设置", "建议设置为 5000~15000 毫秒", it)
+                    }
+                    // N-L9：match="regex" 时检查正则能否编译
+                    if (s("match") == "regex" && s("value").isNotBlank()) {
+                        runCatching { Regex(s("value")) }.onFailure { _ ->
+                            add(Level.ERROR, "正则表达式无效：${s("value")}", "请修复正则语法，或改用「包含/精确等于」模式", it)
+                        }
+                    }
                 }
             }
 
             if (b.type.startsWith("kit") && b.type != "kitBoot" && items.none { x -> x.b.type == "kitBoot" }) {
                 add(Level.ERROR, "缺少「初始化护栏运行时」", "使用护栏积木前，需在脚本开头添加「初始化护栏运行时 (kitBoot)」以创建 \$kit 实例", it)
+            }
+
+            // N-L9：Kit 和 $kit 是运行时保留名，用户不能用这些名字定义变量/函数
+            val reservedKitNames = setOf("Kit", "\$kit")
+            if (b.type in setOf("varSet", "varAssign") && s("name") in reservedKitNames) {
+                add(Level.ERROR, "变量名 ${s("name")} 是护栏运行时保留名", "Kit 和 \$kit 由 kitBoot 创建，请使用其他名称", it)
+            }
+            if (b.type == "funcDef" && s("name") in reservedKitNames) {
+                add(Level.ERROR, "函数名 ${s("name")} 是护栏运行时保留名", "Kit 和 \$kit 由 kitBoot 创建，请使用其他名称", it)
             }
 
             if (b.type in containerTypes && b.children.values.all { it.isEmpty() }) {
@@ -172,6 +199,15 @@ object Diagnose {
         if (items.any { it.b.type == "kitBoot" } && items.none { it.b.type == "kitFinish" }) {
             val lastKit = items.lastOrNull { it.b.type.startsWith("kit") }
             add(Level.WARN, "护栏流程缺少「护栏收尾汇总」", "建议在末尾添加「护栏收尾汇总 (kitFinish)」以输出动作统计与 WARN/SUCCESS 判定", lastKit)
+        }
+
+        // N-L9：kitBoot 必须在第一个其他 kit 积木之前使用
+        val mainItems = items.filter { it.scope == "主程序" }
+        val kitBootIdx = mainItems.indexOfFirst { it.b.type == "kitBoot" }
+        val firstOtherKitIdx = mainItems.indexOfFirst { it.b.type.startsWith("kit") && it.b.type != "kitBoot" }
+        if (kitBootIdx >= 0 && firstOtherKitIdx >= 0 && firstOtherKitIdx < kitBootIdx) {
+            val offender = mainItems[firstOtherKitIdx]
+            add(Level.ERROR, "护栏积木出现在 kitBoot 之前", "kitBoot 必须是第一个护栏积木，否则 \$kit 变量未定义就被使用", offender)
         }
 
         val seenClean = mutableMapOf<String, String>() // cleaned -> original name

@@ -33,6 +33,30 @@ object Aj6KitRuntime {
 
 var Kit = (function () {
 
+    /**
+     * N-M11：AutoJs6 的「停止」是在 sleep / 控件查询里抛 ScriptInterruptedException（Java RuntimeException，
+     * JS 的 catch 能抓到）。Kit 里大量容错式空 catch 会把它吞掉，sleep 立刻返回，
+     * guardRisk(90s) / waitCountdown(120s) / launch 这些循环就按真实时间空转，用户按了停止脚本还在点。
+     * 所以每个 catch 第一句都先调 kitRethrowStop：是停止信号就原样抛出，其余异常照旧容错。
+     * 模拟器不受影响：SimAbort 继承 Error，本来就抓不到。
+     */
+    function kitIsStopping() {
+        try {
+            if (typeof threads !== 'undefined' && threads && threads.currentThread) {
+                var t = threads.currentThread();
+                if (t && t.isInterrupted && t.isInterrupted()) return true;
+            }
+        } catch (x) { }
+        return false;
+    }
+
+    function kitRethrowStop(err) {
+        var s = '';
+        try { s = String(err && err.javaException ? err.javaException : err); } catch (x) { }
+        if (s.indexOf('Interrupted') >= 0) throw err;
+        if (kitIsStopping()) throw err;
+    }
+
     /* ==================================================================
      * 一、设备 API 封装层
      * 目的：把「哪些 AutoJs6 API 被用到」显式列出来，并可整体替换。
@@ -40,8 +64,8 @@ var Kit = (function () {
      * ================================================================== */
 
     function root() {
-        try { if (typeof globalThis !== 'undefined' && globalThis) return globalThis; } catch (e) { }
-        try { if (typeof global !== 'undefined' && global) return global; } catch (e) { }
+        try { if (typeof globalThis !== 'undefined' && globalThis) return globalThis; } catch (e) { kitRethrowStop(e); }
+        try { if (typeof global !== 'undefined' && global) return global; } catch (e) { kitRethrowStop(e); }
         return null;
     }
 
@@ -60,9 +84,9 @@ var Kit = (function () {
         var o = over(name);
         if (o) { return (typeof o === 'function') ? o.apply(null, args) : o; }
         var r = root();
-        if (r && typeof r[name] === 'function') { try { return r[name].apply(null, args); } catch (e) { } }
+        if (r && typeof r[name] === 'function') { try { return r[name].apply(null, args); } catch (e) { kitRethrowStop(e); } }
         if (fallback) { return fallback.apply(null, args); }
-        try { return eval(name).apply(null, args); } catch (e) { return undefined; }
+        try { return eval(name).apply(null, args); } catch (e) { kitRethrowStop(e); return undefined; }
     }
 
     /** 读取注入对象上的属性（device / app / files / images / ocr 这类命名空间） */
@@ -71,7 +95,7 @@ var Kit = (function () {
         if (o) return o;
         var r = root();
         if (r && r[name]) return r[name];
-        try { return eval(name); } catch (e) { return null; }
+        try { return eval(name); } catch (e) { kitRethrowStop(e); return null; }
     }
 
     var PRIM = {
@@ -94,7 +118,7 @@ var Kit = (function () {
         allNodes: function () {
             var c = call('className', [/.*/]);
             if (!c) return null;
-            try { return c.find(); } catch (e) { return null; }
+            try { return c.find(); } catch (e) { kitRethrowStop(e); return null; }
         },
 
         /* ---- 动作 ---- */
@@ -123,42 +147,42 @@ var Kit = (function () {
         },
         launchApp: function (pkg) {
             var a = ns('app');
-            if (a && a.launch) { try { a.launch(pkg); return true; } catch (e) { return false; } }
+            if (a && a.launch) { try { a.launch(pkg); return true; } catch (e) { kitRethrowStop(e); return false; } }
             return false;
         },
         openUrl: function (u) {
             var a = ns('app');
-            if (a && a.openUrl) { try { a.openUrl(u); return true; } catch (e) { return false; } }
+            if (a && a.openUrl) { try { a.openUrl(u); return true; } catch (e) { kitRethrowStop(e); return false; } }
             return false;
         },
 
         /* ---- 文件 ---- */
         writeFile: function (p, s) {
             var f = ns('files');
-            if (f && f.write) { try { f.write(p, s); } catch (e) { } }
+            if (f && f.write) { try { f.write(p, s); } catch (e) { kitRethrowStop(e); } }
         },
         appendFile: function (p, s) {
             var f = ns('files');
-            if (f && f.append) { try { f.append(p, s); } catch (e) { } }
+            if (f && f.append) { try { f.append(p, s); } catch (e) { kitRethrowStop(e); } }
         },
 
         /* ---- 截图 / OCR ---- */
         captureScreen: function () {
             var im = ns('images');
-            if (im && im.captureScreen) { try { return im.captureScreen(); } catch (e) { return null; } }
+            if (im && im.captureScreen) { try { return im.captureScreen(); } catch (e) { kitRethrowStop(e); return null; } }
             return null;
         },
         clip: function (img, x, y, w, h) {
             var im = ns('images');
-            if (im && im.clip) { try { return im.clip(img, x, y, w, h); } catch (e) { return null; } }
+            if (im && im.clip) { try { return im.clip(img, x, y, w, h); } catch (e) { kitRethrowStop(e); return null; } }
             return null;
         },
         recycle: function (img) {
-            try { if (img && img.recycle) img.recycle(); } catch (e) { }
+            try { if (img && img.recycle) img.recycle(); } catch (e) { kitRethrowStop(e); }
         },
         ocrDetect: function (img) {
             var o = ns('ocr');
-            if (o && o.detect) { try { return o.detect(img) || []; } catch (e) { return []; } }
+            if (o && o.detect) { try { return o.detect(img) || []; } catch (e) { kitRethrowStop(e); return []; } }
             return [];
         },
 
@@ -181,8 +205,8 @@ var Kit = (function () {
         /** 日志出口。默认 console.log；测试可注入收集器以断言日志内容。 */
         logLine: function (s) {
             var f = over('logLine');
-            if (typeof f === 'function') { try { f(s); return; } catch (e) { } }
-            try { console.log(s); } catch (e) { }
+            if (typeof f === 'function') { try { f(s); return; } catch (e) { kitRethrowStop(e); } }
+            try { console.log(s); } catch (e) { kitRethrowStop(e); }
         }
     };
 
@@ -202,7 +226,7 @@ var Kit = (function () {
 
     function rectOf(n) {
         var b = null;
-        try { b = n.bounds(); } catch (e) { b = null; }
+        try { b = n.bounds(); } catch (e) { kitRethrowStop(e); b = null; }
         if (!b) return null;
         var l = b.left, t = b.top, r = b.right, bo = b.bottom;
         if (typeof l !== 'number' || typeof t !== 'number') return null;
@@ -337,7 +361,7 @@ var Kit = (function () {
 
         function atRisk() {
             for (var i = 0; i < riskKws.length; i++) {
-                try { if (PRIM.textContains(riskKws[i]).exists()) return riskKws[i]; } catch (e) { }
+                try { if (PRIM.textContains(riskKws[i]).exists()) return riskKws[i]; } catch (e) { kitRethrowStop(e); }
             }
             return null;
         }
@@ -370,13 +394,13 @@ var Kit = (function () {
             var kws = ['定位服务未开启', '使用您的定位信息', '开启定位', '允许通知'];
             var present = false;
             for (var i = 0; i < kws.length; i++) {
-                try { if (PRIM.textContains(kws[i]).exists()) { present = true; break; } } catch (e) { }
+                try { if (PRIM.textContains(kws[i]).exists()) { present = true; break; } } catch (e) { kitRethrowStop(e); }
             }
             if (!present) return false;
             var labels = ['取消', '以后再说', '暂不', '不允许', '关闭'];
             for (var k = 0; k < labels.length; k++) {
                 var n = null;
-                try { n = PRIM.text(labels[k]).findOnce(); } catch (e) { n = null; }
+                try { n = PRIM.text(labels[k]).findOnce(); } catch (e) { kitRethrowStop(e); n = null; }
                 var b = n ? rectOf(n) : null;
                 if (b && inScreen(b, H, W)) {
                     log('  · 关闭系统弹窗「' + labels[k] + '」');
@@ -423,11 +447,11 @@ var Kit = (function () {
                 var b = rectOf(n);
                 if (!b) return null;
                 var t = '', d = '';
-                try { t = n.text() || ''; } catch (e) { }
-                try { d = n.desc() || ''; } catch (e) { }
+                try { t = n.text() || ''; } catch (e) { kitRethrowStop(e); }
+                try { d = n.desc() || ''; } catch (e) { kitRethrowStop(e); }
                 if (!t && !d) return null;
                 var ck = false;
-                try { ck = !!n.clickable(); } catch (e) { }
+                try { ck = !!n.clickable(); } catch (e) { kitRethrowStop(e); }
                 var it = {
                     node: n, t: t, d: d, clickable: ck, viaDesc: !!viaDesc,
                     left: b.left, top: b.top, right: b.right, bottom: b.bottom,
@@ -441,7 +465,7 @@ var Kit = (function () {
             try {
                 var arr = PRIM.textContains('').find();
                 if (arr) { for (var i = 0; i < arr.size(); i++) push(arr.get(i), false); }
-            } catch (e) { }
+            } catch (e) { kitRethrowStop(e); }
 
             // ② desc 节点单独抓一遍：京东大量图标只有 desc（「sign icon」「9.9包邮, 1元特价」）
             //    同一节点若已被文本遍历收录（t 非空），这里按坐标去重
@@ -453,7 +477,7 @@ var Kit = (function () {
                         var b2 = rectOf(n2);
                         if (!b2) continue;
                         var d2 = '';
-                        try { d2 = n2.desc() || ''; } catch (e) { }
+                        try { d2 = n2.desc() || ''; } catch (e) { kitRethrowStop(e); }
                         if (!d2) continue;
                         var dup = false;
                         for (var k = 0; k < out.length; k++) {
@@ -464,7 +488,7 @@ var Kit = (function () {
                         push(n2, true);
                     }
                 }
-            } catch (e) { }
+            } catch (e) { kitRethrowStop(e); }
 
             return out;
         }
@@ -482,7 +506,7 @@ var Kit = (function () {
 
         function matchStr(actual, sel) {
             if (sel.match === 'regex') {
-                try { return new RegExp(sel.value, 'i').test(actual); } catch (e) { return false; }
+                try { return new RegExp(sel.value, 'i').test(actual); } catch (e) { kitRethrowStop(e); return false; }
             }
             if (sel.match === 'contains') return actual.indexOf(sel.value) >= 0;
             return actual === sel.value;
@@ -598,7 +622,6 @@ var Kit = (function () {
                         return sortPick(a11yHits, sel);
                     }
                 }
-                ocrSubstrWarn(vals);
                 var ocrHits = ocrFindAll(vals, {
                     band: ocrX.band || (ocrF.topBand ? [ocrF.topBand[0], ocrF.topBand[1]] : null),
                     match: sel.match || 'contains',
@@ -607,6 +630,7 @@ var Kit = (function () {
                     minY: ocrX.minY,
                     maxY: ocrX.maxY
                 });
+                ocrSubstrWarn(vals);
                 var ocrOut = [];
                 for (var oi = 0; oi < ocrHits.length; oi++) {
                     var lh = ocrHits[oi];
@@ -966,17 +990,17 @@ var Kit = (function () {
         function goDesktop() {
             var WIDGET_CLS = 'com.android.launcher3.widget.CustomLauncherAppWidgetHostView';
             function hasWidget() {
-                try { return PRIM.className(WIDGET_CLS).find().size() > 0; } catch (e) { return false; }
+                try { return PRIM.className(WIDGET_CLS).find().size() > 0; } catch (e) { kitRethrowStop(e); return false; }
             }
             log('  · 回桌面找小组件');
             for (var attempt = 0; attempt < 3; attempt++) {
-                try { PRIM.homeIn(); } catch (e) { }
+                try { PRIM.homeIn(); } catch (e) { kitRethrowStop(e); }
                 PRIM.sleepIn(1800);
                 if (!isDesktop()) continue;
                 if (hasWidget()) { invalidate(); return true; }
                 // 像是应用抽屉：没有小组件容器 → back 退出抽屉
                 log('  · 当前像是应用抽屉（无小组件），back 退出');
-                try { PRIM.backIn(); } catch (e) { }
+                try { PRIM.backIn(); } catch (e) { kitRethrowStop(e); }
                 PRIM.sleepIn(1600);
                 if (hasWidget()) { invalidate(); return true; }
             }
@@ -1009,14 +1033,14 @@ var Kit = (function () {
 
             function scanOnce() {
                 var arr = null;
-                try { arr = PRIM.className(CLS).find(); } catch (e) { return null; }
+                try { arr = PRIM.className(CLS).find(); } catch (e) { kitRethrowStop(e); return null; }
                 var n = 0;
-                try { n = arr.size(); } catch (e) { return null; }
+                try { n = arr.size(); } catch (e) { kitRethrowStop(e); return null; }
                 for (var i = 0; i < n; i++) {
                     var it = null, b = null, d = '';
-                    try { it = arr.get(i); } catch (e) { continue; }
-                    try { b = it.bounds(); } catch (e) { b = null; }
-                    try { d = it.desc() || ''; } catch (e) { d = ''; }
+                    try { it = arr.get(i); } catch (e) { kitRethrowStop(e); continue; }
+                    try { b = it.bounds(); } catch (e) { kitRethrowStop(e); b = null; }
+                    try { d = it.desc() || ''; } catch (e) { kitRethrowStop(e); d = ''; }
                     if (!b) continue;
                     if (b.left > W) continue;            // 在右侧屏
                     if (b.right <= b.left) continue;     // 宽度为负（被裁）
@@ -1036,7 +1060,7 @@ var Kit = (function () {
                     return hit;
                 }
                 log('  · 第 ' + (p + 1) + ' 屏没有，右滑翻页');
-                try { PRIM.swipeIn(Math.round(W * 0.83), Math.round(H * 0.5), Math.round(W * 0.14), Math.round(H * 0.5), 300); } catch (e) { }
+                try { PRIM.swipeIn(Math.round(W * 0.83), Math.round(H * 0.5), Math.round(W * 0.14), Math.round(H * 0.5), 300); } catch (e) { kitRethrowStop(e); }
                 PRIM.sleepIn(1300);
                 invalidate();
             }
@@ -1063,7 +1087,7 @@ var Kit = (function () {
                     log('  · launch 未拉回，改用手势条横滑切回');
                     var y = H - 10;
                     for (var k = 0; k < 3; k++) {
-                        try { PRIM.swipeIn(Math.round(W * 0.3), y, Math.round(W * 0.7), y, 110); } catch (e) { }
+                        try { PRIM.swipeIn(Math.round(W * 0.3), y, Math.round(W * 0.7), y, 110); } catch (e) { kitRethrowStop(e); }
                         PRIM.sleepIn(1200);
                         if (isFg()) { invalidate(); log('  · 已切回目标 App'); return true; }
                     }
@@ -1082,7 +1106,7 @@ var Kit = (function () {
             var x1 = Math.round(W * r[0]), y1 = Math.round(H * r[1]);
             var x2 = Math.round(W * r[2]), y2 = Math.round(H * r[3]);
             log('  · 滑动 (' + x1 + ',' + y1 + ') → (' + x2 + ',' + y2 + ')');
-            try { PRIM.swipeIn(x1, y1, x2, y2, ms || 500); } catch (e) { log('  ! 滑动失败 ' + e); }
+            try { PRIM.swipeIn(x1, y1, x2, y2, ms || 500); } catch (e) { kitRethrowStop(e); log('  ! 滑动失败 ' + e); }
             stat('scrolls');
             invalidate();
             PRIM.sleepIn(cfg.afterSwipeMs || 1100);
@@ -1093,8 +1117,8 @@ var Kit = (function () {
             if (!it) return false;
             tapNode(it, '输入框');
             PRIM.sleepIn(400);
-            try { PRIM.inputIn(String(text)); } catch (e) {
-                try { PRIM.setTextIn(0, String(text)); } catch (e2) { return false; }
+            try { PRIM.inputIn(String(text)); } catch (e) { kitRethrowStop(e);
+                try { PRIM.setTextIn(0, String(text)); } catch (e2) { kitRethrowStop(e2); return false; }
             }
             PRIM.sleepIn(300);
             return true;
@@ -1103,7 +1127,7 @@ var Kit = (function () {
         function longPress(sel, ms) {
             var it = findOne(sel);
             if (!it) return false;
-            try { PRIM.longClick(it.cx, it.cy); } catch (e) { return false; }
+            try { PRIM.longClick(it.cx, it.cy); } catch (e) { kitRethrowStop(e); return false; }
             invalidate();
             PRIM.sleepIn(ms || 800);
             return true;
@@ -1111,7 +1135,7 @@ var Kit = (function () {
 
         function back() {
             log('  · back');
-            try { PRIM.backIn(); } catch (e) { }
+            try { PRIM.backIn(); } catch (e) { kitRethrowStop(e); }
             invalidate();
             PRIM.sleepIn(900);
         }
@@ -1138,10 +1162,10 @@ var Kit = (function () {
             for (var i = 0; i < kws.length; i++) {
                 try {
                     if (PRIM.descContains(kws[i]).find().size() > 0) return true;
-                } catch (e) { }
+                } catch (e) { kitRethrowStop(e); }
                 try {
                     if (PRIM.textContains(kws[i]).find().size() > 0) return true;
-                } catch (e) { }
+                } catch (e) { kitRethrowStop(e); }
             }
             return ocrFindAll(kws, { force: true, match: 'contains' }).length > 0;
         }
@@ -1151,9 +1175,9 @@ var Kit = (function () {
             var kws = ['确定离开', '残忍离开', '放弃福利', '继续浏览', '再逛逛'];
             for (var i = 0; i < kws.length; i++) {
                 var n = null, b = null;
-                try { n = PRIM.text(kws[i]).findOnce(); } catch (e) { n = null; }
-                if (!n) { try { n = PRIM.desc(kws[i]).findOnce(); } catch (e) { n = null; } }
-                if (n) { try { b = n.bounds(); } catch (e) { b = null; } }
+                try { n = PRIM.text(kws[i]).findOnce(); } catch (e) { kitRethrowStop(e); n = null; }
+                if (!n) { try { n = PRIM.desc(kws[i]).findOnce(); } catch (e) { kitRethrowStop(e); n = null; } }
+                if (n) { try { b = n.bounds(); } catch (e) { kitRethrowStop(e); b = null; } }
                 if (b && inScreen(b, H, W)) {
                     log('  · 关闭挽留弹窗「' + kws[i] + '」');
                     PRIM.click(Math.round((b.left + b.right) / 2), Math.round((b.top + b.bottom) / 2));
@@ -1207,7 +1231,7 @@ var Kit = (function () {
                 try {
                     var n = PRIM.textContains('立即返回').findOnce();
                     if (n) { var b = n.bounds(); if (b && inScreen(b, H, W)) rb = b; }
-                } catch (e) { rb = null; }
+                } catch (e) { kitRethrowStop(e); rb = null; }
                 if (!rb) {
                     var hit = ocrFindAll(['立即返回'], { force: true, match: 'contains' })[0];
                     if (hit) rb = { left: hit.left, top: hit.top, right: hit.right, bottom: hit.bottom };
@@ -1233,7 +1257,7 @@ var Kit = (function () {
                      */
                     var gap = opts.backGapMs || 1800;
                     log('  · [回任务页] 没看到「立即返回」，直接 back 第 ' + (t + 1) + ' 次');
-                    try { PRIM.backIn(); } catch (e) { }
+                    try { PRIM.backIn(); } catch (e) { kitRethrowStop(e); }
                     invalidate();
                     /**
                      * back 之后就在 gap 内复查，**不要额外再加等待**。
@@ -1350,13 +1374,13 @@ var Kit = (function () {
                 for (i = 0; i < raw.size(); i++) {
                     var n = raw.get(i);
                     var ck = false;
-                    try { ck = !!n.clickable(); } catch (e) { ck = false; }
+                    try { ck = !!n.clickable(); } catch (e) { kitRethrowStop(e); ck = false; }
                     if (!ck) continue;
                     var b = rectOf(n);
                     if (!b) continue;
                     var t = '', d = '';
-                    try { t = n.text() || ''; } catch (e) { t = ''; }
-                    try { d = n.desc() || ''; } catch (e) { d = ''; }
+                    try { t = n.text() || ''; } catch (e) { kitRethrowStop(e); t = ''; }
+                    try { d = n.desc() || ''; } catch (e) { kitRethrowStop(e); d = ''; }
                     if (t || d) continue;
                     if (b.cy < band[0] || b.cy > band[1]) continue;
                     if (b.width < minW || b.height < minH) continue;
@@ -1456,7 +1480,7 @@ var Kit = (function () {
                 PRIM.sleepIn(afterTap);
                 if (!isBeanPage()) {
                     log('  · 跳到了 ' + PRIM.currentActivity() + '，back 回京豆页');
-                    try { PRIM.backIn(); } catch (e) { }
+                    try { PRIM.backIn(); } catch (e) { kitRethrowStop(e); }
                     invalidate();
                     /**
                      * back 之后**不能只等**：真机上 back 有时被京东的挽留弹窗吃掉，
@@ -1480,7 +1504,7 @@ var Kit = (function () {
                         }
                         if (backs < 4) {
                             log('  · back 后还没回京豆页，再 back 一次（第 ' + (backs + 1) + ' 次）');
-                            try { PRIM.backIn(); } catch (e) { }
+                            try { PRIM.backIn(); } catch (e) { kitRethrowStop(e); }
                             invalidate();
                             backs++;
                             lastAt = PRIM.now();
@@ -1578,7 +1602,7 @@ var Kit = (function () {
                     });
                 }
                 if (band && src && src !== img) PRIM.recycle(src);
-            } catch (e) { log('  ! OCR 异常 ' + e); }
+            } catch (e) { kitRethrowStop(e); log('  ! OCR 异常 ' + e); }
             PRIM.recycle(img);
             return out;
         }
@@ -1658,7 +1682,7 @@ var Kit = (function () {
                     var kw = String(arr[k]);
                     if (match === 'eq') hit = (line.t === kw);
                     else if (match === 'regex') {
-                        try { hit = new RegExp(kw, 'i').test(line.t); } catch (e) { hit = false; }
+                        try { hit = new RegExp(kw, 'i').test(line.t); } catch (e) { kitRethrowStop(e); hit = false; }
                     } else hit = (line.t.indexOf(kw) >= 0);
                 }
                 if (!hit) continue;

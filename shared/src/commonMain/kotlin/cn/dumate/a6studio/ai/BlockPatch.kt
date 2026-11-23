@@ -9,11 +9,13 @@ import cn.dumate.a6studio.model.ParamValue
 import cn.dumate.a6studio.model.Project
 import cn.dumate.a6studio.model.TreeOps
 import cn.dumate.a6studio.security.Redaction
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
 sealed interface BlockPatchOp {
     @Serializable
+    @SerialName("add")
     data class AddBlock(
         val block: Block,
         val parentId: String? = null,
@@ -22,6 +24,7 @@ sealed interface BlockPatchOp {
     ) : BlockPatchOp
 
     @Serializable
+    @SerialName("update")
     data class UpdateParam(
         val blockId: String,
         val key: String,
@@ -29,11 +32,13 @@ sealed interface BlockPatchOp {
     ) : BlockPatchOp
 
     @Serializable
+    @SerialName("remove")
     data class RemoveBlock(
         val blockId: String
     ) : BlockPatchOp
 
     @Serializable
+    @SerialName("rename")
     data class RenameProject(
         val name: String
     ) : BlockPatchOp
@@ -158,6 +163,9 @@ object BlockPatch {
                 }
                 is BlockPatchOp.RenameProject -> {
                     if (op.name.isBlank()) errs += "拒绝：项目名不能为空"
+                    else if (op.name.length > 64) errs += "拒绝：项目名最长 64 个字符（当前 ${op.name.length}）"
+                    else if (op.name.any { it.code < 0x20 }) errs += "拒绝：项目名包含控制字符"
+                    else if (op.name.any { it in "\\/:|*?\"<>" }) errs += "拒绝：项目名包含文件名非法字符（\\/:|*?\"<>）"
                 }
             }
         }
@@ -168,14 +176,31 @@ object BlockPatch {
             return PatchGuardResult(false, before, (errs + "补丁应用失败：${e.message}").distinct())
         }
 
-        // 1. 递归校验应用后的全树（含 root 与所有 modules）
-        after.root.children["body"].orEmpty().forEach { validateBlockRecursive(it, errs) }
-        after.modules.forEach { m ->
-            m.children["body"].orEmpty().forEach { validateBlockRecursive(it, errs) }
-        }
-
         val flatBefore = flattenAllProjectBlocks(before)
         val flatAfter = flattenAllProjectBlocks(after)
+
+        // 1. 只校验本次补丁「新增」或「改动」的积木（R-1）。
+        //    用户手工搭建的 if.cond / varSet.expr / rawJs 等既有积木不属于补丁通道，
+        //    不能因为它们存在就把所有补丁拒掉。
+        val beforeById = flatBefore.associateBy { it.id }
+        for (b in flatAfter) {
+            val old = beforeById[b.id]
+            when {
+                // 新增积木（含新增积木的嵌套子积木，flatAfter 已展开，故此处不再递归）
+                old == null || old.type != b.type -> validateBlockShallow(b, errs)
+                else -> {
+                    // 既有积木：只校验值发生变化或新出现的参数
+                    b.params.forEach { (k, v) ->
+                        if (old.params[k] != v) validateSingleParam(b.type, k, v, errs)
+                    }
+                    // 既有积木新增了插槽
+                    val def = Catalog.byType(b.type)
+                    b.children.keys.filter { it !in old.children.keys }.forEach { slot ->
+                        if (def != null && def.slots.none { it.key == slot }) errs += "拒绝：${b.type} 无插槽 $slot"
+                    }
+                }
+            }
+        }
 
         // 2. 护栏积木不可被删除
         for (gt in GUARD_TYPES) {
@@ -208,11 +233,14 @@ object BlockPatch {
             }
         }
 
-        // 5. 生成代码不能包含明文密钥
-        val generated = CodeGen.code(after)
-        val secrets = Redaction.assertNoPlaintextSecrets(generated)
-        if (secrets.isNotEmpty()) {
-            errs += "拒绝：补丁导致生成代码中出现疑似明文凭据（${secrets.joinToString(", ")}）"
+        // 5. 生成代码不能因补丁引入新的明文密钥（已有的不再拒绝，避免把用户自己写的 rawJs 也拦掉）
+        val generatedBefore = CodeGen.code(before)
+        val generatedAfter = CodeGen.code(after)
+        val secretsBefore = Redaction.assertNoPlaintextSecrets(generatedBefore).toSet()
+        val secretsAfter = Redaction.assertNoPlaintextSecrets(generatedAfter)
+        val newSecrets = secretsAfter.filter { it !in secretsBefore }
+        if (newSecrets.isNotEmpty()) {
+            errs += "拒绝：补丁在生成代码中引入新的疑似明文凭据（${newSecrets.joinToString(", ")}）"
         }
 
         return if (errs.isEmpty()) {
@@ -222,7 +250,11 @@ object BlockPatch {
         }
     }
 
-    private fun validateBlockRecursive(b: Block, errs: MutableList<String>) {
+    private fun validateBlockRecursive(b: Block, errs: MutableList<String>) = validateBlock(b, errs, recurse = true)
+
+    private fun validateBlockShallow(b: Block, errs: MutableList<String>) = validateBlock(b, errs, recurse = false)
+
+    private fun validateBlock(b: Block, errs: MutableList<String>, recurse: Boolean) {
         val def = Catalog.byType(b.type)
         if (def == null) {
             errs += "拒绝：未知积木类型 ${b.type}"
@@ -247,11 +279,15 @@ object BlockPatch {
             if (def.slots.none { it.key == slot }) {
                 errs += "拒绝：${b.type} 无插槽 $slot"
             }
-            kids.forEach { validateBlockRecursive(it, errs) }
+            if (recurse) kids.forEach { validateBlockRecursive(it, errs) }
         }
     }
 
     private fun validateSingleParam(blockType: String, key: String, value: ParamValue, errs: MutableList<String>) {
+        if (blockType == "kitBoot" && key == "policyJson" && value.asText().isNotBlank()) {
+            errs += "拒绝：补丁通道禁止修改 kitBoot.policyJson（护栏策略只能经导入设置）"
+            return
+        }
         val def = Catalog.byType(blockType) ?: run {
             errs += "拒绝：未知积木类型 $blockType"
             return

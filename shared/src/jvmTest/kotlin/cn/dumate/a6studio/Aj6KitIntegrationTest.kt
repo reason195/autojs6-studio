@@ -29,6 +29,40 @@ class Aj6KitIntegrationTest {
     }
 
     @Test
+    fun kitRethrowsStopSignalInsteadOfSwallowing() {
+        // N-M11：模拟 AutoJs6 停止——sleep 抛出 ScriptInterruptedException。
+        // 修复前 PRIM.call 的空 catch 会吞掉它，guardRisk 的 90s 循环继续空转；修复后必须原样抛出。
+        // 注意：必须覆盖「全局函数」而不是用 Kit.configure 注入——注入实现不经过 try/catch，测不出问题。
+        val script = Aj6KitRuntime.SOURCE + "\n" + """
+            var calls = 0;
+            var mode = 'stop';
+            sleep = function () {
+                calls++;
+                if (mode === 'stop') throw new Error('com.stardust.autojs.runtime.exception.ScriptInterruptedException');
+                throw new Error('boom');
+            };
+            textContains = function () { return { exists: function () { return true; } }; };
+            toast = function () {};
+            var k = Kit.boot({ id: 't', name: 't', pkg: 'p', policy: { riskWaitMs: 90000 } });
+            var caught = null;
+            try { k.guardRisk(); } catch (e) { caught = String(e); }
+            if (caught === null || caught.indexOf('Interrupted') < 0) throw new Error('stop swallowed, sleep calls=' + calls);
+            if (calls !== 1) throw new Error('loop kept running after stop, sleep calls=' + calls);
+
+            // 普通异常仍应被容错吞掉
+            mode = 'normal';
+            Kit._prim.sleepIn(10);
+        """.trimIndent()
+        val rt = SimRuntime()
+        try {
+            val (status, err) = rt.execute(script)
+            assertEquals("finished", status, "停止信号应被重抛、普通异常应被容错: $err")
+        } finally {
+            rt.close()
+        }
+    }
+
+    @Test
     fun nonKitProjectDoesNotInjectAj6Kit() {
         val hello = Templates.byId("hello")!!.build()
         val code = CodeGen.code(hello)
@@ -109,7 +143,8 @@ class Aj6KitIntegrationTest {
         val code = CodeGen.code(proj)
         assertTrue(code.contains("fallbackDwellMs: 5000"), "应生成 fallbackDwellMs: 5000，实际:\n$code")
         assertTrue(code.contains("graceMs: 1000"), "应生成 graceMs: 1000，实际:\n$code")
-        assertTrue(code.contains("if (!_cd) { \$kit.backToBean(); }"), "未命中返回按钮时应调用 backToBean()")
+        // R-4：_cd 为 null/falsy 时：先判超时/风控（若触发则 finish+exit），否则 backToBean
+        assertTrue(code.contains("\$kit.backToBean();"), "未命中返回按钮时应调用 backToBean()")
         assertFalse(code.contains("\$kit.back();"), "不应在 waitCountdown 之后无条件追加 \$kit.back()")
 
         val rt = SimRuntime()

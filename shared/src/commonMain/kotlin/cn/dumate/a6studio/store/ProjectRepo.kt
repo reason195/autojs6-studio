@@ -553,4 +553,11 @@ class ProjectRepo(private val storage: ProjectStorage) {
         _selectedState = null
         save()
     }
+
+    /** R-2：用户已确认外部 MCP 修改。只清标记，不动作用域/选中，不记撤销点。 */
+    fun markExternalPatchConfirmed() {
+        if (!current.externalPatchPending) return
+        _projectState = current.copy(externalPatchPending = false)
+        save()
+    }
 }

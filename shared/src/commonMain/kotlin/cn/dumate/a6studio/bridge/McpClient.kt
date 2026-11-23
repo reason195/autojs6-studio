@@ -40,7 +40,9 @@ import kotlinx.serialization.json.put
  * to the project file.
  */
 class McpClient(
-    private val http: HttpClient
+    private val http: HttpClient,
+    /** 在超时/连接失败的错误消息里区分不同的 MCP 服务端（如「ProxyPin」vs「手机 AutoJs6」）。 */
+    val label: String = "手机 AutoJs6"
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val mutex = Mutex()
@@ -83,13 +85,31 @@ class McpClient(
         authHeader = authByUrl[url]
     }
 
-    fun setAuth(token: String) {
-        val t = token.trim()
-        authHeader = when {
-            t.isEmpty() -> null
-            t.startsWith("Bearer ", ignoreCase = true) -> t
-            else -> "Bearer $t"
+    companion object {
+        private val CONTROL_CHAR_RE = Regex("[\\u0000-\\u001f\\u007f]")
+
+        /**
+         * 将 MCP 鉴权令牌规范化为 `Bearer <token>`，并拦截 CR/LF 等控制字符防止 HTTP 头注入。
+         */
+        fun buildAuthorizationHeader(rawToken: String): String? {
+            val trimmed = rawToken.trim()
+            if (trimmed.isEmpty()) return null
+            if (CONTROL_CHAR_RE.containsMatchIn(trimmed)) {
+                throw BridgeException("MCP 鉴权令牌包含非法控制字符", "INVALID_TOKEN")
+            }
+            val token = if (trimmed.startsWith("Bearer ", ignoreCase = true)) {
+                trimmed.substring(7).trim()
+            } else {
+                trimmed
+            }
+            return if (token.isEmpty()) null else "Bearer $token"
         }
+    }
+
+    fun setAuth(token: String) {
+        val newHeader = buildAuthorizationHeader(token)
+        if (newHeader == authHeader && ready) return
+        authHeader = newHeader
         ready = false
         sessionId = ""
     }
@@ -97,14 +117,13 @@ class McpClient(
     fun setAuthFor(addr: String, token: String) {
         val key = normalizeUrl(addr)
         if (key.isEmpty()) return
-        val t = token.trim()
-        if (t.isEmpty()) {
+        val headerVal = buildAuthorizationHeader(token)
+        if (headerVal == null) {
             authByUrl.remove(key)
             if (url == key) authHeader = null
         } else {
-            val v = if (t.startsWith("Bearer ", ignoreCase = true)) t else "Bearer $t"
-            authByUrl[key] = v
-            if (url == key) authHeader = v
+            authByUrl[key] = headerVal
+            if (url == key) authHeader = headerVal
         }
     }
 
@@ -286,13 +305,13 @@ class McpClient(
 
     private fun timeoutMessage(target: String, ms: Long): String {
         val secs = (ms / 1000).toInt()
-        return "手机 MCP 无响应：${secs}s 内没有回包（${redactUrl(target)}）。" +
-            "端口在听却不应答，通常是 AutoJs6 主线程被占满（正在跑的录制脚本、无障碍查询卡住）。" +
+        return "$label MCP 无响应：${secs}s 内没有回包（${redactUrl(target)}）。" +
+            "端口在听却不应答，通常是 $label 主线程被占满（正在跑的录制脚本、无障碍查询卡住）。" +
             "处理：在手机上按音量下键停掉录制脚本，或从 AutoJs6 停止全部脚本，再重启 MCP Server 后重连。"
     }
 
     private fun networkMessage(target: String, detail: String): String =
-        "连不上 ${redactUrl(target)}：$detail。检查：①手机 AutoJs6 的 MCP Server 是否在运行（屏幕别锁、加到后台白名单）；" +
+        "连不上 ${redactUrl(target)}：$detail。检查：①$label 的 MCP Server 是否在运行（屏幕别锁、加到后台白名单）；" +
             "②IP 是否变了；③网络是否可达（同一 Wi-Fi / 桥接代理）。"
 
     private suspend fun rpc(method: String, params: JsonObject?, timeoutMs: Long = 15_000): JsonElement {
@@ -431,8 +450,8 @@ class McpClient(
      * `accessibility.operational`, `battery.percent`, `plugins.families[].plugins[]`.
      * Older plugin builds returned a flat map, so both shapes are accepted.
      */
-    suspend fun deviceInfo(): DeviceInfo {
-        val r = callTool("device_info")
+    suspend fun deviceInfo(timeoutMs: Long = 15_000): DeviceInfo {
+        val r = callTool("device_info", timeoutMs = timeoutMs)
         val root = runCatching { json.parseToJsonElement(r.text).jsonObject }.getOrNull()
             ?: return DeviceInfo()
 
@@ -501,13 +520,13 @@ class McpClient(
     suspend fun consoleTail(lines: Int): String =
         callTool("console_tail", buildJsonObject { put("lines", lines) }).text
 
-    suspend fun uiDumpJson(maxNodes: Int = 400, maxDepth: Int = 32): JsonObject {
+    suspend fun uiDumpJson(maxNodes: Int = 400, maxDepth: Int = 32, timeoutMs: Long = 15_000): JsonObject {
         val r = callTool("ui_dump", buildJsonObject {
             put("format", "json")
             put("maxNodes", maxNodes)
             put("maxDepth", maxDepth)
             put("visibleOnly", true)
-        })
+        }, timeoutMs = timeoutMs)
         return json.parseToJsonElement(r.text).jsonObject
     }
 
@@ -536,8 +555,8 @@ class McpClient(
     suspend fun explainSelector(selector: JsonObject): String =
         callTool("ui_explain_selector", buildJsonObject { put("selector", selector) }).text
 
-    suspend fun currentWindow(): WindowInfo {
-        val r = callTool("ui_current_window")
+    suspend fun currentWindow(timeoutMs: Long = 15_000): WindowInfo {
+        val r = callTool("ui_current_window", timeoutMs = timeoutMs)
         val o = runCatching { json.parseToJsonElement(r.text).jsonObject }.getOrNull() ?: return WindowInfo()
         return WindowInfo(
             packageName = o["packageName"]?.jsonPrimitive?.contentOrNullSafe() ?: o["package"]?.jsonPrimitive?.contentOrNullSafe().orEmpty(),
