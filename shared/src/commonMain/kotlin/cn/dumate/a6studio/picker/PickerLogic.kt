@@ -199,7 +199,9 @@ object PickerLogic {
             var bestArea = Int.MAX_VALUE
             out.forEachIndexed { j, other ->
                 if (i == j) return@forEachIndexed
-                if (other.contains(node) && other.area > node.area && other.area < bestArea) {
+                val wraps = other.contains(node) &&
+                    (other.area > node.area || (other.area == node.area && other.depth < node.depth))
+                if (wraps && other.area < bestArea) {
                     best = j
                     bestArea = other.area
                 }

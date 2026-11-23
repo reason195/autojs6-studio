@@ -5,7 +5,7 @@ import cn.dumate.a6studio.catalog.Catalog
 /** A block plus where it lives, for tree edits. */
 data class LocatedBlock(
     val block: Block,
-    val list: MutableList<Block>,
+    val list: List<Block>,
     val index: Int,
     val parentId: String,
     val slot: String

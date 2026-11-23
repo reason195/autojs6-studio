@@ -97,7 +97,7 @@ object Templates {
                 "setTextNode",
                 mapOf("value" to ParamValue.Text("搜索或输入网址"), "text" to ParamValue.Text("AutoJs6"))
             ),
-            newBlock("pressKey", mapOf("key" to ParamValue.Text("menu"))),
+            newBlock("clickNode", mapOf("by" to ParamValue.Text("text"), "value" to ParamValue.Text("搜索"))),
             newBlock("sleep", mapOf("ms" to ParamValue.Num(3000.0))),
             newBlock("toast", mapOf("text" to ParamValue.Text("搜完啦")))
         )

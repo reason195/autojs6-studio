@@ -87,7 +87,8 @@ class GenContext(
 
     fun callModule(block: Block): String {
         val key = block.params["module"]?.asText() ?: ""
-        val m = project.modules.firstOrNull { it.id == key || it.name == key }
+        val m = project.modules.firstOrNull { it.id == key }
+            ?: project.modules.firstOrNull { it.name == key } // 兼容旧项目：按名字兜底，但优先 id
             ?: return "// 未选择模块"
         val args = block.params["args"]?.asText().orEmpty()
         return Js.moduleName(m.name) + "(" + args + ");"

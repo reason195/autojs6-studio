@@ -122,5 +122,17 @@ class RunControlTest {
         val (status, _) = sim.execute("""textMatches("浏览.*").exists()""")
         assertEquals("finished", status)
     }
+
+    @Test
+    fun `js regexp catastrophic backtracking is abandoned within budget`() {
+        val sim = SimRuntime(control = RunControl(wallTimeoutMs = 1000))
+        var result: Pair<String, String?>? = null
+        val ms = timed {
+            result = sim.execute("""var r = /(a+)+$/; r.test("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!"); log("unreachable");""")
+        }
+        assertTrue(result!!.first == "timeout" || result!!.first == "stopped", "status=${result!!.first}")
+        assertTrue(ms < 1000 + 2_000 + 1_500, "took ${ms}ms")
+        assertFalse(sim.state.logs.any { it.msg.contains("unreachable") }, "script should have been abandoned before logging")
+    }
 }
 

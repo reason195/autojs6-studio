@@ -39,11 +39,13 @@ class AuditController(
     private val bridge: McpClient,
     private val onRows: (List<AuditRow>, String) -> Unit
 ) {
-    private val bySet = setOf("id", "idMatches", "text", "textContains", "desc", "descContains")
-    private val fn = mapOf(
-        "id" to "id", "idMatches" to "idMatches", "text" to "text",
-        "textContains" to "textContains", "desc" to "desc", "descContains" to "descContains"
+    private val bySet = setOf(
+        "id", "idMatches", "idContains",
+        "text", "textContains", "textMatches",
+        "desc", "descContains", "descMatches",
+        "className", "classNameContains", "classNameMatches"
     )
+    private val fn = bySet.associateWith { it }
 
     var rows: List<AuditRow> = emptyList()
         private set
@@ -163,6 +165,7 @@ class AuditController(
     fun report(): String {
         if (rows.isEmpty()) return "选择器体检报告\n\n（还没有体检结果）\n"
         val head = "| 状态 | 积木 | 范围 | 选择器 | 说明 |\n| --- | --- | --- | --- | --- |"
+        fun esc(s: String) = s.replace("|", "\\|").replace("\n", " ").replace("\r", "")
         val lines = rows.map { r ->
             val st = when (r.status) {
                 AuditStatus.UNIQUE -> "唯一"
@@ -172,7 +175,7 @@ class AuditController(
                 AuditStatus.EXPR -> "表达式"
                 AuditStatus.IDLE -> "待检"
             }
-            "| $st | ${r.name} | ${r.scope} | `${selText(r.by, r.value)}` | ${r.note} |"
+            "| $st | ${esc(r.name)} | ${esc(r.scope)} | `${esc(selText(r.by, r.value))}` | ${esc(r.note)} |"
         }
         return "选择器体检报告\n\n" + (listOf(head) + lines).joinToString("\n") + "\n"
     }

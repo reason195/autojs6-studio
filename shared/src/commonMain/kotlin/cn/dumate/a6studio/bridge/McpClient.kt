@@ -24,6 +24,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -209,6 +210,13 @@ class McpClient(
             )
         }
 
+        // L4: any other non-2xx is an HTTP error. Parsing its body as JSON used to produce a
+        // misleading "返回内容不是 JSON" instead of the real status code.
+        val code = response.status.value
+        if (code !in 200..299) {
+            throw BridgeException("手机返回 HTTP $code（$target）。若持续出现，请重启手机上的 MCP Server 插件。", "HTTP_ERROR")
+        }
+
         val contentType = response.headers["content-type"] ?: ""
         val body = try {
             if (contentType.contains("text/event-stream")) {
@@ -272,15 +280,19 @@ class McpClient(
         throw BridgeException("返回内容不是 JSON：${text.take(120)}", "BAD_RESPONSE")
     }
 
+    private fun redactUrl(raw: String): String = raw
+        .replace(Regex("""://([^/@\s]+)@"""), "://***@")
+        .replace(Regex("""([?&])(token|key|secret|password)=([^&\s]+)""", RegexOption.IGNORE_CASE), "$1$2=***")
+
     private fun timeoutMessage(target: String, ms: Long): String {
         val secs = (ms / 1000).toInt()
-        return "手机 MCP 无响应：${secs}s 内没有回包（$target）。" +
+        return "手机 MCP 无响应：${secs}s 内没有回包（${redactUrl(target)}）。" +
             "端口在听却不应答，通常是 AutoJs6 主线程被占满（正在跑的录制脚本、无障碍查询卡住）。" +
             "处理：在手机上按音量下键停掉录制脚本，或从 AutoJs6 停止全部脚本，再重启 MCP Server 后重连。"
     }
 
     private fun networkMessage(target: String, detail: String): String =
-        "连不上 $target：$detail。检查：①手机 AutoJs6 的 MCP Server 是否在运行（屏幕别锁、加到后台白名单）；" +
+        "连不上 ${redactUrl(target)}：$detail。检查：①手机 AutoJs6 的 MCP Server 是否在运行（屏幕别锁、加到后台白名单）；" +
             "②IP 是否变了；③网络是否可达（同一 Wi-Fi / 桥接代理）。"
 
     private suspend fun rpc(method: String, params: JsonObject?, timeoutMs: Long = 15_000): JsonElement {
@@ -343,7 +355,7 @@ class McpClient(
             })
         }
         val res = post(payload) ?: throw BridgeException(
-            "initialize 无响应：手机没有返回可解析的内容（url=$url，session=$sessionId）。" +
+            "initialize 无响应：手机没有返回可解析的内容（url=${redactUrl(url)}，session=${if (sessionId.isEmpty()) "-" else "***"}）。" +
                 "常见原因：MCP 插件的「允许局域网连接」被关掉，或插件刚重启还没就绪。",
             "EMPTY_RESPONSE"
         )
@@ -606,8 +618,7 @@ private fun classifyToolError(tool: String, text: String): BridgeException {
     }
 }
 
-private fun JsonPrimitive.contentOrNullSafe(): String? =
-    if (this is JsonPrimitive && this.isString) content else content
+private fun JsonPrimitive.contentOrNullSafe(): String? = contentOrNull
 
 /** Builds a selector object from a by/value pair, mirroring the picker's output. */
 fun selectorJson(by: String, value: String): JsonObject = buildJsonObject { put(by, value) }
@@ -635,15 +646,31 @@ class SseAccumulator(initialCapacity: Int = 8 * 1024) {
 
     /** Appends [length] bytes from [chunk]; returns the first complete payload, if any. */
     fun feed(chunk: ByteArray, length: Int = chunk.size): String? {
-        if (size + length > data.size) {
-            data = data.copyOf(maxOf(data.size * 2, size + length))
-        }
+        val need = size + length
+        if (need > MAX_BYTES) throw BridgeException("SSE 响应超过 ${MAX_BYTES / 1024 / 1024}MB 上限，已中止", "RESPONSE_TOO_LARGE")
+        if (need > data.size) data = data.copyOf(maxOf(data.size * 2, need))
+        val oldSize = size
         chunk.copyInto(data, size, 0, length)
-        size += length
-        return SseFrames.extractPayload(text())
+        size = need
+        // L2: only re-scan when a frame boundary may have appeared in the new bytes (with 1-byte overlap for a split frame). Avoids O(n^2) on screenshot-sized base64 streams.
+        val scanFrom = (oldSize - 1).coerceAtLeast(0)
+        var boundary = false
+        for (i in scanFrom until size - 1) {
+            val b = data[i]
+            if (b == LF && (data[i + 1] == LF || (data[i + 1] == CR && i + 2 < size && data[i + 2] == LF))) {
+                boundary = true; break
+            }
+        }
+        return if (boundary) SseFrames.extractPayload(text()) else null
     }
 
     fun text(): String = data.decodeToString(0, size)
+
+    private companion object {
+        const val MAX_BYTES = 8 * 1024 * 1024
+        const val LF: Byte = 10
+        const val CR: Byte = 13
+    }
 }
 
 /**

@@ -323,7 +323,7 @@ setInterval(function () {}, 1000);
                     val x1 = fix(e.x1, w); val y1 = fix(e.y1, h)
                     val x2 = fix(e.x2, w); val y2 = fix(e.y2, h)
                     val dx = x2 - x1; val dy = y2 - y1
-                    val dur = if (kotlin.math.sqrt((dx * dx + dy * dy).toDouble()) < 40) minOf(e.dur.coerceAtLeast(400), 300) else e.dur
+                    val dur = if (kotlin.math.sqrt((dx * dx + dy * dy).toDouble()) < 40) 300 else e.dur
                     e.copy(x1 = x1, y1 = y1, x2 = x2, y2 = y2, dur = dur)
                 }
                 else -> e

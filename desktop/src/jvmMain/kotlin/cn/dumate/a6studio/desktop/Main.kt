@@ -21,7 +21,9 @@ import cn.dumate.a6studio.ui.StudioState
 import cn.dumate.a6studio.ui.StudioTheme
 import cn.dumate.a6studio.ui.DesktopStyle
 import io.ktor.client.engine.cio.CIO
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
 import java.awt.Toolkit
@@ -116,11 +118,18 @@ private class DesktopPlatform : Platform {
     }
 
     override suspend fun openTextFile(extensions: List<String>): Pair<String, String>? {
-        val dialog = FileDialog(null as Frame?, "打开", FileDialog.LOAD).apply { isVisible = true }
+        val dialog = FileDialog(null as Frame?, "打开", FileDialog.LOAD).apply {
+            if (extensions.isNotEmpty()) {
+                filenameFilter = java.io.FilenameFilter { _, n ->
+                    extensions.any { ext -> n.lowercase().endsWith(".${ext.lowercase().removePrefix(".")}") }
+                }
+            }
+            isVisible = true
+        }
         val dir = dialog.directory ?: return null
         val name = dialog.file ?: return null
         val file = File(dir, name)
-        val text = runCatching { file.readText() }.getOrNull() ?: return null
+        val text = withContext(Dispatchers.IO) { runCatching { file.readText() }.getOrNull() } ?: return null
         return file.name to text
     }
 

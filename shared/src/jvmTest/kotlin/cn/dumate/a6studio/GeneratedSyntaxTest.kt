@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package cn.dumate.a6studio
 
 import cn.dumate.a6studio.catalog.Catalog

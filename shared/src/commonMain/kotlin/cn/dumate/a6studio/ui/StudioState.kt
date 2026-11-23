@@ -859,15 +859,15 @@ class StudioState(
     fun applyAuditFixes() {
         val fixable = auditRows.filter { it.fix != null }
         if (fixable.isEmpty()) { toast("没有可自动修好的选择器"); return }
-        var n = 0
-        fixable.forEach { row ->
-            val fix = row.fix ?: return@forEach
-            repo.patchParams(row.blockId, mapOf(
+        val patches = fixable.mapNotNull { row ->
+            val fix = row.fix ?: return@mapNotNull null
+            row.blockId to mapOf(
                 "by" to ParamValue.Text(fix.first),
                 "value" to ParamValue.Text(fix.second)
-            ), "体检修好选择器")
-            n++
+            )
         }
+        repo.patchParamsBatch(patches, "体检修好选择器")
+        val n = patches.size
         commit()
         auditRows = auditRows.map { r ->
             val fix = r.fix

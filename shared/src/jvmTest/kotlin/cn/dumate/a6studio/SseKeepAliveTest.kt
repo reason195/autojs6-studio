@@ -74,7 +74,7 @@ class SseKeepAliveTest {
             client.ping()
             val ms = (System.nanoTime() - t0) / 1_000_000
             // The default request timeout is 15s; a buffered read would take at least that.
-            assertTrue(ms < 12_000, "ping took ${ms}ms: the SSE reply was not read as a stream")
+            assertTrue(ms < 3_000, "ping took ${ms}ms: the SSE reply was not read as a stream")
         } finally {
             synchronized(open) { open.forEach { runCatching { it.close() } } }
             server.close()

@@ -27,7 +27,7 @@ class SimState {
     var clock: Long = 0
     val tasks: MutableList<Task> = seedTasks().toMutableList()
 
-    val logs = mutableListOf<LogEntry>()
+    val logs = ArrayDeque<LogEntry>()
 
     private val pkgMap = mapOf(
         "jd.mall" to "com.jingdong.app.mall",
@@ -38,8 +38,8 @@ class SimState {
     )
 
     fun add(level: String, msg: String) {
-        logs += LogEntry(level, msg, clock)
-        if (logs.size > 2000) logs.removeAt(0)
+        logs.addLast(LogEntry(level, msg, clock))
+        if (logs.size > 2000) logs.removeFirst()
     }
 
     fun reset() {

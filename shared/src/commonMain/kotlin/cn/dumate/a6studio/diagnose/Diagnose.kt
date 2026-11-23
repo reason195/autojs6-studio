@@ -120,11 +120,15 @@ object Diagnose {
             add(Level.WARN, "缺少「收工判定」", "浮层首屏可能全是抽奖/券，0 任务要下滑扫描后再收工，否则会漏做京豆任务", last)
         }
 
-        val names = mutableSetOf<String>()
+        val seenClean = mutableMapOf<String, String>() // cleaned -> original name
         project.modules.forEach { m ->
             val name = m.name.trim()
+            val cleaned = cn.dumate.a6studio.catalog.Js.moduleName(name)
             if (name.isEmpty()) add(Level.ERROR, "模块名为空", "模块名用于生成函数名，不能为空")
-            else if (!names.add(name)) add(Level.ERROR, "模块名重复：$name", "重名会生成同名函数，互相覆盖")
+            else {
+                val prev = seenClean.put(cleaned, name)
+                if (prev != null) add(Level.ERROR, "模块名冲突：$prev / $name", "两者清洗后都变成 $cleaned，会生成同名函数互相覆盖")
+            }
             if (m.children["body"].isNullOrEmpty()) add(Level.INFO, "模块「$name」是空的", "空模块可以占位，但调用它什么也不做")
         }
 

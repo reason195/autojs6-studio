@@ -422,6 +422,16 @@ class ProjectRepo(private val storage: ProjectStorage) {
         save()
     }
 
+    /** Applies several patches as one undo step (batch fix / audit). */
+    fun patchParamsBatch(patches: List<Pair<String, Map<String, cn.dumate.a6studio.model.ParamValue>>>, label: String) {
+        if (patches.isEmpty()) return
+        snapshot(label)
+        var p = current
+        for ((id, patch) in patches) p = patchInProject(p, id, patch)
+        _projectState = p
+        save()
+    }
+
     private fun patchInProject(p: Project, blockId: String, patch: Map<String, cn.dumate.a6studio.model.ParamValue>): Project {
         fun apply(list: List<Block>): List<Block> = TreeOps.replace(list, blockId) { b -> b.copy(params = b.params + patch) }
         return p.copy(

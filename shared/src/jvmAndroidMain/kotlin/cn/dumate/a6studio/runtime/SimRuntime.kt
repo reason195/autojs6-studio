@@ -64,9 +64,10 @@ class SimRuntime(
     private var depth = 0
     private var deadlineNanos = Long.MAX_VALUE
     @Volatile private var poisoned = false
+    @Volatile private var workerThread: Thread? = null
     private val executorHolder = lazy {
         java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-            Thread(r, "a6-sim").apply { isDaemon = true }
+            Thread(r, "a6-sim").apply { isDaemon = true }.also { workerThread = it }
         }
     }
     private val executor get() = executorHolder.value
@@ -155,6 +156,10 @@ class SimRuntime(
             future.get(GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (_: Throwable) {
             poisoned = true
+            // Rhino 的 JS RegExp 不走 ContextFactory 的 instruction observer，卡在回溯里时
+            // checkLimits() 永远不会被调用；Thread.stop 在 JDK 20+ 和 Android 上已不可用，
+            // 所以只能放弃该线程。把它的优先级降到最低，减少对后续运行/UI 线程的争抢。
+            workerThread?.priority = Thread.MIN_PRIORITY
             log("error", "脚本在原生代码中卡死，执行线程已废弃；后续运行需新建模拟器")
         }
         val status = if (budgetMs > 0 && System.nanoTime() >= hardDeadline) SimAbort.TIMEOUT else SimAbort.STOPPED
@@ -271,11 +276,18 @@ class SimRuntime(
      * `Object`; Kotlin `toTypedArray()` would give `String[]`/`NativeObject[]` and throw.
      */
     private fun makeArray(sc: Scriptable, items: List<Any?>): NativeArray {
+        // Pair Context.enter() with Context.exit() like ocr.detect does: without an own/exit
+        // pair, every call made outside a running script leaked one context.
+        val own = cx == null
         val ctx = cx ?: Context.enter()
-        val arr = arrayOfNulls<Any>(items.size)
-        items.forEachIndexed { i, v -> arr[i] = v }
-        @Suppress("UNCHECKED_CAST")
-        return ctx.newArray(sc, arr) as NativeArray
+        try {
+            val arr = arrayOfNulls<Any>(items.size)
+            items.forEachIndexed { i, v -> arr[i] = v }
+            @Suppress("UNCHECKED_CAST")
+            return ctx.newArray(sc, arr) as NativeArray
+        } finally {
+            if (own) Context.exit()
+        }
     }
 
     // ---- selectors ----------------------------------------------------------
@@ -448,7 +460,6 @@ class SimRuntime(
             true
         }
         put(app, "kill") { a, _ -> log("info", "结束应用 ${a.getOrNull(0)}"); null }
-        put(app, "getPackageName") { a, _ -> if (a.getOrNull(0)?.toString() == "京东") "com.jingdong.app.mall" else "" }
         ScriptableObject.putProperty(s, "app", app)
 
         // `auto` is the accessibility facade scripts call before any selector work; the simulator
@@ -578,8 +589,8 @@ class SimRuntime(
         ScriptableObject.putProperty(s, "storages", storages)
 
         val http = NativeObject()
-        fun httpResult(url: String, hasData: Boolean): NativeObject {
-            val payload = if (hasData) "{\"ok\":true,\"url\":\"$url\"}" else "{\"ok\":true,\"url\":\"$url\"}"
+        fun httpResult(url: String): NativeObject {
+            val payload = "{\"ok\":true,\"url\":" + cn.dumate.a6studio.catalog.Js.quote(url) + "}"
             val body = NativeObject()
             put(body, "string") { _, _ -> payload }
             put(body, "json") { _, _ ->
@@ -595,11 +606,11 @@ class SimRuntime(
         }
         put(http, "get") { a, _ ->
             val url = a.getOrNull(0)?.toString() ?: ""
-            log("debug", "GET $url"); httpResult(url, false)
+            log("debug", "GET $url"); httpResult(url)
         }
         put(http, "postJson") { a, _ ->
             val url = a.getOrNull(0)?.toString() ?: ""
-            log("debug", "POST $url"); httpResult(url, true)
+            log("debug", "POST $url"); httpResult(url)
         }
         ScriptableObject.putProperty(s, "http", http)
 
@@ -680,8 +691,21 @@ class SimRuntime(
         put(threads, "start") { a, sc ->
             val f = a.getOrNull(0)
             if (f is Function) {
-                try { f.call(cx ?: Context.enter(), sc, sc, emptyArray()) }
-                catch (e: Exception) { log("error", "子线程异常：${e.message}") }
+                // L14: the callback runs synchronously in the simulator (no real thread).
+                // Say so, and rethrow SimExit so exit() inside the "thread" still ends the script
+                // instead of being swallowed by the generic catch below.
+                log("info", "模拟器中 threads.start 同步执行回调")
+                val own = cx == null
+                val ctx = cx ?: Context.enter()
+                try {
+                    f.call(ctx, sc, sc, emptyArray())
+                } catch (e: SimExit) {
+                    throw e
+                } catch (e: Exception) {
+                    log("error", "子线程异常：${e.message}")
+                } finally {
+                    if (own) Context.exit()
+                }
             }
             null
         }

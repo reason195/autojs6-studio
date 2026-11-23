@@ -318,7 +318,9 @@ object Catalog {
         ) { b, c ->
             val times = c.num(b, "times").toLong().coerceAtLeast(1)
             val call = if (c.str(b, "dir") == "backward") "scrollBackward" else "scrollForward"
-            (1..times).joinToString("") { "${c.selector(b)}.findOne(2000).$call();\n" }.removeSuffix("\n")
+            val n = c.newVar("node")
+            "let $n = ${c.selector(b)}.findOne(2000);\n" +
+                "if ($n) { for (let i = 0; i < $times; i++) $n.$call(); } else { log(\"找不到控件，无法滚动\"); }"
         }
         def("pressBack", "ui", "按返回键") { _, _ -> "back();" }
         def("pressHome", "ui", "回到桌面") { _, _ -> "home();" }

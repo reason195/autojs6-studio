@@ -48,7 +48,7 @@ object Runner {
                 TestResult(
                     id = t.id,
                     name = t.name,
-                    ok = status == "finished",
+                    ok = status == "finished" || status == "exited",
                     error = error ?: "",
                     logs = sim.state.logs.toList()
                 )
