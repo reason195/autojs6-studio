@@ -51,14 +51,18 @@ class SimRuntime(
             optimizationLevel = -1 // instruction observation only works in interpreted mode
             languageVersion = Context.VERSION_ES6
             instructionObserverThreshold = INSTRUCTION_SLICE
-            // Scripts arrive from anywhere (imported .js, pasted raw blocks). Without a shutter
-            // Rhino hands such a script the whole JVM with the user's rights — measured:
-            // `java.lang.System.getProperty('user.home')` returned a NativeJavaObject, and
-            // `Runtime.exec` / arbitrary file access follow from there. AutoJs6 *on the device*
-            // does allow Java interop, so the honest thing is to refuse it here and say so
-            // (see [JAVA_INTEROP_HINT]) instead of letting the simulator quietly behave
-            // differently.
-            setClassShutter { className -> !isJavaClass(className) }
+            // M3: deep or runaway recursion used to grow the JVM stack until StackOverflowError,
+            // which escaped as a non-Rhino error and left the run "运行中" forever. The interpreter
+            // limit turns it into an ordinary script error that execute() reports.
+            maximumInterpreterStackDepth = 2_000
+            // Whitelist shutter: refuse every Java class, including Packages.kotlinx,
+            // Packages.io.ktor, Packages.android, Packages.cn.dumate, etc.
+            // The old blacklist only blocked java.*/javax.*/kotlin.* — anything else on the
+            // classpath (Ktor, Android framework, our own code) could be reached via
+            // `Packages.xxx`. Setting the shutter to always-false closes that completely.
+            // The simulated device API is implemented as pure-JS stubs, so no Java classes
+            // are needed inside scripts.
+            setClassShutter { false }
         }
 
         override fun observeInstructionCount(cx: Context, instructionCount: Int) = checkLimits()
@@ -110,6 +114,10 @@ class SimRuntime(
         } catch (e: Exception) {
             if (findSimExit(e)) return "exited" to null
             "error" to explainJavaBlock(e.message ?: e.toString())
+        } catch (e: StackOverflowError) {
+            "error" to "递归太深，脚本已停止（检查是否有函数无限调用自己）"
+        } catch (e: OutOfMemoryError) {
+            "error" to "脚本占用内存过多，已停止（检查是否在循环里不断拼接大字符串或数组）"
         } finally {
             Context.exit()
             depth -= 1
@@ -148,7 +156,11 @@ class SimRuntime(
 
     /** Builds a fresh global object; the test harness uses it to inject `$run`. */
     fun newScope(context: Context): Scriptable {
-        val sc = context.initStandardObjects()
+        // initSafeStandardObjects(null, false) omits the LiveConnect bridge — it does not
+        // register Packages, java, JavaAdapter, or getClass. Combined with the always-false
+        // ClassShutter this gives a true whitelist sandbox: scripts can only reach what we
+        // explicitly install below (selectors, device stubs, etc.).
+        val sc = context.initSafeStandardObjects(null, false)
         val s = sc as ScriptableObject
         scope = sc
         installSelectors(s)
@@ -631,6 +643,13 @@ class SimRuntime(
      */
     private fun installJavaStubs(s: ScriptableObject) {
         val note = "模拟器不执行 Java 互操作（防止导入的脚本在电脑上执行任意 Java 代码）"
+        // initSafeStandardObjects no longer defines `java`, `Packages`, …, so a script line like
+        // `importClass(java.io.File)` would die evaluating its argument before the stub runs.
+        // Inert package objects make those names resolve to harmless path placeholders: any
+        // attempt to call or construct them is a TypeError, and nothing reaches the JVM.
+        for (root in listOf("Packages", "java", "javax", "android", "androidx", "dalvik")) {
+            ScriptableObject.putProperty(s, root, InertPackage(if (root == "Packages") "" else root))
+        }
         put(s, "importClass") { a, _ ->
             log("warn", "$note：已忽略 importClass(${a.getOrNull(0)})，需要在真机上验证")
             null
@@ -639,6 +658,21 @@ class SimRuntime(
             log("warn", "$note：已忽略 importPackage(${a.getOrNull(0)})，需要在真机上验证")
             null
         }
+    }
+
+    /** A Java package name with no Java behind it: property access yields deeper placeholders. */
+    private class InertPackage(private val path: String) : ScriptableObject() {
+        override fun getClassName(): String = "JavaPackage"
+
+        override fun get(name: String, start: Scriptable): Any? {
+            val own = super.get(name, start)
+            if (own !== Scriptable.NOT_FOUND) return own
+            return InertPackage(if (path.isEmpty()) name else "$path.$name")
+        }
+
+        override fun getDefaultValue(typeHint: Class<*>?): Any = toString()
+
+        override fun toString(): String = "[JavaPackage ${path.ifEmpty { "Packages" }}]"
     }
 
     /** Applies `$state().tasks = [...]` written by test code before replaying the program. */

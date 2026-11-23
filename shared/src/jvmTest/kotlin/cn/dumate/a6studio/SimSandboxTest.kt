@@ -10,6 +10,9 @@ import kotlin.test.assertEquals
  * block), so it must not hand them the JVM. Measured before the ClassShutter was added:
  * `java.lang.System.getProperty("user.home")` returned a live Java object, which puts
  * `Runtime.exec` and arbitrary file access one step away — on the user's desktop.
+ *
+ * Since switching to initSafeStandardObjects + setClassShutter{false} the sandbox is a true
+ * whitelist: only the stubs we install (selectors, device, log, sleep, …) are reachable.
  */
 class SimSandboxTest {
 
@@ -19,11 +22,16 @@ class SimSandboxTest {
         return Triple(status, error, sim.state.logs.joinToString("\n") { it.msg })
     }
 
+    // ── original blacklist tests (still required) ──────────────────────────
+
     @Test
     fun `java classes cannot be called`() {
         val (status, error, _) = run("""log(String(java.lang.System.getProperty("user.home")));""")
         assertEquals("error", status)
+        // `java` is now an inert placeholder: calling anything under it is a TypeError,
+        // and the home directory must never show up in the message.
         assertContains(error!!, "getProperty")
+        kotlin.test.assertFalse(error.contains(System.getProperty("user.home")), error)
     }
 
     @Test
@@ -60,5 +68,87 @@ class SimSandboxTest {
         )
         assertEquals("finished", status, "error: $error")
         assertContains(logs, "n=4")
+    }
+
+    // ── whitelist escape tests (new) ───────────────────────────────────────
+
+    @Test
+    fun `Packages kotlinx is blocked`() {
+        // Before whitelist this reached kotlinx.io.files.FileSystemJvmKt via Packages.
+        val (status, _, _) = run(
+            """var fs = Packages.kotlinx.io.files.FileSystemJvmKt.getSystemFileSystem();"""
+        )
+        assertEquals("error", status)
+    }
+
+    @Test
+    fun `Packages io ktor is blocked`() {
+        // Names under Packages resolve to inert placeholders; using one as a class must fail.
+        val (status, _, _) = run(
+            """var c = new Packages.io.ktor.client.HttpClient();"""
+        )
+        assertEquals("error", status)
+    }
+
+    @Test
+    fun `Packages cn dumate is blocked`() {
+        // Our own classes are on the classpath — must not be reachable.
+        val (status, _, _) = run(
+            """var r = new Packages.cn.dumate.a6studio.runtime.SimRuntime();"""
+        )
+        assertEquals("error", status)
+    }
+
+    @Test
+    fun `Packages placeholders carry no Java behind them`() {
+        val (status, error, logs) = run(
+            """log(typeof Packages.cn.dumate.a6studio.runtime.SimRuntime); log(String(java.lang.Runtime));"""
+        )
+        assertEquals("finished", status, "error: $error")
+        assertContains(logs, "object")
+        assertContains(logs, "[JavaPackage java.lang.Runtime]")
+    }
+
+    @Test
+    fun `Packages android is blocked`() {
+        // On Android builds android.* is live; on desktop it may not exist but the shutter
+        // must refuse before class loading even tries.
+        val (status, _, _) = run(
+            """var a = Packages.android.app.ActivityThread.currentApplication();"""
+        )
+        assertEquals("error", status)
+    }
+
+    @Test
+    fun `dalvik DexClassLoader is blocked`() {
+        val (status, _, _) = run(
+            """var d = new Packages.dalvik.system.DexClassLoader("x","y","z",null);"""
+        )
+        assertEquals("error", status)
+    }
+
+    @Test
+    fun `getClass is not available (LiveConnect removed)`() {
+        // initSafeStandardObjects does not register getClass/JavaAdapter.
+        val (status, _, _) = run(
+            """"hello".getClass().forName("java.lang.Runtime").getMethod("exec","cmd");"""
+        )
+        assertEquals("error", status)
+    }
+
+    @Test
+    fun `JavaAdapter is not available (LiveConnect removed)`() {
+        val (status, _, _) = run(
+            """var r = new JavaAdapter(Packages.java.lang.Runnable, { run: function(){} });"""
+        )
+        assertEquals("error", status)
+    }
+
+    @Test
+    fun `java lang Class forName is blocked`() {
+        val (status, _, _) = run(
+            """java.lang.Class.forName("java.lang.Runtime");"""
+        )
+        assertEquals("error", status)
     }
 }
