@@ -23,6 +23,7 @@ import cn.dumate.a6studio.bridge.McpTransport
 import cn.dumate.a6studio.bridge.ProxyPinBridge
 import cn.dumate.a6studio.security.Redaction
 import cn.dumate.a6studio.security.RedactionReport
+import cn.dumate.a6studio.security.UrlSecurity
 import cn.dumate.a6studio.catalog.CodeGen
 import cn.dumate.a6studio.diagnose.Diagnose
 import cn.dumate.a6studio.diagnose.Issue
@@ -817,6 +818,71 @@ class StudioState(
 
     fun importMcpFromText() {
         if (importMcpConfig(mcpImportText, "粘贴内容") > 0) mcpImportText = ""
+    }
+
+    // ---- ProxyPin MCP config import -------------------------------------------------------
+    /** AI 面板「粘贴 ProxyPin 配置」框里的文本。 */
+    var proxyPinImportText by mutableStateOf("")
+
+    /**
+     * 从 [text] 里挑出一台 ProxyPin MCP（多台时优先名字或 URL 含 proxypin 的），
+     * 校验通过后写进 [proxyPinUrl] / [proxyPinToken]（Token 仅内存持有，绝不走
+     * 「记住令牌」持久化）并 configure 桥接。返回 1 表示已应用，0 表示没找到或被拒。
+     */
+    fun importProxyPinConfig(text: String, source: String): Int {
+        val picked = cn.dumate.a6studio.bridge.ProxyPinImport.pick(text)
+        if (picked == null) {
+            toast("$source 里没有找到 ProxyPin MCP 地址（支持 mcpServers JSON、URL、IP）")
+            return 0
+        }
+        // 先校验地址，失败就不写状态、直接把原因给用户。
+        val check = UrlSecurity.validateEndpointUrl(picked.url, allowLocal = true)
+        if (!check.valid || check.normalizedUrl == null) {
+            toast("ProxyPin 地址被拒：${check.reason ?: "URL 无效"}")
+            return 0
+        }
+        // 多台时提示挑了哪台；只有一台就不用说。
+        val foundCount = cn.dumate.a6studio.bridge.McpConfigParser
+            .parseWithDefaultPort(text, cn.dumate.a6studio.bridge.ProxyPinImport.DEFAULT_PORT)
+            .size
+        if (foundCount > 1) {
+            val label = picked.name.ifBlank {
+                picked.url.removePrefix("http://").removePrefix("https://").removeSuffix("/mcp")
+            }
+            toast("检测到 $foundCount 个，已使用：$label")
+        }
+        proxyPinUrl = picked.url
+        proxyPinToken = picked.token
+        try {
+            // CR/LF 令牌会在 configure 内部抛 INVALID_TOKEN，属于用户输入问题：提示即可，不能崩。
+            proxyPin.configure(picked.url, picked.token, allowLocal = true)
+        } catch (e: BridgeException) {
+            toast("ProxyPin 令牌被拒：${e.message}")
+            return 0
+        }
+        if (picked.token.isEmpty()) {
+            toast("已应用 ProxyPin 地址（未带令牌）：${picked.url}")
+        } else {
+            toast("已应用 ProxyPin 地址与令牌（仅内存持有）")
+        }
+        return 1
+    }
+
+    fun importProxyPinFromClipboard() {
+        val text = platform.readClipboard()
+        if (text.isNullOrBlank()) { toast("剪贴板是空的：先复制 ProxyPin 的 MCP 配置"); return }
+        importProxyPinConfig(text, "剪贴板")
+    }
+
+    fun importProxyPinFromFile() {
+        scope.launch {
+            val picked = platform.openTextFile(listOf("json", "txt")) ?: return@launch
+            importProxyPinConfig(picked.second, "文件「${picked.first}」")
+        }
+    }
+
+    fun importProxyPinFromText() {
+        if (importProxyPinConfig(proxyPinImportText, "粘贴内容") > 0) proxyPinImportText = ""
     }
 
     /** Copies the saved devices back out as an mcpServers JSON (tokens included only if known). */

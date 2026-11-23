@@ -398,6 +398,46 @@ AI 面板的四个模型通道（Gemini / OpenAI 兼容 / Ollama / LM Studio）�
 - 已提交 `feat(ai): 拉取并选择大模型` 并 push master；**按用户要求未打 tag、未发版**。
 - 测试期间 OPPO 一次自动熄屏（04:27:56，mCurrentFocus → NotificationShade）导致一帧锁屏截图，`KEYCODE_WAKEUP` + 上滑解锁后 app 恢复前台，未影响任何结果。
 
+## 11. 「ProxyPin MCP 配置导入」（2026-11-24，已 commit + push master，未打 tag）
+
+### 11.1 需求
+
+AI 面板的 ProxyPin 地址 / Token 不再需要手抄：可从剪贴板、文件或粘贴内容导入（mcpServers JSON、完整 URL、纯 IP 均可，只写 IP 时补 ProxyPin 的默认端口 9000 与 `/mcp`）。多台设备时优先取名字或 URL 含「proxypin」的条目，否则取第一台并 toast 告知。令牌与真机导入一致：仅存内存，绝不持久化。安全校验先行：地址必须过 `UrlSecurity.validateEndpointUrl(url, allowLocal = true)` 才写入状态；含 CR/LF 的令牌在 `ProxyPinBridge.configure` 内被 `buildAuthorizationHeader` 以 INVALID_TOKEN 拒绝，均以界面提示呈现，绝不崩溃。
+
+### 11.2 实现
+
+| 文件 | 改动 |
+| --- | --- |
+| `shared/src/commonMain/…/bridge/McpConfigParser.kt` | `parse()` 委托给新增的 `parseWithDefaultPort(text, defaultPort)`：只写 IP/主机名时补的端口由参数决定（真机 AutoJs6 仍是默认 9637，ProxyPin 传 9000），其余行为不变。`fromJson` / `server` / `fromText` / `normalizeUrl` 全链路把 defaultPort 传下去；`fromText` 与 `normalizeUrl` 的参数默认值仍是 `DEFAULT_PORT`，真机调用方零改动 |
+| `shared/src/commonMain/…/bridge/ProxyPinImport.kt` | 新增纯函数对象：`DEFAULT_PORT = 9000`（来源是 StudioState 的 `proxyPinUrl` 默认值 `http://127.0.0.1:9000/mcp`，仓库无单独常量）；`pick(text): McpServerConfig?` 解析后优先挑名字或 URL 含「proxypin」（不区分大小写）的条目，否则第一台，解析不到返回 null |
+| `shared/src/commonMain/…/ui/StudioState.kt` | 新增 `proxyPinImportText` 状态与 `importProxyPinConfig(text, source): Int`：`ProxyPinImport.pick` → 空结果 toast「$source 里没有找到 ProxyPin MCP 地址（支持 mcpServers JSON、URL、IP）」；`UrlSecurity.validateEndpointUrl(url, allowLocal = true)` 不通过则 toast 原因且不写任何状态；多台时 toast「检测到 N 个，已使用：xxx」；写 `proxyPinUrl` / `proxyPinToken`（仅内存，无 rememberToken/persistTokens）后调 `proxyPin.configure(url, token, allowLocal = true)`，`BridgeException`（INVALID_TOKEN 等）捕获后 toast 不外抛。另有剪贴板 / 文件（仅桌面 `supportsFileDialogs`）/ 粘贴内容三个入口 |
+| `shared/src/commonMain/…/ui/AiTrafficPane.kt` | HTTP JSONRPC 模式的 ProxyPin 地址 / Token 输入框下方新增导入区：标题行 + 「从剪贴板导入」「从文件导入」按钮（FlowRow，与真机导入同款 SmallButton）+ 可展开粘贴框（InlineField，2–6 行）+ 「导入粘贴内容」「清空」 |
+| `shared/src/jvmTest/…/ProxyPinImportTest.kt` | 新增 7 项回归（见 11.3） |
+
+### 11.3 测试（ProxyPinImportTest，全部通过）
+
+| 项 | 断言 |
+| --- | --- |
+| 纯 IP → 9000 + `/mcp` | `192.168.1.8` → `http://192.168.1.8:9000/mcp`；显式端口 `192.168.1.8:8765` 不覆盖 |
+| 真机默认端口不变 | `McpConfigParser.parse("192.168.1.6")` 仍是 `http://192.168.1.6:9637/mcp` |
+| proxypin 优先且令牌随行 | autojs6 + proxypin 两台，pick 返回 proxypin 那台及其 token |
+| 大小写不敏感 / 无匹配取第一台 | `ProxyPin-Desktop` 被选中；都不含 proxypin 时取 a 不取 b |
+| SSRF userinfo 拦截 | `http://x@169.254.169.254/mcp`：pick 原样返回（校验在 StudioState 层），`UrlSecurity.validateEndpointUrl(url, allowLocal=true)` 拒绝且 reason 含「用户信息」→ 状态不写入 |
+| CR/LF 令牌不崩 | `ProxyPinBridge.configure(url, "abc\r\ndef", allowLocal=true)` 抛 `BridgeException`（INVALID_TOKEN 路径，`McpClient.buildAuthorizationHeader` 的控制字符检查），runCatching 捕获；正常令牌 configure 成功 |
+| 空与垃圾文本 | 空串、`hello world`、`{"mcpServers":{"x":{"command":"npx"}}}`（无 url）都返回 null |
+
+### 11.4 验证
+
+- `./gradlew :shared:jvmTest`：**206 项全部通过**（原 199 + 新增 7），0 失败。
+- `./gradlew :desktop:compileKotlinJvm`：BUILD SUCCESSFUL。
+- `./gradlew :androidApp:assembleDebug`：BUILD SUCCESSFUL。
+
+### 11.5 交付说明
+
+- `docs/release-notes.md` v1.0.2「### 其他」新增「ProxyPin MCP 配置可从剪贴板、文件或粘贴内容导入，与真机连接一致」。
+- 已提交 `feat(proxypin): 导入 MCP 配置` 并 push master；**按用户要求未打 tag、未发版**。
+- ProxyPin 默认端口 9000 取自 StudioState `proxyPinUrl` 的默认值 `http://127.0.0.1:9000/mcp`，仓库中并无单独的「ProxyPin 默认端口」常量（本次新增的 `ProxyPinImport.DEFAULT_PORT` 是第一处显式常量）。
+
 ### 9.5 结论
 
 a–f 六项全部通过（两台设备互为补充：Meizu 静态项，OPPO 交互项）。覆盖安装后旧项目数据完好，模拟运行完整走完，连接失败与 SSRF 拦截均以界面提示呈现且无崩溃，默认界面无 Local Bridge。测试全程未改代码、未 git commit/push。

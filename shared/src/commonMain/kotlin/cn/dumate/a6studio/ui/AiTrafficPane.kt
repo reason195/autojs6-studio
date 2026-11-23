@@ -38,6 +38,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.dumate.a6studio.ai.LlmProviderId
 import cn.dumate.a6studio.bridge.McpTransport
+import cn.dumate.a6studio.ui.fields.InlineField
+import cn.dumate.a6studio.ui.panes.SmallButton
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -158,6 +160,26 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth()
                     )
+                    // 导入：与「真机」页签同一套入口，但只挑 ProxyPin 那台（默认端口 9000）。
+                    Text("导入 ProxyPin 配置（mcpServers JSON / URL / IP）", fontSize = 11.sp, color = Palette.textDim)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SmallButton("从剪贴板导入", primary = true) { state.importProxyPinFromClipboard() }
+                        if (state.platformRef.supportsFileDialogs) {
+                            SmallButton("从文件导入") { state.importProxyPinFromFile() }
+                        }
+                    }
+                    InlineField(
+                        state.proxyPinImportText, { state.proxyPinImportText = it },
+                        placeholder = "或粘贴到这里：mcpServers JSON / http://IP:9000/mcp 令牌 / 只写 IP",
+                        mono = true, singleLine = false, minLines = 2, maxLines = 6,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (state.proxyPinImportText.isNotBlank()) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            SmallButton("导入粘贴内容", primary = true) { state.importProxyPinFromText() }
+                            SmallButton("清空") { state.proxyPinImportText = "" }
+                        }
+                    }
                 }
 
                 OutlinedTextField(

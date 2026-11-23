@@ -33,13 +33,19 @@ object McpConfigParser {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    fun parse(text: String): List<McpServerConfig> {
+    fun parse(text: String): List<McpServerConfig> = parseWithDefaultPort(text, DEFAULT_PORT)
+
+    /**
+     * [parse] 的参数化版本：只写 IP/主机名时补的端口由 [defaultPort] 决定
+     * （真机 AutoJs6 是 9637，ProxyPin 是 9000）。其余行为与 [parse] 完全一致。
+     */
+    fun parseWithDefaultPort(text: String, defaultPort: Int): List<McpServerConfig> {
         val out = mutableListOf<McpServerConfig>()
         val (objects, rest) = splitJson(text)
         objects.forEach { raw ->
-            runCatching { json.parseToJsonElement(raw) }.getOrNull()?.let { fromJson(it, out) }
+            runCatching { json.parseToJsonElement(raw) }.getOrNull()?.let { fromJson(it, out, defaultPort) }
         }
-        fromText(rest, out)
+        fromText(rest, out, defaultPort)
         // Same address twice (exported twice, or pasted JSON + the URL again): keep the entry
         // that carries a token, else the first one.
         return out.groupBy { normalizeUrl(it.url) }
@@ -48,15 +54,15 @@ object McpConfigParser {
 
     // ---- JSON -------------------------------------------------------------------------------
 
-    private fun fromJson(el: JsonElement, out: MutableList<McpServerConfig>) {
+    private fun fromJson(el: JsonElement, out: MutableList<McpServerConfig>, defaultPort: Int) {
         when (el) {
-            is JsonArray -> el.forEach { fromJson(it, out) }
+            is JsonArray -> el.forEach { fromJson(it, out, defaultPort) }
             is JsonObject -> {
                 val group = (el["mcpServers"] ?: el["servers"] ?: el["mcp_servers"]) as? JsonObject
                 if (group != null) {
-                    group.forEach { (name, cfg) -> (cfg as? JsonObject)?.let { server(name, it)?.let(out::add) } }
+                    group.forEach { (name, cfg) -> (cfg as? JsonObject)?.let { server(name, it, defaultPort)?.let(out::add) } }
                 } else {
-                    server("", el)?.let(out::add)
+                    server("", el, defaultPort)?.let(out::add)
                 }
             }
             else -> Unit
@@ -66,14 +72,14 @@ object McpConfigParser {
     private fun str(o: JsonObject, vararg keys: String): String =
         keys.firstNotNullOfOrNull { k -> (o[k] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() } }.orEmpty()
 
-    private fun server(name: String, o: JsonObject): McpServerConfig? {
+    private fun server(name: String, o: JsonObject, defaultPort: Int): McpServerConfig? {
         val url = str(o, "url", "serverUrl", "endpoint", "baseUrl")
         if (url.isEmpty()) return null
         val headers = o["headers"] as? JsonObject
         val auth = headers?.let { h -> h.entries.firstOrNull { it.key.equals("Authorization", true) }?.value }
             ?.let { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
         val token = stripBearer(auth.ifEmpty { str(o, "token", "apiKey", "bearer", "authorization") })
-        return McpServerConfig(name.ifEmpty { str(o, "name", "title") }, normalizeUrl(url), token)
+        return McpServerConfig(name.ifEmpty { str(o, "name", "title") }, normalizeUrl(url, defaultPort), token)
     }
 
     /**
@@ -121,7 +127,7 @@ object McpConfigParser {
     private val hostRe = Regex("""^((?:\d{1,3}\.){3}\d{1,3}|localhost)(?::(\d{2,5}))?(/\S*)?$""", RegexOption.IGNORE_CASE)
     private val kvRe = Regex("""(\w+)\s*[=:]\s*("[^"]*"|\S+)""")
 
-    private fun fromText(text: String, out: MutableList<McpServerConfig>) {
+    private fun fromText(text: String, out: MutableList<McpServerConfig>, defaultPort: Int = DEFAULT_PORT) {
         var last: Int = -1 // index in out of the last device read from text, for a token on the next line
         for (rawLine in text.lines()) {
             val line = rawLine.trim().trim(',', ';')
@@ -145,7 +151,7 @@ object McpConfigParser {
             val after = line.substringAfter(url, "").trim()
             val bare = after.split(Regex("\\s+")).firstOrNull { it.isNotEmpty() && !it.contains('=') && !it.contains(':') && it.length >= 8 }
             val token = stripBearer(tokenFromKv ?: bare.orEmpty())
-            out += McpServerConfig(kv["name"].orEmpty(), normalizeUrl(url), token)
+            out += McpServerConfig(kv["name"].orEmpty(), normalizeUrl(url, defaultPort), token)
             last = out.lastIndex
         }
     }
@@ -155,14 +161,14 @@ object McpConfigParser {
     fun stripBearer(s: String): String = s.trim().removePrefix("Bearer ").removePrefix("bearer ").trim()
 
     /** `192.168.1.6` → `http://192.168.1.6:9637/mcp`; full URLs only lose a trailing slash. */
-    fun normalizeUrl(raw: String): String {
+    fun normalizeUrl(raw: String, defaultPort: Int = DEFAULT_PORT): String {
         val s = raw.trim().trimEnd('/', ',', ';', ')', '"', '\'')
         if (s.startsWith("http://", true) || s.startsWith("https://", true)) {
             val afterScheme = s.substringAfter("://")
             return if (afterScheme.contains('/')) s else "$s/mcp"
         }
         val m = hostRe.matchEntire(s) ?: return s
-        val port = m.groupValues[2].ifEmpty { DEFAULT_PORT.toString() }
+        val port = m.groupValues[2].ifEmpty { defaultPort.toString() }
         val path = m.groupValues[3].ifEmpty { "/mcp" }
         return "http://${m.groupValues[1]}:$port$path"
     }
