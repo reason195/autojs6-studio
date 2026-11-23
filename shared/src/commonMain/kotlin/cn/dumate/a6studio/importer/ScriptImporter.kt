@@ -187,7 +187,7 @@ object ScriptImporter {
         /** Maps one already-trimmed statement, or returns null when it is not recognised. */
         fun mapStatement(stmt: String): Block? =
             rules.firstNotNullOfOrNull { rule ->
-                rule.regex.matchEntire(stmt)?.let { rule.build(it) }
+                rule.regex.matchEntire(stmt)?.takeIf(::onlyPlainLiterals)?.let { rule.build(it) }
             }
 
         val scanner = Scanner()
@@ -247,6 +247,28 @@ object ScriptImporter {
     }
 
     /**
+     * S5: the rules capture string arguments with a lazy `(.*?)\1`, which also matched
+     * `toast("a" + n + "b")` (captured `a" + n + "b`), escapes like `"he said \"hi\""` and
+     * template strings with `${…}`. Turning those into a block with that text as a literal
+     * silently changed what the script does. Only map when every captured string is plain
+     * text; anything else stays verbatim in a rawJs block.
+     */
+    private fun onlyPlainLiterals(m: MatchResult): Boolean {
+        val groups = m.groupValues.drop(1)
+        val quoteMarks = setOf("\"", "'", "`")
+        val usesTemplate = groups.any { it == "`" }
+        return groups.all { g ->
+            when {
+                g in quoteMarks -> true
+                g.contains(BS[0]) -> false
+                g.any { it == '"' || it == SYM_SQUOTE || it == SYM_BACKTICK } -> false
+                usesTemplate && g.contains("\${") -> false
+                else -> true
+            }
+        }
+    }
+
+    /**
      * Splits a line into statements on semicolons that are not inside quotes or brackets.
      * Returns the line unchanged when it holds at most one statement.
      */
@@ -285,7 +307,10 @@ object ScriptImporter {
                 }
                 ';' -> {
                     if (depth == 0) {
-                        parts += cur.toString()
+                        // M14: keep the semicolon. Dropping it made raw chunks rely on automatic
+                        // semicolon insertion, which joins lines like `a = b` / `(f)()` into
+                        // `a = b(f)()`. The mapping rules accept an optional trailing `;`.
+                        parts += cur.append(';').toString()
                         cur.clear()
                     } else {
                         cur.append(ch)
