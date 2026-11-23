@@ -202,6 +202,8 @@ setInterval(function () {}, 1000);
                         "操作完在手机上停止脚本，再点「读取并生成」。"
                 )
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // M1: cancellation must propagate, or Stop/close never takes effect
         } catch (e: Exception) {
             update { it.copy(status = RecorderStatus.ERROR, note = "启动失败：${e.message}") }
         }
@@ -229,6 +231,8 @@ setInterval(function () {}, 1000);
                 )
             }
             events.size
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // M1: cancellation must propagate, or Stop/close never takes effect
         } catch (e: Exception) {
             update { it.copy(status = RecorderStatus.ERROR, note = "读取失败：${e.message}") }
             0

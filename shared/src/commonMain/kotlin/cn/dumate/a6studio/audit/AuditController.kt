@@ -151,6 +151,8 @@ class AuditController(
                     row.copy(status = AuditStatus.MULTIPLE, count = f.count, note = note, fix = fix)
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // M1: cancellation must propagate, or Stop/close never takes effect
         } catch (e: Exception) {
             row.copy(status = AuditStatus.ERROR, note = "体检失败：${e.message}")
         }

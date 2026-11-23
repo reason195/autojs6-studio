@@ -68,7 +68,17 @@ class StudioState(
     private val lenientJson = Json { ignoreUnknownKeys = true }
 
     val repo = ProjectRepo(storage)
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    // M2: without a handler, any exception that escapes a launch {} (a device reply in an
+    // unexpected shape, an engine bug) crashes the Android app. Log it and keep the UI alive.
+    val scope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main + kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
+            running = false
+            testsRunning = false
+            runControl = null
+            testControl = null
+            toast("内部错误：${e.message ?: e::class.simpleName}")
+        }
+    )
 
     // Timeouts are installed once here; McpClient overrides them per request via
     // HttpTimeoutCapability. Previously McpClient called http.config{} on every request, which
@@ -242,7 +252,8 @@ class StudioState(
         beginnerMode = on
         platform.writeTextFile(BEGINNER_MARKER, if (on) "1" else "0")
         // Beginner mode hides the advanced panes; never leave the user stuck on a hidden one.
-        if (on && pane !in listOf(Pane.CODE, Pane.RUN, Pane.HELP)) showPane(Pane.CODE)
+        // The beginner tab row is 运行 / 检查问题 / 帮助, so CODE is hidden too.
+        if (on && pane !in listOf(Pane.RUN, Pane.DIAG, Pane.HELP)) showPane(Pane.RUN)
     }
 
     fun openTemplates() { showTemplatePicker = true }
@@ -377,6 +388,15 @@ class StudioState(
         scope.launch {
             val result = try {
                 withContext(Dispatchers.Default) { engine.run(project, sink, control) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // M2/M3: StackOverflowError, OutOfMemoryError or an engine bug must still end
+                // the run and report it, or 运行 stays greyed out forever.
+                cn.dumate.a6studio.runtime.RunResult(
+                    status = "error", error = e.message ?: e::class.simpleName ?: "未知错误",
+                    logs = emptyList(), code = "", virtualMs = 0, sim = null
+                )
             } finally {
                 frameJob.cancel()
                 frames.value?.let { simNodes = it.first; simView = it.second }
@@ -446,6 +466,13 @@ class StudioState(
                 runStatusLevel = "err"
                 deviceStatusText = "真机：连接失败"
                 deviceStatusLevel = "err"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // M2: a malformed reply (e.g. .jsonObject on a JSON array) is not a BridgeException.
+                appendDevice("error", "真机返回无法解析：${e.message ?: e}")
+                runStatus = "真机返回异常"
+                runStatusLevel = "err"
             } finally {
                 running = false
             }
@@ -464,6 +491,11 @@ class StudioState(
         scope.launch {
             val results = try {
                 withContext(Dispatchers.Default) { engine.runTests(project, onlyIds, control = control) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                toast("测试运行失败：${e.message ?: e::class.simpleName}")
+                emptyList()
             } finally {
                 testControl = null
                 testsRunning = false
@@ -496,6 +528,8 @@ class StudioState(
                 deviceStatusText = "真机：${info.label}"
                 deviceStatusLevel = "ok"
                 repo.saveDevice(bridgeUrl, info.label)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // M1: cancellation must propagate, or Stop/close never takes effect
             } catch (e: Exception) {
                 appendDevice("error", describeBridgeFailure(e))
                 deviceStatusText = "真机：连接失败"
@@ -510,6 +544,8 @@ class StudioState(
             try {
                 val ms = bridge.ping()
                 appendDevice("ok", "Ping 正常（${ms}ms）")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // M1: cancellation must propagate, or Stop/close never takes effect
             } catch (e: Exception) {
                 appendDevice("error", "Ping 失败：${e.message}")
             }
@@ -523,6 +559,8 @@ class StudioState(
                 val text = bridge.uiDumpText(120, 20)
                 deviceLog = emptyList()
                 text.split('\n').take(80).forEach { appendDevice("debug", it) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // M1: cancellation must propagate, or Stop/close never takes effect
             } catch (e: Exception) {
                 appendDevice("error", "取界面树失败：${e.message}")
             }
@@ -667,6 +705,8 @@ class StudioState(
                 repo.setProjectDirect(p)
                 refreshAll()
                 toast("已导入：${p.name}")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // M1: cancellation must propagate, or Stop/close never takes effect
             } catch (e: Exception) {
                 toast("导入失败：${e.message}")
             }
@@ -910,6 +950,8 @@ class StudioState(
                 try {
                     recorder.fetchEvents()
                     fails = 0
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e // M1: cancellation must propagate, or Stop/close never takes effect
                 } catch (e: Exception) {
                     fails++
                     if (fails >= 3) break
