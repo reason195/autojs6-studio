@@ -109,4 +109,18 @@ class RunControlTest {
         sim.state.screen = "jd.mall"
         assertEquals("com.jingdong.app.mall", sim.state.packageName)
     }
+
+    @Test
+    fun `selector regex runs within wall-clock budget`() {
+        // M3：selector 的 textMatches/idMatches 用 Kotlin Regex；InterruptibleCharSequence
+        // 在 charAt 热循环里 piggyback checkLimits()，保证即使 Java regex 回溯也能被超时打断。
+        // 这里用普通模式验证包装不改变语义。
+        val sim = SimRuntime(control = RunControl(wallTimeoutMs = 300))
+        sim.state.tasks.clear()
+        sim.state.tasks += cn.dumate.a6studio.runtime.SimState.Task("t", "浏览会场", "得10京豆", false)
+        sim.state.screen = "jd.panel"
+        val (status, _) = sim.execute("""textMatches("浏览.*").exists()""")
+        assertEquals("finished", status)
+    }
 }
+

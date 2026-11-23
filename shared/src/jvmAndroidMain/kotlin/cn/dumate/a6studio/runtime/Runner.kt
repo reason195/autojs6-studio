@@ -12,15 +12,19 @@ object Runner {
     fun run(project: Project, sink: SimSink? = null, control: RunControl = RunControl()): RunResult {
         val code = CodeGen.code(project)
         val sim = SimRuntime(sink, control)
-        val (status, error) = sim.execute(code)
-        return RunResult(
-            status = status,
-            error = error,
-            logs = sim.state.logs.toList(),
-            code = code,
-            virtualMs = sim.state.clock,
-            sim = sim.state.stateView(1080, 2400)
-        )
+        try {
+            val (status, error) = sim.execute(code)
+            return RunResult(
+                status = status,
+                error = error,
+                logs = sim.state.logs.toList(),
+                code = code,
+                virtualMs = sim.state.clock,
+                sim = sim.state.stateView(1080, 2400)
+            )
+        } finally {
+            sim.close()
+        }
     }
 
     fun runTests(
@@ -36,17 +40,21 @@ object Runner {
                 return@map TestResult(t.id, t.name, ok = false, error = SimAbort.STOPPED_MESSAGE, logs = emptyList())
             }
             val sim = SimRuntime(sink, control)
-            // $run() replays the main program inside the same simulated device.
-            val harness = ScriptableHarness(sim, code)
-            harness.install()
-            val (status, error) = harness.executeTest(t.code)
-            TestResult(
-                id = t.id,
-                name = t.name,
-                ok = status == "finished",
-                error = error ?: "",
-                logs = sim.state.logs.toList()
-            )
+            try {
+                // $run() replays the main program inside the same simulated device.
+                val harness = ScriptableHarness(sim, code)
+                harness.install()
+                val (status, error) = harness.executeTest(t.code)
+                TestResult(
+                    id = t.id,
+                    name = t.name,
+                    ok = status == "finished",
+                    error = error ?: "",
+                    logs = sim.state.logs.toList()
+                )
+            } finally {
+                sim.close()
+            }
         }
     }
 }

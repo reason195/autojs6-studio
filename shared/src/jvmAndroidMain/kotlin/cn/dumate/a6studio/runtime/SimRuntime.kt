@@ -28,6 +28,28 @@ class SimAbort(val status: String, message: String) : Error(message) {
 }
 
 /**
+ * Wraps a [CharSequence] so Java regex backtracking cannot run forever: [java.util.regex]
+ * calls [charAt] in its hot loop, and we piggyback [checkLimits] every [CHECK_EVERY] chars.
+ * This covers textMatches/idMatches/... selectors (Kotlin Regex) — Rhino's own JS RegExp
+ * engine is separate and still needs a thread-level watchdog.
+ */
+private class InterruptibleCharSequence(
+    private val delegate: CharSequence,
+    private val checkLimits: () -> Unit
+) : CharSequence {
+    private var reads = 0
+    override val length: Int get() = delegate.length
+    override fun get(index: Int): Char {
+        if (reads++ and (CHECK_EVERY - 1) == 0) checkLimits()
+        return delegate[index]
+    }
+    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
+        InterruptibleCharSequence(delegate.subSequence(startIndex, endIndex), checkLimits)
+    override fun toString(): String = delegate.toString()
+    private companion object { const val CHECK_EVERY = 256 }
+}
+
+/**
  * Runs generated AutoJs6 scripts against [SimState] using Rhino — the same engine AutoJs6
  * uses. Selectors and nodes are exposed as native JS objects with attached functions so that
  * interop behaves exactly like the real AutoJs6 object graph.
@@ -41,6 +63,14 @@ class SimRuntime(
     private var cx: Context? = null
     private var depth = 0
     private var deadlineNanos = Long.MAX_VALUE
+    @Volatile private var poisoned = false
+    private val executorHolder = lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "a6-sim").apply { isDaemon = true }
+        }
+    }
+    private val executor get() = executorHolder.value
+    fun close() { if (executorHolder.isInitialized()) executorHolder.value.shutdownNow() }
 
     /**
      * Contexts from this factory call [checkLimits] every [INSTRUCTION_SLICE] interpreted
@@ -86,6 +116,52 @@ class SimRuntime(
     private fun clip(s: String) = if (s.length > 4000) s.substring(0, 4000) + "…" else s
 
     fun execute(source: String, target: Scriptable? = null): Pair<String, String?> {
+        if (poisoned) {
+            return "error" to "上一次脚本执行卡死在原生代码里，模拟器线程已废弃；请重新运行以新建运行时"
+        }
+        // Nested `$run()` already executes on the watchdog thread.
+        if (depth > 0) return executeDirectly(source, target)
+
+        val future = executor.submit<Pair<String, String?>> { executeDirectly(source, target) }
+        val budgetMs = control.wallTimeoutMs
+        val hardDeadline = if (budgetMs > 0) System.nanoTime() + (budgetMs + GRACE_MS) * 1_000_000L else Long.MAX_VALUE
+        var cancelDeadline = Long.MAX_VALUE
+        try {
+            while (true) {
+                if (control.cancelled && cancelDeadline == Long.MAX_VALUE) {
+                    cancelDeadline = System.nanoTime() + GRACE_MS * 1_000_000L
+                }
+                val deadline = minOf(hardDeadline, cancelDeadline)
+                val remainingMs = (deadline - System.nanoTime()) / 1_000_000L
+                if (remainingMs <= 0) break
+                try {
+                    return future.get(minOf(remainingMs, 250L), java.util.concurrent.TimeUnit.MILLISECONDS)
+                } catch (_: java.util.concurrent.TimeoutException) {
+                    // keep waiting; checkLimits() handles normal timeout/stop inside Rhino
+                }
+            }
+        } catch (e: java.util.concurrent.ExecutionException) {
+            val cause = e.cause ?: e
+            if (findSimExit(cause)) return "exited" to null
+            if (cause is SimAbort) return cause.status to cause.message
+            return "error" to (cause.message ?: cause.toString())
+        } catch (e: Exception) {
+            if (findSimExit(e)) return "exited" to null
+            return "error" to (e.message ?: e.toString())
+        }
+        // Script didn't return within grace period - likely stuck in Java regex/native code.
+        control.cancel()
+        try {
+            future.get(GRACE_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (_: Throwable) {
+            poisoned = true
+            log("error", "脚本在原生代码中卡死，执行线程已废弃；后续运行需新建模拟器")
+        }
+        val status = if (budgetMs > 0 && System.nanoTime() >= hardDeadline) SimAbort.TIMEOUT else SimAbort.STOPPED
+        return status to if (status == SimAbort.TIMEOUT) SimAbort.timeoutMessage(budgetMs) else SimAbort.STOPPED_MESSAGE
+    }
+
+    private fun executeDirectly(source: String, target: Scriptable? = null): Pair<String, String?> {
         // The time budget covers the outermost script; nested `$run()` shares it.
         if (depth == 0) {
             val budget = control.wallTimeoutMs
@@ -108,7 +184,13 @@ class SimRuntime(
             "exited" to null
         } catch (e: org.mozilla.javascript.WrappedException) {
             if (findSimExit(e)) return "exited" to null
-            "error" to explainJavaBlock(e.wrappedException?.message ?: e.message)
+            val we = e.wrappedException
+            if (we is SimAbort) {
+                if (depth > 1) throw we
+                log("error", we.message ?: we.status)
+                return we.status to we.message
+            }
+            "error" to explainJavaBlock(we?.message ?: e.message)
         } catch (e: org.mozilla.javascript.RhinoException) {
             "error" to explainJavaBlock((e.details() ?: e.message ?: "") + "（行 ${e.lineNumber()}）")
         } catch (e: Exception) {
@@ -295,7 +377,9 @@ class SimRuntime(
             put(s, name) { args, sc ->
                 val v = args.getOrNull(0)?.toString() ?: ""
                 val re = runCatching { Regex(v) }.getOrNull()
-                selector("$name(\"$v\")", listOf { n -> re != null && re.containsMatchIn(field(n)) }, sc)
+                selector("$name(\"$v\")", listOf { n ->
+                    re != null && re.containsMatchIn(InterruptibleCharSequence(field(n), ::checkLimits))
+                }, sc)
             }
         }
 
@@ -715,6 +799,10 @@ class SimRuntime(
     private companion object {
         /** Interpreted instructions between stop/timeout checks (~sub-millisecond). */
         const val INSTRUCTION_SLICE = 10_000
+        /** Grace period after wall-clock budget before abandoning a stuck native thread. */
+        const val GRACE_MS = 2_000L
+        /** Fallback budget label when abandoning a cancel-only run stuck in native code. */
+        const val DEFAULT_ABANDON_MS = 20_000L
 
         const val JAVA_INTEROP_HINT =
             "（模拟器不提供 Java 互操作，避免导入的脚本在电脑上执行任意 Java 代码；这段请在真机运行）"
