@@ -57,6 +57,15 @@ class ProjectRepo(private val storage: ProjectStorage) {
         private set
 
     /**
+     * Set when the stored project exists but could not be read. Saving is then refused, so the
+     * sample project shown in its place can never overwrite the user's file.
+     */
+    var saveBlockedReason: String? = null
+        private set
+
+    private var lastSavedJson: String? = null
+
+    /**
      * Loads the stored project. Returns a message for the user when the stored file could not be
      * used, or null when everything was fine.
      *
@@ -65,7 +74,16 @@ class ProjectRepo(private val storage: ProjectStorage) {
      * unreadable content is backed up first and the user is told where it went.
      */
     fun load(): String? {
-        val raw = try { storage.loadRaw() } catch (e: Exception) { null }
+        val raw = try {
+            storage.loadRaw()
+        } catch (e: Exception) {
+            // The file is there but unreadable (locked, permission, I/O error). Treating that as
+            // "no project" used to load the sample and overwrite the user's work on the next edit.
+            _projectState = Samples.exampleProject()
+            saveBlockedReason = "项目文件读取失败（${e.message ?: e}），为防止覆盖，本次不会自动保存。请检查文件后重启。"
+            return saveBlockedReason
+        }
+        saveBlockedReason = null
         if (raw.isNullOrBlank()) {
             _projectState = Samples.exampleProject()
             return null
@@ -104,13 +122,24 @@ class ProjectRepo(private val storage: ProjectStorage) {
      * Silently swallowing this meant "已保存" was shown while the file on disk was stale (full
      * disk, revoked SAF permission, locked file) — the user's work was gone on next launch.
      */
-    fun save(): Boolean = try {
-        storage.saveRaw(json.encodeToString(Project.serializer(), current))
-        lastSaveError = null
-        true
-    } catch (e: Exception) {
-        lastSaveError = e.message ?: e.toString()
-        false
+    fun save(): Boolean {
+        saveBlockedReason?.let {
+            lastSaveError = it
+            return false
+        }
+        return try {
+            val encoded = json.encodeToString(Project.serializer(), current)
+            // Edits call save() and StudioState.commit() saves again: skip identical writes.
+            if (encoded != lastSavedJson) {
+                storage.saveRaw(encoded)
+                lastSavedJson = encoded
+            }
+            lastSaveError = null
+            true
+        } catch (e: Exception) {
+            lastSaveError = e.message ?: e.toString()
+            false
+        }
     }
 
     fun toast(msg: String) { _toastState = msg }
@@ -123,6 +152,9 @@ class ProjectRepo(private val storage: ProjectStorage) {
      * for, so it is caught: losing one undo step is far better than losing the action.
      */
     fun snapshot(label: String) {
+        // Any other kind of edit ends a run of keystrokes in one field, so the next keystroke
+        // there gets its own undo point (updateParam sets lastEditedField again right after).
+        lastEditedField = null
         val encoded = try {
             json.encodeToString(Project.serializer(), current)
         } catch (e: Exception) {
@@ -332,13 +364,24 @@ class ProjectRepo(private val storage: ProjectStorage) {
     }
 
     fun updateParam(blockId: String, key: String, value: cn.dumate.a6studio.model.ParamValue, snapshot: Boolean = false) {
-        if (snapshot) snapshot("修改参数")
+        // Typing in a field calls this on every keystroke. One undo point per field being
+        // edited (not per keystroke, and not none at all) makes 撤销 revert just that edit
+        // instead of rolling back every earlier parameter change.
+        val field = blockId to key
+        if (snapshot || field != lastEditedField) snapshot("修改参数")
+        lastEditedField = field
         val body = TreeOps.replace(scopeBodyInternal(), blockId) { b ->
             b.copy(params = b.params + (key to value))
         }
         updateScopeBody(body)
         save()
     }
+
+    /** The field the last parameter edit went to; any other edit ends the coalescing run. */
+    private var lastEditedField: Pair<String, String>? = null
+
+    /** Call when focus leaves a field so the next edit to it starts a new undo step. */
+    fun endParamEdit() { lastEditedField = null }
 
     /** Applies a param change that may target a block in any scope (picker / audit / recorder). */
     fun patchParams(blockId: String, patch: Map<String, cn.dumate.a6studio.model.ParamValue>, label: String) {
