@@ -13,6 +13,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import cn.dumate.a6studio.bridge.DesktopMcpServer
 import cn.dumate.a6studio.model.DesktopProjectStorage
 import cn.dumate.a6studio.platform.Platform
 import cn.dumate.a6studio.runtime.RhinoRunEngine
@@ -23,6 +24,7 @@ import cn.dumate.a6studio.ui.DesktopStyle
 import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.FileDialog
 import java.awt.Frame
@@ -137,6 +139,12 @@ private class DesktopPlatform : Platform {
         Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
     }
 
+    override fun readClipboard(): String? = runCatching {
+        val cb = Toolkit.getDefaultToolkit().systemClipboard
+        if (!cb.isDataFlavorAvailable(java.awt.datatransfer.DataFlavor.stringFlavor)) null
+        else cb.getData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+    }.getOrNull()
+
     override fun setWindowTitle(title: String) { }
 }
 
@@ -149,6 +157,26 @@ fun main() = application {
             engineFactory = CIO,
             engine = RhinoRunEngine
         ).also { it.init() }
+    }
+    val mcpServer = remember {
+        val port = (System.getenv("A6STUDIO_MCP_PORT") ?: System.getProperty("a6studio.mcpPort"))
+            ?.toIntOrNull() ?: 0
+        runCatching {
+            DesktopMcpServer(
+                getProject = { state.repo.current },
+                setProject = { p ->
+                    state.scope.launch {
+                        state.repo.snapshot("外部 MCP 补丁")
+                        state.repo.setProjectDirect(p)
+                        state.refreshAll()
+                    }
+                },
+                port = port
+            ).also {
+                it.start()
+                state.attachLocalMcpEndpoint(it.endpointUrl)
+            }
+        }.getOrNull()
     }
 
     val widthDp: androidx.compose.ui.unit.Dp
@@ -186,7 +214,8 @@ fun main() = application {
 
     Window(
         onCloseRequest = {
-            // Release the coroutine scope and connection pool before the process exits.
+            // Release the local MCP server, coroutine scope and connection pool before exit.
+            runCatching { mcpServer?.stop() }
             state.dispose()
             exitApplication()
         },

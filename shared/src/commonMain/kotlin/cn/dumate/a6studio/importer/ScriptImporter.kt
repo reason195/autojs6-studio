@@ -165,6 +165,7 @@ object ScriptImporter {
 
     /** Maps [source] into a project: recognised statements become blocks, the rest is kept raw. */
     fun import(source: String, name: String): ImportResult {
+        FlowIrImporter.tryImport(source, name)?.let { return it }
         val body = mutableListOf<Block>()
         val notes = mutableListOf<String>()
         var mapped = 0

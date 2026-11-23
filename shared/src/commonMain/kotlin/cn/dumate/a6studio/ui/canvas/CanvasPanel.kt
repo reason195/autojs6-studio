@@ -36,6 +36,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.runtime.DisposableEffect
 import cn.dumate.a6studio.catalog.Catalog
 import cn.dumate.a6studio.catalog.ParamDef
 import cn.dumate.a6studio.catalog.ParamKind
@@ -73,7 +76,8 @@ fun CanvasPanel(
     beginner: Boolean = false,
     onTemplates: () -> Unit = {},
     onShowPalette: () -> Unit = {},
-    onShowGuide: () -> Unit = {}
+    onShowGuide: () -> Unit = {},
+    drag: PaletteDragState? = null
 ) {
     val scope = repo.currentScope
     val module = repo.currentModule()
@@ -100,7 +104,19 @@ fun CanvasPanel(
         }
     } else Modifier
 
-    LazyColumn(modifier.padding(horizontal = 16.dp, vertical = 14.dp).then(dotModifier)) {
+    val rootId = repo.scopeRootId()
+    if (drag != null) {
+        DisposableEffect(drag, rootId) { onDispose { drag.unregisterContainer(rootId, "body") } }
+    }
+    val target = drag?.target
+    LazyColumn(
+        modifier
+            .then(if (drag != null) Modifier.onGloballyPositioned {
+                drag.registerContainer(DropContainer(rootId, "body", body.size, it.boundsInRoot()))
+            } else Modifier)
+            .then(if (drag?.active == true && target?.parentId == rootId) Modifier.border(1.5.dp, P.accent.copy(alpha = 0.5f), RoundedCornerShape(8.dp)) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 14.dp).then(dotModifier)
+    ) {
         item {
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -147,6 +163,7 @@ fun CanvasPanel(
             }
         }
         items(count = body.size) { i ->
+            DropLine(drag, rootId, "body", i)
             BlockCard(
                 block = body[i],
                 repo = repo,
@@ -154,11 +171,27 @@ fun CanvasPanel(
                 selectedId = selectedId,
                 onPick = onPick,
                 onCommit = onCommit,
-                beginner = beginner
+                beginner = beginner,
+                drag = drag,
+                parentId = rootId,
+                slot = "body",
+                index = i
             )
             Spacer(Modifier.height(10.dp))
         }
+        item { DropLine(drag, rootId, "body", body.size) }
     }
+}
+
+/** Thin accent bar shown where a dragged palette block would land. */
+@Composable
+private fun DropLine(drag: PaletteDragState?, parentId: String, slot: String, index: Int) {
+    val t = drag?.target ?: return
+    if (!drag.active || t.parentId != parentId || t.slot != slot || t.index != index) return
+    Box(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp).height(3.dp)
+            .clip(RoundedCornerShape(2.dp)).background(P.accent)
+    )
 }
 
 @Composable
@@ -169,8 +202,15 @@ private fun BlockCard(
     selectedId: String?,
     onPick: (String, String, PickKind) -> Unit,
     onCommit: () -> Unit,
-    beginner: Boolean = false
+    beginner: Boolean = false,
+    drag: PaletteDragState? = null,
+    parentId: String = "root",
+    slot: String = "body",
+    index: Int = 0
 ) {
+    if (drag != null) {
+        DisposableEffect(drag, block.id) { onDispose { drag.unregisterCard(block.id) } }
+    }
     val def = Catalog.byType(block.type) ?: run {
         Text("未知积木：${block.type}", color = P.err, fontSize = 11.sp, modifier = Modifier.padding(8.dp))
         return
@@ -181,6 +221,9 @@ private fun BlockCard(
 
     Column(
         Modifier.fillMaxWidth()
+            .then(if (drag != null) Modifier.onGloballyPositioned {
+                drag.registerCard(DropCard(block.id, parentId, slot, index, it.boundsInRoot()))
+            } else Modifier)
             .clip(RoundedCornerShape(7.dp))
             .background(bg)
             .border(
@@ -242,59 +285,63 @@ private fun BlockCard(
             ParamRow(block, def.params, repo, onPick, onCommit, beginner = beginner)
         }
 
-        def.slots.forEach { slot ->
-            val kids = block.children[slot.key].orEmpty()
+        def.slots.forEach { slotDef ->
+            val kids = block.children[slotDef.key].orEmpty()
+            if (drag != null) {
+                DisposableEffect(drag, block.id, slotDef.key) {
+                    onDispose { drag.unregisterContainer(block.id, slotDef.key) }
+                }
+            }
+            val hot = drag?.active == true && drag.target?.parentId == block.id && drag.target?.slot == slotDef.key
             Column(
                 Modifier.fillMaxWidth().padding(start = 14.dp, top = 9.dp)
-                    .border(1.dp, P.borderSoft, RoundedCornerShape(6.dp))
+                    .then(if (drag != null) Modifier.onGloballyPositioned {
+                        drag.registerContainer(DropContainer(block.id, slotDef.key, kids.size, it.boundsInRoot()))
+                    } else Modifier)
+                    .border(if (hot) 1.5.dp else 1.dp, if (hot) P.accent else P.borderSoft, RoundedCornerShape(6.dp))
                     .padding(8.dp)
             ) {
-                Text("↳ ${slot.label}", fontSize = 10.sp, color = P.textDim)
-                if (kids.isEmpty()) {
+                Text("↳ ${slotDef.label}", fontSize = 10.sp, color = P.textDim)
+                if (kids.isEmpty() && !hot) {
                     Text("（空）", fontSize = 10.sp, color = P.textDim.copy(alpha = 0.6f), modifier = Modifier.padding(start = 4.dp, top = 3.dp))
                 }
-                kids.forEach { kid ->
-                    BlockCard(kid, repo, project, selectedId, onPick, onCommit, beginner)
+                kids.forEachIndexed { k, kid ->
+                    DropLine(drag, block.id, slotDef.key, k)
+                    BlockCard(kid, repo, project, selectedId, onPick, onCommit, beginner, drag, block.id, slotDef.key, k)
                     Spacer(Modifier.height(8.dp))
                 }
+                DropLine(drag, block.id, slotDef.key, kids.size)
             }
         }
     }
 }
 
 /**
- * 每张卡右侧以前排着 ↑ ↓ ⧉ ✕ 四个图标：一屏十张卡就是四十个点击目标，视觉噪音大、误触也多。
- * 现在收成一个 ⋯ 菜单（长按卡片拖动排序仍然可用，快捷键也还在）。
+ * 卡片右侧直接给出 ↑ ↓ ⧉ ✕，一次点击就能移动、复制、删除。曾经收进 ⋯ 菜单，但删除要点两下、
+ * 还得在弹出菜单里找，用户反馈不如直接摆出来。图标做成无边框的淡色小按钮，悬停/按下才显出底色，
+ * 删除用错误色，避免四个按钮同样醒目。
  */
 @Composable
 private fun BlockMenu(block: Block, repo: ProjectRepo, onCommit: () -> Unit) {
-    var open by remember(block.id) { mutableStateOf(false) }
-
-    @Composable
-    fun item(label: String, danger: Boolean = false, action: () -> Unit) {
-        DropdownMenuItem(
-            text = { Text(label, fontSize = 12.5.sp, color = if (danger) P.err else P.text) },
-            onClick = { open = false; action() },
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 9.dp)
-        )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CardAction("↑") { repo.shiftBlock(block.id, -1); onCommit() }
+        CardAction("↓") { repo.shiftBlock(block.id, 1); onCommit() }
+        CardAction("⧉") { repo.duplicateBlock(block.id); onCommit() }
+        CardAction("✕", danger = true) { repo.removeBlock(block.id); onCommit() }
     }
+}
 
-    Box {
-        Text(
-            "⋯",
-            fontSize = 14.sp,
-            color = P.textDim,
-            modifier = Modifier
-                .clip(RoundedCornerShape(5.dp))
-                .clickable { open = true }
-                .padding(horizontal = 8.dp, vertical = 2.dp)
-        )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            item("↑  上移") { repo.shiftBlock(block.id, -1); onCommit() }
-            item("↓  下移") { repo.shiftBlock(block.id, 1); onCommit() }
-            item("⧉  复制") { repo.duplicateBlock(block.id); onCommit() }
-            item("✕  删除", danger = true) { repo.removeBlock(block.id); onCommit() }
-        }
+/** One small borderless action on a block card (about 28dp, enough to tap on a phone). */
+@Composable
+private fun CardAction(glyph: String, danger: Boolean = false, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(28.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(glyph, fontSize = 13.sp, color = if (danger) P.err.copy(alpha = 0.85f) else P.textDim)
     }
 }
 

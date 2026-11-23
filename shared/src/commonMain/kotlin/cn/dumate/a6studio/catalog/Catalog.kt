@@ -19,6 +19,7 @@ object Catalog {
         Category("data", "数据 / 网络 / 文件", 0xFF3D8BD4),
         Category("debug", "调试与诊断", 0xFFD4A017),
         Category("jd", "京东领券中心（实战）", 0xFFD94F4F),
+        Category("kit", "护栏运行时（aj6_kit）", 0xFF0D9488),
         Category("module", "我的模块", 0xFF64748B),
         Category("raw", "原生代码", 0xFF7A8699)
     )
@@ -83,6 +84,7 @@ object Catalog {
         defData()
         defDebug()
         defJd()
+        defKit()
         defRaw()
         defModule()
     }
@@ -594,6 +596,137 @@ object Catalog {
                 "}",
                 "if (emptyRounds >= $zero) { log(\"收工：连续 \" + emptyRounds + \" 轮未发现京豆任务\"); } else { log(\"仍有任务，继续处理\"); }"
             ).joinToString("\n")
+        }
+    }
+
+    // ===================== 护栏运行时（aj6_kit） =====================
+    private fun defKit() {
+        val matchOpts = listOf(
+            SelectOption("contains", "包含"),
+            SelectOption("eq", "精确等于"),
+            SelectOption("regex", "正则")
+        )
+        val byOpts = listOf(
+            SelectOption("text", "文本 (text)"),
+            SelectOption("desc", "描述 (desc)"),
+            SelectOption("id", "控件 ID")
+        )
+        val resultOpts = listOf(
+            SelectOption("auto", "自动判定（有未完成报 WARN）"),
+            SelectOption("success", "强制成功 (SUCCESS)"),
+            SelectOption("warn", "警告 (WARN)"),
+            SelectOption("failed", "失败 (FAILED)")
+        )
+
+        def(
+            "kitBoot", "kit", "初始化护栏运行时 {name}",
+            listOf(
+                text("pkg", "目标包名", "com.jingdong.app.mall"),
+                text("name", "脚本名称", "京东任务"),
+                num("maxRuntimeMs", "总超时毫秒", 900000.0)
+            )
+        ) { b, c ->
+            val pkg = c.quote(c.str(b, "pkg").ifEmpty { "com.jingdong.app.mall" })
+            val name = c.quote(c.str(b, "name").ifEmpty { "京东任务" })
+            val maxMs = c.num(b, "maxRuntimeMs").toLong().let { if (it <= 0) 900000L else it }
+            listOf(
+                "var \$kit = Kit.boot({",
+                "  id: $name,",
+                "  name: $name,",
+                "  pkg: $pkg,",
+                "  maxRuntimeMs: $maxMs,",
+                "  risk: \"stop_and_notify\",",
+                "  riskyActivityRe: \"Settlement|Checkout|ConfirmOrder|OrderSubmit|Pay|Cart|trade|permissioncontroller|GrantPermissions\",",
+                "  forbiddenZones: [[2130, 2400]]",
+                "});"
+            ).joinToString("\n")
+        }
+
+        def("kitLaunch", "kit", "护栏拉起目标 App 并等前台") { _, _ ->
+            listOf(
+                "if (!\$kit.launch()) {",
+                "  \$kit.log(\"FAILED 未能将目标 App 拉到前台\");",
+                "  \$kit.finish(\"failed\");",
+                "  exit();",
+                "}"
+            ).joinToString("\n")
+        }
+
+        def(
+            "kitOpenDeepLink", "kit", "深链直达并等前台就绪",
+            listOf(text("url", "深链地址", "openapp.jdmobile://virtual"))
+        ) { b, c ->
+            val url = c.quote(c.str(b, "url"))
+            listOf(
+                "if (!\$kit.openDeepLink($url)) {",
+                "  \$kit.log(\"FAILED 深链打开失败或超时\");",
+                "  \$kit.finish(\"failed\");",
+                "  exit();",
+                "}"
+            ).joinToString("\n")
+        }
+
+        def("kitGuard", "kit", "执行风控与危险页拦截检查") { _, _ ->
+            listOf(
+                "if (!\$kit.guard()) {",
+                "  \$kit.log(\"风控或超时触发，安全停止\");",
+                "  \$kit.finish(\"failed\");",
+                "  exit();",
+                "}"
+            ).joinToString("\n")
+        }
+
+        def(
+            "kitWaitFor", "kit", "护栏等待可见控件 {value}",
+            listOf(
+                sel("by", "定位方式", "text", byOpts),
+                sel("match", "匹配模式", "contains", matchOpts),
+                text("value", "目标文案", "天天签到"),
+                num("timeoutMs", "超时毫秒", 15000.0)
+            )
+        ) { b, c ->
+            val by = c.quote(c.str(b, "by").ifEmpty { "text" })
+            val match = c.quote(c.str(b, "match").ifEmpty { "contains" })
+            val value = c.quote(c.str(b, "value"))
+            val ms = c.num(b, "timeoutMs").toLong().let { if (it <= 0) 15000L else it }
+            "if (!\$kit.waitFor({ by: $by, match: $match, value: $value, filters: { inScreen: true } }, $ms)) { \$kit.log(\"未等到控件: \" + $value); }"
+        }
+
+        def(
+            "kitClick", "kit", "护栏安全点击 {value}（bounds 中心）",
+            listOf(
+                sel("by", "定位方式", "text", byOpts),
+                sel("match", "匹配模式", "contains", matchOpts),
+                text("value", "目标文案", "去完成")
+            )
+        ) { b, c ->
+            val by = c.quote(c.str(b, "by").ifEmpty { "text" })
+            val match = c.quote(c.str(b, "match").ifEmpty { "contains" })
+            val value = c.quote(c.str(b, "value"))
+            "\$kit.click({ by: $by, match: $match, value: $value, filters: { inScreen: true } });"
+        }
+
+        def(
+            "kitWaitCountdown", "kit", "等倒计时归零 + {graceSec}s 余量后返回",
+            listOf(
+                num("minDwellSec", "无倒计时保底秒数", 12.0),
+                num("graceSec", "归零后余量秒数", 2.0)
+            )
+        ) { b, c ->
+            val minSec = c.num(b, "minDwellSec").toLong().let { if (it <= 0) 12L else it }
+            val graceSec = c.num(b, "graceSec").toLong().let { if (it < 0) 2L else it }
+            listOf(
+                "\$kit.waitCountdown({ minDwellSec: $minSec, graceSec: $graceSec });",
+                "\$kit.back();"
+            ).joinToString("\n")
+        }
+
+        def(
+            "kitFinish", "kit", "护栏收尾汇总（{result}）",
+            listOf(sel("result", "结束状态", "auto", resultOpts))
+        ) { b, c ->
+            val res = c.str(b, "result").ifEmpty { "auto" }
+            if (res == "auto") "\$kit.finish();" else "\$kit.finish(${c.quote(res)});"
         }
     }
 

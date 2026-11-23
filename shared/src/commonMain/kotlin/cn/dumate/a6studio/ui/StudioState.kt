@@ -3,11 +3,21 @@ package cn.dumate.a6studio.ui
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import cn.dumate.a6studio.ai.BlockPatch
+import cn.dumate.a6studio.ai.BlockPatchOp
+import cn.dumate.a6studio.ai.LlmClient
+import cn.dumate.a6studio.ai.LlmConfig
+import cn.dumate.a6studio.ai.LlmProviderId
+import cn.dumate.a6studio.ai.LlmRefineInput
+import cn.dumate.a6studio.ai.LlmRefineOutput
 import cn.dumate.a6studio.audit.AuditController
 import cn.dumate.a6studio.audit.AuditRow
 import cn.dumate.a6studio.bridge.BridgeException
 import cn.dumate.a6studio.bridge.DeviceInfo
 import cn.dumate.a6studio.bridge.McpClient
+import cn.dumate.a6studio.bridge.ProxyPinBridge
+import cn.dumate.a6studio.security.Redaction
+import cn.dumate.a6studio.security.RedactionReport
 import cn.dumate.a6studio.catalog.CodeGen
 import cn.dumate.a6studio.diagnose.Diagnose
 import cn.dumate.a6studio.diagnose.Issue
@@ -45,7 +55,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-enum class Pane { CODE, RUN, TEST, DIAG, DEVICE, HELP }
+enum class Pane { CODE, RUN, TEST, DIAG, DEVICE, AI, HELP }
 
 enum class Overlay { NONE, PICKER, AUDIT, RECORDER, TEMPLATES, GUIDE }
 
@@ -93,6 +103,33 @@ class StudioState(
         }
     }
     val bridge = McpClient(http)
+    val proxyPin = ProxyPinBridge(http)
+    val llmClient = LlmClient(http)
+
+    var llmProvider by mutableStateOf(LlmProviderId.AUTO)
+    var llmConfig by mutableStateOf(LlmConfig())
+    var proxyPinUrl by mutableStateOf("http://127.0.0.1:9000/mcp")
+    var proxyPinToken by mutableStateOf("")
+    var lastTrafficReport by mutableStateOf<RedactionReport?>(null)
+        private set
+    var lastRefineOutput by mutableStateOf<LlmRefineOutput?>(null)
+        private set
+    var aiBusy by mutableStateOf(false)
+        private set
+    var aiStatusMsg by mutableStateOf("")
+        private set
+    var localMcpEndpoint by mutableStateOf<String?>(null)
+        private set
+
+    fun attachLocalMcpEndpoint(url: String?) {
+        localMcpEndpoint = url
+    }
+
+    fun copyLocalMcpEndpoint() {
+        val url = localMcpEndpoint ?: return
+        platform.copyToClipboard(url)
+        toast("已复制本地 MCP 地址：$url")
+    }
 
     var pane by mutableStateOf(Pane.CODE)
         private set
@@ -331,6 +368,17 @@ class StudioState(
         repo.addBlock(type)
         commit()
         toast("已添加：${cn.dumate.a6studio.catalog.Catalog.cleanName(cn.dumate.a6studio.catalog.Catalog.byType(type)!!)}")
+    }
+
+    /** Drag from the palette onto the canvas. Shared by both panels so they see one gesture. */
+    val paletteDrag = cn.dumate.a6studio.ui.canvas.PaletteDragState()
+
+    /** Inserts a block where it was dropped (one undo step, selected afterwards). */
+    fun dropBlock(type: String, target: cn.dumate.a6studio.ui.canvas.DropTarget) {
+        val def = cn.dumate.a6studio.catalog.Catalog.byType(type) ?: return
+        repo.addBlock(type, parentId = target.parentId, slot = target.slot, index = target.index)
+        commit()
+        toast("已放入：${cn.dumate.a6studio.catalog.Catalog.cleanName(def)}")
     }
 
     fun removeSelected() {
@@ -645,13 +693,162 @@ class StudioState(
         toast("已切换到 ${url.removePrefix("http://").removePrefix("https://")}")
     }
 
+    // ---- MCP config import ---------------------------------------------------------------
+    /** Text in the "粘贴配置" box on the device pane. */
+    var mcpImportText by mutableStateOf("")
+
+    /**
+     * Saves every device found in [text], keeps their tokens (in memory, or on disk when
+     * 「记住令牌」 is on) and switches to the first one. Returns how many were imported.
+     */
+    fun importMcpConfig(text: String, source: String): Int {
+        val found = cn.dumate.a6studio.bridge.McpConfigParser.parse(text)
+        if (found.isEmpty()) {
+            toast("$source 里没有找到 MCP 地址（支持 mcpServers JSON、URL、IP，每行一台）")
+            return 0
+        }
+        found.forEach { c ->
+            repo.saveDevice(c.url, cn.dumate.a6studio.bridge.McpConfigParser.label(c))
+            if (c.token.isNotEmpty()) bridge.setAuthFor(c.url, c.token)
+        }
+        persistTokens()
+        val first = found.first()
+        updateBridgeUrl(first.url)
+        applyBridgeConfig()
+        val withToken = found.count { it.token.isNotEmpty() }
+        val names = found.joinToString("、") { cn.dumate.a6studio.bridge.McpConfigParser.label(it) }
+        appendDevice("sys", "从$source 导入 ${found.size} 台设备（$withToken 台带令牌）：$names")
+        if (withToken > 0 && !rememberToken) {
+            appendDevice("info", "令牌目前只在内存里，重启后需要重新导入；要保留请勾「记住令牌」")
+        }
+        toast("已导入 ${found.size} 台设备，当前：${cn.dumate.a6studio.bridge.McpConfigParser.label(first)}")
+        return found.size
+    }
+
+    fun importMcpFromClipboard() {
+        val text = platform.readClipboard()
+        if (text.isNullOrBlank()) { toast("剪贴板是空的：先在 AutoJs6 插件页复制配置"); return }
+        importMcpConfig(text, "剪贴板")
+    }
+
+    fun importMcpFromFile() {
+        scope.launch {
+            val picked = platform.openTextFile(listOf("json", "txt")) ?: return@launch
+            importMcpConfig(picked.second, "文件「${picked.first}」")
+        }
+    }
+
+    fun importMcpFromText() {
+        if (importMcpConfig(mcpImportText, "粘贴内容") > 0) mcpImportText = ""
+    }
+
+    /** Copies the saved devices back out as an mcpServers JSON (tokens included only if known). */
+    fun exportMcpConfig() {
+        val servers = buildJsonObject {
+            repo.current.bridge.devices.forEach { d ->
+                put(d.name.ifBlank { d.url }, buildJsonObject {
+                    put("url", d.url)
+                    bridge.authMap()[d.url]?.let { auth -> put("headers", buildJsonObject { put("Authorization", auth) }) }
+                })
+            }
+        }
+        platform.copyToClipboard(buildJsonObject { put("mcpServers", servers) }.toString())
+        toast("已复制 ${repo.current.bridge.devices.size} 台设备的 MCP 配置（含令牌，注意别发给别人）")
+    }
+
     // ---- project io ----------------------------------------------------------
     fun exportJs() {
         scope.launch {
             val code = CodeGen.code(repo.current)
+            val leaked = Redaction.assertNoPlaintextSecrets(code)
+            if (leaked.isNotEmpty()) {
+                toast("导出已拦截：脚本包含疑似明文凭据（${leaked.joinToString("、")}）")
+                return@launch
+            }
             val name = (repo.current.name.ifBlank { "autojs6" }) + ".js"
             val saved = platform.saveTextAs(name, code, "text/javascript")
             toast(if (saved != null) "已导出 JS" else "已取消导出")
+        }
+    }
+
+    fun fetchProxyPinTraffic() {
+        scope.launch {
+            aiBusy = true
+            aiStatusMsg = "正在连接 ProxyPin MCP 并拉取流量…"
+            try {
+                proxyPin.configure(proxyPinUrl, proxyPinToken, allowLocal = true)
+                val report = withContext(Dispatchers.Default) { proxyPin.fetchRedactedTraffic() }
+                lastTrafficReport = report
+                aiStatusMsg = "已获取并脱敏：屏蔽键 ${report.stats.redactedKeyCount}，掩码 ${report.stats.maskedPatternCount}"
+                toast("ProxyPin 流量已脱敏载入")
+            } catch (e: Exception) {
+                aiStatusMsg = "ProxyPin 拉取失败：${e.message}"
+                toast(aiStatusMsg)
+            } finally {
+                aiBusy = false
+            }
+        }
+    }
+
+    fun runAiRefine(goal: String) {
+        scope.launch {
+            aiBusy = true
+            aiStatusMsg = "正在提炼…"
+            try {
+                val traffic = lastTrafficReport?.redactedPayload ?: kotlinx.serialization.json.JsonNull
+                val out = withContext(Dispatchers.Default) {
+                    llmClient.refine(
+                        LlmRefineInput(
+                            goal = goal.ifBlank { "提取可执行任务按钮与推荐等待时长" },
+                            workflowName = repo.current.name,
+                            appPackage = "com.jingdong.app.mall",
+                            fallbackKeywords = listOf("去完成", "立即签到", "去浏览"),
+                            proxypinTraffic = traffic,
+                            provider = llmProvider
+                        ),
+                        llmConfig
+                    )
+                }
+                lastRefineOutput = out
+                aiStatusMsg = out.routingNote
+                toast("提炼完成（${out.providerUsed.label}）")
+            } catch (e: Exception) {
+                aiStatusMsg = "提炼失败：${e.message}"
+                toast(aiStatusMsg)
+            } finally {
+                aiBusy = false
+            }
+        }
+    }
+
+    fun applyRefinedToSelectedOrInsert() {
+        val out = lastRefineOutput ?: return
+        val keyword = out.refinedKeywords.firstOrNull() ?: return
+        val selId = repo.selectedId
+        val ops = if (selId != null) {
+            listOf(BlockPatchOp.UpdateParam(selId, "value", ParamValue.Text(keyword)))
+        } else {
+            listOf(
+                BlockPatchOp.AddBlock(
+                    cn.dumate.a6studio.model.newBlock(
+                        "kitClick",
+                        mapOf(
+                            "by" to ParamValue.Text("text"),
+                            "match" to ParamValue.Text("contains"),
+                            "value" to ParamValue.Text(keyword)
+                        )
+                    )
+                )
+            )
+        }
+        val res = BlockPatch.guardAndApply(repo.current, ops)
+        if (!res.accepted) {
+            toast(res.errors.firstOrNull() ?: "护栏拦截了修改")
+        } else {
+            repo.snapshot("AI 护栏回填")
+            repo.setProjectDirect(res.project)
+            refreshAll()
+            toast("已通过护栏回填关键词「$keyword」")
         }
     }
 
@@ -672,7 +869,7 @@ class StudioState(
      */
     fun importScript() {
         scope.launch {
-            val picked = platform.openTextFile(listOf("js", "txt")) ?: return@launch
+            val picked = platform.openTextFile(listOf("js", "json", "txt")) ?: return@launch
             val (fileName, content) = picked
             val name = fileName.substringBeforeLast('.')
             val result = cn.dumate.a6studio.importer.ScriptImporter.import(content, name)
@@ -691,10 +888,12 @@ class StudioState(
 
     fun importProject() {
         scope.launch {
-            val picked = platform.openTextFile(listOf("json"))
+            val picked = platform.openTextFile(listOf("json", "js"))
             if (picked == null) return@launch
             try {
-                val p = lenientJson.decodeFromString(
+                val fallbackName = picked.first.substringBeforeLast('.')
+                val irImported = cn.dumate.a6studio.importer.FlowIrImporter.tryImport(picked.second, fallbackName)
+                val p = irImported?.project ?: lenientJson.decodeFromString(
                     cn.dumate.a6studio.model.Project.serializer(), picked.second
                 )
                 // Every other destructive path snapshots first; without this, importing the wrong
@@ -861,10 +1060,28 @@ class StudioState(
         if (fixable.isEmpty()) { toast("没有可自动修好的选择器"); return }
         val patches = fixable.mapNotNull { row ->
             val fix = row.fix ?: return@mapNotNull null
-            row.blockId to mapOf(
-                "by" to ParamValue.Text(fix.first),
-                "value" to ParamValue.Text(fix.second)
-            )
+            val targetBlock = cn.dumate.a6studio.model.TreeOps.find(repo.current.root.children["body"].orEmpty(), row.blockId)
+                ?: repo.current.modules.firstNotNullOfOrNull { m ->
+                    cn.dumate.a6studio.model.TreeOps.find(m.children["body"].orEmpty(), row.blockId)
+                }
+            val paramMap = if (targetBlock?.type in setOf("kitWaitFor", "kitClick")) {
+                val (baseBy, matchMode) = when {
+                    fix.first.endsWith("Contains") -> fix.first.removeSuffix("Contains") to "contains"
+                    fix.first.endsWith("Matches") -> fix.first.removeSuffix("Matches") to "regex"
+                    else -> fix.first to "eq"
+                }
+                mapOf(
+                    "by" to ParamValue.Text(baseBy),
+                    "match" to ParamValue.Text(matchMode),
+                    "value" to ParamValue.Text(fix.second)
+                )
+            } else {
+                mapOf(
+                    "by" to ParamValue.Text(fix.first),
+                    "value" to ParamValue.Text(fix.second)
+                )
+            }
+            row.blockId to paramMap
         }
         repo.patchParamsBatch(patches, "体检修好选择器")
         val n = patches.size

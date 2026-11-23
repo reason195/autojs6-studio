@@ -1,6 +1,7 @@
 package cn.dumate.a6studio.ui
 
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.text.style.TextAlign
@@ -83,8 +84,8 @@ fun StudioApp(state: StudioState) {
             val wide = maxWidth >= 900.dp
             if (wide) {
                 Row(Modifier.fillMaxSize()) {
-                    PaletteColumn(state, Modifier.width(228.dp).fillMaxHeight())
-                    CanvasColumn(state, Modifier.weight(1f).fillMaxHeight())
+                    PaletteColumn(state, Modifier.width(228.dp).fillMaxHeight(), wideLayout = true)
+                    CanvasColumn(state, Modifier.weight(1f).fillMaxHeight(), wideLayout = true)
                     PaneColumn(state, Modifier.width(420.dp).fillMaxHeight())
                 }
             } else {
@@ -119,7 +120,30 @@ fun StudioApp(state: StudioState) {
     if (state.showTemplatePicker) TemplateOverlay(state)
     if (state.showGuide) GuideOverlay(state)
 
+    DragGhost(state)
     ToastHost(state)
+}
+
+/** Chip that follows the pointer while a palette block is dragged onto the canvas. */
+@Composable
+private fun DragGhost(state: StudioState) {
+    val drag = state.paletteDrag
+    val type = drag.draggingType ?: return
+    val def = cn.dumate.a6studio.catalog.Catalog.byType(type) ?: return
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val p = drag.pointer
+    val ok = drag.target != null
+    Text(
+        cn.dumate.a6studio.catalog.Catalog.cleanName(def) + if (ok) "" else "  （拖到画布上）",
+        fontSize = 11.5.sp,
+        color = if (ok) Palette.onAccent else Palette.text,
+        modifier = Modifier
+            .offset(with(density) { (p.x + 12f).toDp() }, with(density) { (p.y + 8f).toDp() })
+            .clip(RoundedCornerShape(7.dp))
+            .background(if (ok) Palette.accent else Palette.panelAlt)
+            .border(1.dp, if (ok) Palette.accent else Palette.border, RoundedCornerShape(7.dp))
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    )
 }
 
 @Composable
@@ -135,28 +159,25 @@ private fun TopBar(state: StudioState) {
         // 一屏只有一个主按钮。以前这里塞了 15 个同等权重的按钮，宽屏要横向滚动、窄屏要两行，
         // 用户每次都得在按钮堆里找目标；其余动作全收进「更多」菜单（键盘快捷键不变）。
         if (maxWidth < 820.dp) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            // 窄屏只留一行：标识（右下角小圆点表示真机状态）、项目名、撤销、更多、运行。
+            // 所有控件统一 36dp 高；撤销/更多是无边框图标按钮，不再是一排描边方块。
+            Row(
+                Modifier.fillMaxWidth().height(52.dp).padding(start = 10.dp, end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box {
                     BrandMark()
-                    Spacer(Modifier.width(8.dp))
-                    InlineField(
-                        value = name,
-                        onValueChange = { name = it; state.renameProject(it) },
-                        placeholder = "项目名称",
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Badge(state.deviceStatusText, badgeKindOf(state.deviceStatusLevel))
+                    StatusDot(state.deviceStatusLevel, Modifier.align(Alignment.BottomEnd))
                 }
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Spacer(Modifier.weight(1f))
-                    RunButton(state)
-                    Spacer(Modifier.width(8.dp))
-                    QuietAction("↶", "撤销") { state.undo() }
-                    Spacer(Modifier.width(8.dp))
-                    MoreMenu(state)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    PlainNameField(name) { name = it; state.renameProject(it) }
+                    Text(state.deviceStatusText, fontSize = 10.sp, color = Palette.textDim, maxLines = 1)
                 }
+                QuietAction("↶", "撤销") { state.undo() }
+                MoreMenu(state)
+                Spacer(Modifier.width(6.dp))
+                RunButton(state)
             }
         } else {
             Row(
@@ -176,14 +197,44 @@ private fun TopBar(state: StudioState) {
                     placeholder = "项目名称",
                     modifier = Modifier.width(200.dp)
                 )
+                Spacer(Modifier.width(18.dp))
+                // 宽屏：常用动作直接摆在顶栏，按「文件 | 检查 | 项目」分组，组间一条细竖线。
+                // 只在 ≥ 1200dp 时全部展开；中等宽度只放文件组，其余仍在 ⋯ 里。
+                if (this@BoxWithConstraints.maxWidth >= 1200.dp) {
+                    ToolbarGroup {
+                        ToolbarText("保存") { state.saveNow() }
+                        ToolbarText("导入") { if (state.beginnerMode) state.importProject() else state.importScript() }
+                        ToolbarText("导出 JS") { state.exportJs() }
+                    }
+                    ToolbarDivider()
+                    ToolbarGroup {
+                        if (state.beginnerMode) {
+                            ToolbarText("检查问题") { state.showPane(Pane.DIAG) }
+                        } else {
+                            ToolbarText("测试") { state.runTests() }
+                            ToolbarText("诊断") { state.showPane(Pane.DIAG) }
+                            ToolbarText("体检") { state.openAudit() }
+                            ToolbarText("录制") { state.openRecorder() }
+                        }
+                    }
+                    ToolbarDivider()
+                    ToolbarGroup {
+                        ToolbarText("模板") { state.openTemplates() }
+                        ToolbarText("示例") { state.loadExample() }
+                    }
+                } else {
+                    ToolbarGroup {
+                        ToolbarText("保存") { state.saveNow() }
+                        ToolbarText("导出 JS") { state.exportJs() }
+                    }
+                }
                 Spacer(Modifier.weight(1f))
-                RunButton(state)
-                Spacer(Modifier.width(6.dp))
-                QuietAction("↶", "撤销") { state.undo() }
-                Spacer(Modifier.width(6.dp))
-                MoreMenu(state)
-                Spacer(Modifier.width(10.dp))
                 Badge(state.deviceStatusText, badgeKindOf(state.deviceStatusLevel))
+                Spacer(Modifier.width(10.dp))
+                QuietAction("↶", "撤销") { state.undo() }
+                MoreMenu(state)
+                Spacer(Modifier.width(8.dp))
+                RunButton(state)
             }
         }
     }
@@ -201,34 +252,100 @@ private fun BrandMark() {
 @Composable
 private fun RunButton(state: StudioState, modifier: Modifier = Modifier) {
     val running = state.running
-    val cornerRadius = currentStudioStyle.shapeSm
-    Text(
-        if (running) "■ 停止" else "▶ 运行",
-        fontSize = 12.5.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = Palette.onAccent,
-        textAlign = TextAlign.Center,
-        modifier = modifier
-            .clip(RoundedCornerShape(cornerRadius))
-            .background(if (running) Palette.err.copy(alpha = 0.9f) else Palette.accent)
+    Box(
+        modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (running) Palette.err else Palette.accent)
             .clickable { if (running) state.stopRun() else state.run() }
-            .padding(horizontal = 14.dp, vertical = 6.dp)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            if (running) "■ 停止" else "▶ 运行",
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = Palette.onAccent
+        )
+    }
+}
+
+/**
+ * Toolbar action in the same style as the pane tabs (代码 / 运行 / 测试 …): small rounded box with a
+ * 1dp border, so every secondary button in the window reads as one family.
+ */
+@Composable
+fun OutlinedChip(label: String, active: Boolean = false, large: Boolean = false, onClick: () -> Unit) {
+    Text(
+        label,
+        fontSize = if (large) 13.sp else 11.sp,
+        // The top bar is 56dp tall: there the label is darker so it stays readable at a glance.
+        color = if (active || large) Palette.text else Palette.textDim,
+        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+        modifier = Modifier
+            .clip(RoundedCornerShape(if (large) 7.dp else 5.dp))
+            .background(if (active) Palette.panelAlt else Palette.panel)
+            .border(1.dp, Palette.border, RoundedCornerShape(if (large) 7.dp else 5.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = if (large) 13.dp else 9.dp, vertical = if (large) 7.dp else 4.dp)
     )
 }
 
-/** Secondary action with just a glyph: quieter than a labelled pill, still one click. */
+@Composable
+private fun ToolbarText(label: String, onClick: () -> Unit) = OutlinedChip(label, large = true, onClick = onClick)
+
+@Composable
+private fun ToolbarGroup(content: @Composable () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) { content() }
+}
+
+@Composable
+private fun ToolbarDivider() {
+    Box(Modifier.padding(horizontal = 10.dp).width(1.dp).height(22.dp).background(Palette.border))
+}
+
+/** Borderless round icon button, same 36dp height as the run button. */
 @Composable
 private fun QuietAction(glyph: String, hint: String, onClick: () -> Unit) {
-    Text(
-        glyph,
-        fontSize = 14.sp,
-        color = Palette.textDim,
-        modifier = Modifier
-            .clip(RoundedCornerShape(7.dp))
-            .background(Palette.panelAlt)
-            .border(1.dp, Palette.border, RoundedCornerShape(7.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 11.dp, vertical = 6.dp)
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(glyph, fontSize = 17.sp, color = Palette.text)
+    }
+}
+
+/** Device connection state as a dot on the logo, instead of a separate badge row. */
+@Composable
+private fun StatusDot(level: String, modifier: Modifier = Modifier) {
+    val c = when (level) {
+        "ok" -> Palette.ok
+        "err" -> Palette.err
+        "warn", "run" -> Palette.warn
+        else -> Palette.textDim
+    }
+    Box(
+        modifier.size(11.dp).clip(RoundedCornerShape(6.dp))
+            .background(Palette.panel).padding(2.dp)
+            .clip(RoundedCornerShape(4.dp)).background(c)
+    )
+}
+
+/** Project name that reads as a title until tapped (no box around it on the phone). */
+@Composable
+private fun PlainNameField(value: String, onChange: (String) -> Unit) {
+    androidx.compose.foundation.text.BasicTextField(
+        value = value,
+        onValueChange = onChange,
+        singleLine = true,
+        textStyle = androidx.compose.ui.text.TextStyle(
+            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Palette.text
+        ),
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(Palette.accent),
+        modifier = Modifier.fillMaxWidth()
     )
 }
 
@@ -373,24 +490,13 @@ private fun PaneTabs(state: StudioState) {
             Pane.TEST to "测试",
             Pane.DIAG to "诊断",
             Pane.DEVICE to "真机",
+            Pane.AI to "AI 抓包",
             Pane.HELP to "帮助"
         )
     }
     Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
         tabs.forEach { (pane, label) ->
-            val active = state.pane == pane
-            Text(
-                label,
-                fontSize = 10.5.sp,
-                color = if (active) Palette.text else Palette.textDim,
-                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (active) Palette.panelAlt else Color.Transparent)
-                    .border(if (active) 1.dp else 0.dp, Palette.border, RoundedCornerShape(4.dp))
-                    .clickable { state.showPane(pane) }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            )
+            OutlinedChip(label, active = state.pane == pane) { state.showPane(pane) }
         }
     }
 }
@@ -413,14 +519,19 @@ fun ToastHost(state: StudioState) {
 }
 
 @Composable
-private fun PaletteColumn(state: StudioState, modifier: Modifier) {
+private fun PaletteColumn(state: StudioState, modifier: Modifier, wideLayout: Boolean = false) {
     val project = state.repo.current
     Column(modifier.border(width = 1.dp, color = Palette.borderSoft).background(Palette.panel)) {
         PalettePanel(
             onAdd = { state.addBlock(it) },
             modifier = Modifier.weight(1f),
             beginner = state.beginnerMode,
-            onSwitchToAdvanced = { state.changeBeginnerMode(false) }
+            onSwitchToAdvanced = { state.changeBeginnerMode(false) },
+            // Drag only when palette and canvas are on screen together (wide layout). On the
+            // phone layout they are separate sheets, so there is nothing to drop onto.
+            drag = if (wideLayout) state.paletteDrag else null,
+            longPressDrag = state.platformRef.name == "android",
+            onDrop = { type, target -> state.dropBlock(type, target) }
         )
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
@@ -434,7 +545,7 @@ private fun PaletteColumn(state: StudioState, modifier: Modifier) {
 }
 
 @Composable
-private fun CanvasColumn(state: StudioState, modifier: Modifier) {
+private fun CanvasColumn(state: StudioState, modifier: Modifier, wideLayout: Boolean = false) {
     val project = state.repo.current
     val selected = state.repo.selectedId
     Column(modifier.background(Palette.bg)) {
@@ -442,12 +553,17 @@ private fun CanvasColumn(state: StudioState, modifier: Modifier) {
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            // 标签区占剩余宽度并在内部横向滚动。以前它没有 weight，horizontalScroll 会吃掉整行宽度，
+            // 把右侧的「+ 模块」挤出屏幕，模块多一点或手机上就看不到按钮了。
+            Row(
+                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 ScopeTabs(state)
             }
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
             if (state.statusHint.isNotEmpty()) {
-                Text(state.statusHint, fontSize = 10.sp, color = Palette.textDim, maxLines = 1)
+                Text(state.statusHint, fontSize = 10.sp, color = Palette.textDim, maxLines = 1, modifier = Modifier.widthIn(max = 160.dp))
                 Spacer(Modifier.width(8.dp))
             }
             SmallButton("+ 模块") {
@@ -467,7 +583,8 @@ private fun CanvasColumn(state: StudioState, modifier: Modifier) {
                 beginner = state.beginnerMode,
                 onTemplates = { state.openTemplates() },
                 onShowPalette = { state.mobileSheet = MobileSheet.PALETTE },
-                onShowGuide = { state.showGuide = true }
+                onShowGuide = { state.showGuide = true },
+                drag = if (wideLayout) state.paletteDrag else null
             )
         }
     }
@@ -484,6 +601,7 @@ private fun PaneColumn(state: StudioState, modifier: Modifier) {
                 Pane.TEST -> TestPane(state, Modifier.fillMaxSize())
                 Pane.DIAG -> DiagPane(state, Modifier.fillMaxSize(), beginner = state.beginnerMode)
                 Pane.DEVICE -> DevicePane(state, Modifier.fillMaxSize())
+                Pane.AI -> AiTrafficPane(state, Modifier.fillMaxSize())
                 Pane.HELP -> HelpPane(
                     Modifier.fillMaxSize(),
                     beginner = state.beginnerMode,
@@ -497,22 +615,30 @@ private fun PaneColumn(state: StudioState, modifier: Modifier) {
 
 @Composable
 private fun PhoneyTabs(state: StudioState) {
-    Row(Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = 8.dp, vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    // 分段控件：三段等宽、共用一块底色，读起来是「切换视图」，而不是三个独立按钮。
+    Row(
+        Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = 10.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(10.dp)).background(Palette.panelAlt).padding(3.dp)
+    ) {
         listOf(
             MobileSheet.CANVAS to "画布",
             MobileSheet.PALETTE to "积木",
             MobileSheet.PANE to "面板"
         ).forEach { (sheet, label) ->
             val active = state.mobileSheet == sheet
-            Text(
-                label,
-                fontSize = 11.sp,
-                color = if (active) Palette.onAccent else Palette.textDim,
-                modifier = Modifier.clip(RoundedCornerShape(4.dp))
-                    .background(if (active) Palette.accent else Palette.panelAlt)
-                    .clickable { state.mobileSheet = sheet }
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-            )
+            Box(
+                Modifier.weight(1f).height(30.dp).clip(RoundedCornerShape(8.dp))
+                    .background(if (active) Palette.panel else Color.Transparent)
+                    .clickable { state.mobileSheet = sheet },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    label,
+                    fontSize = 12.sp,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (active) Palette.text else Palette.textDim
+                )
+            }
         }
     }
 }

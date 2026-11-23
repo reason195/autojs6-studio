@@ -34,6 +34,7 @@ class SimState {
         "jd.coupon" to "com.jingdong.app.mall",
         "jd.panel" to "com.jingdong.app.mall",
         "jd.popup" to "com.jingdong.app.mall",
+        "jd.service" to "com.jingdong.app.mall",
         "jd.finance" to "com.jd.jrapp"
     )
 
@@ -79,6 +80,25 @@ class SimState {
             "jd.mall" -> {
                 push("京东"); push("首页", clickable = true)
                 push("我的", clickable = true); push("购物车", clickable = true)
+                push("领券中心", desc = "领券中心", clickable = true)
+                push("京东校园", desc = "京东校园", clickable = true)
+                push("看病买药", desc = "看病买药", clickable = true)
+                push("指数交易", desc = "指数交易", clickable = true)
+                push("京喜自营", desc = "京喜自营", clickable = true)
+                push("拍拍二手", desc = "拍拍二手", clickable = true)
+                push("9.9包邮", desc = "9.9包邮, 1元特价", clickable = true)
+                push("京东秒杀", desc = "京东秒杀", clickable = true)
+                push("签到", desc = "签到", clickable = true)
+            }
+            "jd.service" -> {
+                push("天天签到", desc = "天天签到", clickable = true)
+                push("立即签到", desc = "立即签到", clickable = true)
+                push("天降京豆", desc = "天降京豆", clickable = true)
+                push("看10秒领", desc = "看10秒领", clickable = true)
+                push("开心收下", desc = "开心收下", clickable = true)
+                push("立即刮卡", desc = "立即刮卡", clickable = true)
+                push("签到", desc = "签到", clickable = true)
+                push("去完成", desc = "去完成", clickable = true)
             }
             "jd.coupon" -> {
                 push("领券中心")
@@ -138,6 +158,16 @@ class SimState {
                 tasks.remove(t)
                 screen = "jd.popup"
                 add("info", "完成任务：${t.text}（${t.desc}）")
+                return true
+            }
+            screen == "jd.mall" && node.text in setOf("领券中心", "京东校园", "看病买药", "指数交易", "京喜自营", "拍拍二手", "9.9包邮", "京东秒杀") -> {
+                screen = "jd.service"
+                add("info", "进入频道：${node.text}")
+                return true
+            }
+            screen == "jd.service" && node.clickable -> {
+                if (node.text.contains("签到")) signed = true
+                add("info", "护栏点击动作：${node.text}")
                 return true
             }
         }

@@ -65,7 +65,15 @@ class AuditController(
         val out = mutableListOf<AuditRow>()
         fun add(b: Block, scope: String) {
             val p = b.params
-            val by = p["by"]?.asText() ?: ""
+            val rawBy = p["by"]?.asText() ?: ""
+            val match = p["match"]?.asText() ?: ""
+            val by = if (b.type in setOf("kitWaitFor", "kitClick") && rawBy in setOf("text", "desc", "id")) {
+                when (match) {
+                    "contains" -> "${rawBy}Contains"
+                    "regex" -> "${rawBy}Matches"
+                    else -> rawBy
+                }
+            } else rawBy
             val value = p["value"]?.asText() ?: ""
             if (by !in bySet || value.isBlank()) return
             val expr = p["expr"]?.asText()?.takeIf { it.isNotBlank() } ?: ""

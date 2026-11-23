@@ -17,6 +17,8 @@ interface Platform {
     suspend fun openTextFile(extensions: List<String>): Pair<String, String>?
 
     fun copyToClipboard(text: String)
+    /** Current clipboard text, or null when empty / not text / not available. */
+    fun readClipboard(): String? = null
     fun setWindowTitle(title: String)
 }
 

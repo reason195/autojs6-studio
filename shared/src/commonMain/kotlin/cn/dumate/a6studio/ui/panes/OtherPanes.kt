@@ -234,6 +234,7 @@ fun DiagPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolea
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
     val project = state.repo.current
@@ -271,6 +272,33 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
             }
             Spacer(Modifier.width(6.dp))
             SmallButton("保存当前") { state.saveCurrentDevice() }
+        }
+
+        // 导入：插件页「复制配置」→ 这里一键读剪贴板；也能选文件（mcp.txt / .json）或手动粘贴。
+        Spacer(Modifier.height(8.dp))
+        Text("导入 MCP 配置", fontSize = 11.sp, color = P.textDim)
+        Spacer(Modifier.height(4.dp))
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            SmallButton("从剪贴板导入", primary = true) { state.importMcpFromClipboard() }
+            if (state.platformRef.supportsFileDialogs) SmallButton("从文件导入") { state.importMcpFromFile() }
+            SmallButton("复制全部配置") { state.exportMcpConfig() }
+        }
+        Spacer(Modifier.height(6.dp))
+        InlineField(
+            state.mcpImportText, { state.mcpImportText = it },
+            placeholder = "或粘贴到这里：mcpServers JSON / http://IP:9637/mcp 令牌 / 只写 IP，每行一台",
+            mono = true, singleLine = false, minLines = 2, maxLines = 6,
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (state.mcpImportText.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallButton("导入粘贴内容", primary = true) { state.importMcpFromText() }
+                SmallButton("清空") { state.mcpImportText = "" }
+            }
         }
 
         Spacer(Modifier.height(10.dp))

@@ -132,6 +132,28 @@ object Diagnose {
                         add(Level.WARN, "任务循环体为空", "循环体里至少放「执行任务」或「跨 app 切回」", it)
                     }
                 }
+                "kitWaitFor", "kitClick" -> {
+                    if (s("value").isBlank()) {
+                        add(Level.ERROR, "护栏控件定位值为空", "空值无法定位目标节点；请填写要匹配的文本 / desc / id", it)
+                    }
+                    if (b.type == "kitWaitFor" && n("timeoutMs") <= 0) {
+                        add(Level.WARN, "护栏等待超时未设置", "建议设置为 5000~15000 毫秒", it)
+                    }
+                }
+                "kitOpenDeepLink" -> {
+                    if (s("url").isBlank()) {
+                        add(Level.ERROR, "深链地址为空", "请填写 openapp.jdmobile:// 或 https:// 活动深链", it)
+                    }
+                }
+                "kitBoot" -> {
+                    if (s("pkg").isBlank()) {
+                        add(Level.ERROR, "护栏目标包名为空", "请填写目标应用包名（如 com.jingdong.app.mall）", it)
+                    }
+                }
+            }
+
+            if (b.type.startsWith("kit") && b.type != "kitBoot" && items.none { x -> x.b.type == "kitBoot" }) {
+                add(Level.ERROR, "缺少「初始化护栏运行时」", "使用护栏积木前，需在脚本开头添加「初始化护栏运行时 (kitBoot)」以创建 \$kit 实例", it)
             }
 
             if (b.type in containerTypes && b.children.values.all { it.isEmpty() }) {
@@ -142,6 +164,11 @@ object Diagnose {
         if (items.any { it.b.type == "jdTaskLoop" } && items.none { it.b.type == "jdFinishGuard" }) {
             val last = items.lastOrNull { it.b.type == "jdTaskLoop" }
             add(Level.WARN, "缺少「收工判定」", "浮层首屏可能全是抽奖/券，0 任务要下滑扫描后再收工，否则会漏做京豆任务", last)
+        }
+
+        if (items.any { it.b.type == "kitBoot" } && items.none { it.b.type == "kitFinish" }) {
+            val lastKit = items.lastOrNull { it.b.type.startsWith("kit") }
+            add(Level.WARN, "护栏流程缺少「护栏收尾汇总」", "建议在末尾添加「护栏收尾汇总 (kitFinish)」以输出动作统计与 WARN/SUCCESS 判定", lastKit)
         }
 
         val seenClean = mutableMapOf<String, String>() // cleaned -> original name

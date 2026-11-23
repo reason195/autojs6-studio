@@ -3,6 +3,13 @@ package cn.dumate.a6studio.ui.palette
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.composed
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,11 +44,51 @@ import cn.dumate.a6studio.catalog.Friendly
 import cn.dumate.a6studio.ui.Palette as P
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.fields.SearchField
+import cn.dumate.a6studio.ui.canvas.PaletteDragState
 
 /** The handful of blocks almost every script starts with. */
 private val POPULAR = listOf(
     "clickNode", "waitText", "setTextNode", "sleep", "toast", "launchPackage", "pressBack", "swipe"
 )
+
+/**
+ * Lets a palette entry be dragged onto the canvas. A tap still adds the block (clickable stays
+ * on the same element); a drag reports root-coordinate pointer positions to [drag].
+ *
+ * Mouse: a plain drag starts it — no long press needed, and the wheel still scrolls the list.
+ * Touch: a long press starts it, otherwise every vertical swipe through the palette would grab
+ * a block instead of scrolling.
+ */
+private fun Modifier.paletteDraggable(
+    type: String,
+    drag: PaletteDragState?,
+    longPress: Boolean,
+    onDrop: (String, cn.dumate.a6studio.ui.canvas.DropTarget) -> Unit
+): Modifier = if (drag == null) this else composed {
+    // Root position of this item; kept across recompositions so the gesture callbacks see
+    // the latest value (the list can scroll while a drag is in progress).
+    val origin = remember { arrayOf(Offset.Zero) }
+    val finish = { drag.end()?.let { (t, target) -> onDrop(t, target) } }
+    this
+        .onGloballyPositioned { origin[0] = it.boundsInRoot().topLeft }
+        .pointerInput(type, longPress) {
+            if (longPress) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { local -> drag.start(type, origin[0] + local) },
+                    onDragEnd = { finish() },
+                    onDragCancel = { drag.cancel() },
+                    onDrag = { change, amount -> change.consume(); drag.move(amount) }
+                )
+            } else {
+                detectDragGestures(
+                    onDragStart = { local -> drag.start(type, origin[0] + local) },
+                    onDragEnd = { finish() },
+                    onDragCancel = { drag.cancel() },
+                    onDrag = { change, amount -> change.consume(); drag.move(amount) }
+                )
+            }
+        }
+}
 
 /**
  * Left rail: search, a few one-tap starters, then every block grouped by category.
@@ -54,7 +101,12 @@ fun PalettePanel(
     onAdd: (String) -> Unit,
     modifier: Modifier = Modifier,
     beginner: Boolean = false,
-    onSwitchToAdvanced: () -> Unit = {}
+    onSwitchToAdvanced: () -> Unit = {},
+    /** Null disables drag (e.g. the phone layout, where palette and canvas are separate sheets). */
+    drag: PaletteDragState? = null,
+    /** True on touch devices: a long press starts the drag so swipes keep scrolling. */
+    longPressDrag: Boolean = false,
+    onDrop: (String, cn.dumate.a6studio.ui.canvas.DropTarget) -> Unit = { _, _ -> }
 ) {
     var query by remember { mutableStateOf("") }
     // 默认全部收起：列表从「一屏 20 项」变成「一屏 10 个分类」。
@@ -89,7 +141,7 @@ fun PalettePanel(
             )
         }
         if (query.isEmpty() && popular.isNotEmpty()) {
-            PopularRow(popular, onAdd)
+            PopularRow(popular, onAdd, drag, longPressDrag, onDrop)
         }
         if (grouped.isEmpty()) {
             EmptyHint("没有匹配的积木", Modifier.padding(horizontal = 12.dp))
@@ -110,7 +162,7 @@ fun PalettePanel(
                 }
                 if (!isCollapsed) {
                     items(count = defs.size, key = { i -> "i-${cat.id}-${defs[i].type}" }) { idx ->
-                        PaletteItem(defs[idx], cat.color, beginner) { onAdd(defs[idx].type) }
+                        PaletteItem(defs[idx], cat.color, beginner, drag, longPressDrag, onDrop) { onAdd(defs[idx].type) }
                     }
                 }
             }
@@ -143,7 +195,10 @@ private fun chipLabel(def: BlockDef): String =
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun PopularRow(defs: List<BlockDef>, onAdd: (String) -> Unit) {
+private fun PopularRow(
+    defs: List<BlockDef>, onAdd: (String) -> Unit, drag: PaletteDragState?, longPress: Boolean,
+    onDrop: (String, cn.dumate.a6studio.ui.canvas.DropTarget) -> Unit
+) {
     Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
         Text("常用", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(bottom = 6.dp))
         FlowRow(
@@ -157,6 +212,7 @@ private fun PopularRow(defs: List<BlockDef>, onAdd: (String) -> Unit) {
                         .clip(RoundedCornerShape(7.dp))
                         .background(P.panelAlt)
                         .border(1.dp, P.border, RoundedCornerShape(7.dp))
+                        .paletteDraggable(def.type, drag, longPress, onDrop)
                         .clickable { onAdd(def.type) }
                         .padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -188,10 +244,14 @@ private fun CategoryHeader(category: Category, beginner: Boolean, collapsed: Boo
 }
 
 @Composable
-private fun PaletteItem(def: BlockDef, color: Long, beginner: Boolean, onClick: () -> Unit) {
+private fun PaletteItem(
+    def: BlockDef, color: Long, beginner: Boolean,
+    drag: PaletteDragState?, longPress: Boolean,
+    onDrop: (String, cn.dumate.a6studio.ui.canvas.DropTarget) -> Unit, onClick: () -> Unit
+) {
     val c = Color(color)
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick)
+        Modifier.fillMaxWidth().paletteDraggable(def.type, drag, longPress, onDrop).clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

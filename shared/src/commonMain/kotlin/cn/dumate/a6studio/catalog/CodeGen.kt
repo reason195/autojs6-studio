@@ -3,6 +3,7 @@ package cn.dumate.a6studio.catalog
 import cn.dumate.a6studio.model.Block
 import cn.dumate.a6studio.model.Project
 import cn.dumate.a6studio.model.StudioModule
+import cn.dumate.a6studio.runtime.Aj6KitRuntime
 
 /**
  * Emits AutoJs6 (Rhino) source from a project.
@@ -17,6 +18,9 @@ object CodeGen {
     fun code(project: Project, markers: Boolean = false): String {
         val ctx = GenContext(project, markers)
         val parts = mutableListOf(header(project))
+        if (usesKit(project)) {
+            parts += Aj6KitRuntime.SOURCE
+        }
         val modules = modulesCode(project, ctx)
         if (modules.isNotEmpty()) parts += modules
 
@@ -95,4 +99,13 @@ object CodeGen {
     private fun pad(n: Int) = n.toString().padStart(2, '0')
 
     fun moduleCallName(module: StudioModule): String = Js.moduleName(module.name)
+
+    private fun usesKit(project: Project): Boolean =
+        hasKitBlock(project.root.children["body"].orEmpty()) ||
+            project.modules.any { hasKitBlock(it.children["body"].orEmpty()) }
+
+    private fun hasKitBlock(blocks: List<Block>): Boolean =
+        blocks.any { b ->
+            b.type.startsWith("kit") || b.children.values.any { hasKitBlock(it) }
+        }
 }

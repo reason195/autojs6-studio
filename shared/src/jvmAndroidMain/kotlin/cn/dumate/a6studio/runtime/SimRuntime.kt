@@ -249,6 +249,7 @@ class SimRuntime(
         // explicitly install below (selectors, device stubs, etc.).
         val sc = context.initSafeStandardObjects(null, false)
         val s = sc as ScriptableObject
+        ScriptableObject.putProperty(s, "globalThis", s)
         scope = sc
         installSelectors(s)
         installDeviceAndApp(s)
@@ -260,8 +261,13 @@ class SimRuntime(
     // ---- function helpers ---------------------------------------------------
     private fun fn(body: (Array<Any>, Scriptable) -> Any?): BaseFunction =
         object : BaseFunction() {
-            override fun call(cxx: Context, sc: Scriptable, thisObj: Scriptable, args: Array<Any>): Any? =
+            override fun call(cxx: Context, sc: Scriptable, thisObj: Scriptable?, args: Array<Any>): Any? =
                 body(args, sc)
+        }.apply {
+            scope?.let {
+                parentScope = it
+                prototype = ScriptableObject.getFunctionPrototype(it)
+            }
         }
 
     private fun put(obj: ScriptableObject, name: String, body: (Array<Any>, Scriptable) -> Any?) {
@@ -328,8 +334,17 @@ class SimRuntime(
         return o
     }
 
-    private fun toNodeArray(nodes: List<SimNode>, sc: Scriptable): NativeArray =
-        makeArray(sc, nodes.map { nodeObject(it, sc) })
+    private fun toNodeArray(nodes: List<SimNode>, sc: Scriptable): NativeArray {
+        val list = nodes.map { nodeObject(it, sc) }
+        return makeArray(sc, list).also { arr ->
+            put(arr, "size") { _, _ -> list.size }
+            put(arr, "empty") { _, _ -> list.isEmpty() }
+            put(arr, "get") { a, _ ->
+                val idx = (a.getOrNull(0) as? Number)?.toInt() ?: -1
+                list.getOrNull(idx)
+            }
+        }
+    }
 
     private fun nodeObject(node: SimNode, sc: Scriptable): NativeObject {
         val o = NativeObject()
@@ -338,12 +353,20 @@ class SimRuntime(
         put(o, "id") { _, _ -> node.id }
         put(o, "className") { _, _ -> node.className }
         put(o, "clickable") { _, _ -> node.clickable }
-        put(o, "bounds") { _, ss ->
+        put(o, "bounds") { _, _ ->
             val b = NativeObject()
-            b.put("left", b, node.bounds[0])
-            b.put("top", b, node.bounds[1])
-            b.put("right", b, node.bounds[2])
-            b.put("bottom", b, node.bounds[3])
+            val l = node.bounds[0]
+            val t = node.bounds[1]
+            val r = node.bounds[2]
+            val bot = node.bounds[3]
+            b.put("left", b, l)
+            b.put("top", b, t)
+            b.put("right", b, r)
+            b.put("bottom", b, bot)
+            put(b, "centerX") { _, _ -> (l + r) / 2 }
+            put(b, "centerY") { _, _ -> (t + bot) / 2 }
+            put(b, "width") { _, _ -> r - l }
+            put(b, "height") { _, _ -> bot - t }
             b
         }
         put(o, "click") { _, _ ->
@@ -422,7 +445,7 @@ class SimRuntime(
         ScriptableObject.putProperty(s, "device", device)
 
         val app = NativeObject()
-        put(app, "launchPackage") { a, _ ->
+        val launchPkgFn: (Array<out Any?>) -> Any = { a ->
             val pkg = a.getOrNull(0)?.toString() ?: ""
             log("info", "启动应用 $pkg")
             when (pkg) {
@@ -432,6 +455,8 @@ class SimRuntime(
             publishRender()
             true
         }
+        put(app, "launchPackage") { a, _ -> launchPkgFn(a) }
+        put(app, "launch") { a, _ -> launchPkgFn(a) }
         // Real AutoJs6 scripts often launch via an intent instead of launchPackage
         // (measured on a user script: app.startActivity({data:"jdmobile://...", packageName:"com.jd.jrapp"})).
         put(app, "startActivity") { a, _ ->
@@ -456,7 +481,10 @@ class SimRuntime(
         put(app, "openUrl") { a, _ ->
             val url = a.getOrNull(0)?.toString() ?: ""
             log("info", "打开 URL $url")
-            if (url.contains("VAjs3vpay")) { state.screen = "jd.coupon"; publishRender() }
+            when {
+                url.contains("VAjs3vpay") -> { state.screen = "jd.coupon"; publishRender() }
+                url.contains("jd.com") || url.contains("jdmobile") -> { state.screen = "jd.service"; publishRender() }
+            }
             true
         }
         put(app, "kill") { a, _ -> log("info", "结束应用 ${a.getOrNull(0)}"); null }
@@ -482,6 +510,12 @@ class SimRuntime(
             state.clock += ms
             if (ms >= 1000) log("debug", "sleep ${ms}ms")
             null
+        }
+        val simStartEpoch = System.currentTimeMillis()
+        put(s, "__simNow") { _, _ -> (simStartEpoch + state.clock).toDouble() }
+        (ScriptableObject.getProperty(s, "Date") as? ScriptableObject)?.let { dateObj ->
+            runCatching { dateObj.setAttributes("now", 0) }
+            put(dateObj, "now") { _, _ -> (simStartEpoch + state.clock).toDouble() }
         }
         put(s, "toast") { a, _ ->
             val msg = a.getOrNull(0)?.toString() ?: ""

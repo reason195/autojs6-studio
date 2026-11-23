@@ -410,6 +410,11 @@ class McpClient(
         return McpToolResult(text = text, content = contents, isError = false)
     }
 
+    suspend fun listTools(timeoutMs: Long = 15_000): JsonElement {
+        ensureReady()
+        return rpc("tools/list", buildJsonObject { }, timeoutMs)
+    }
+
     // ---- convenience wrappers used by the UI --------------------------------
 
     suspend fun ping(): Long {

@@ -67,5 +67,12 @@ class AndroidPlatform(private val ctx: Context) : Platform {
         cm.setPrimaryClip(ClipData.newPlainText("AutoJs6 Studio", text))
     }
 
+    // Android 10+ only lets the foreground app read the clipboard; this is called from a
+    // button tap, so the app is in front.
+    override fun readClipboard(): String? = runCatching {
+        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(ctx)?.toString()
+    }.getOrNull()
+
     override fun setWindowTitle(title: String) { }
 }
