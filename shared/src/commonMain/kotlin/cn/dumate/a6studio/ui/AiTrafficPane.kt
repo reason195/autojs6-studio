@@ -1,7 +1,10 @@
 package cn.dumate.a6studio.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -15,6 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -26,6 +31,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -244,6 +250,32 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                     )
                 }
 
+                if (state.llmProvider == LlmProviderId.OLLAMA || state.llmProvider == LlmProviderId.LMSTUDIO) {
+                    OutlinedTextField(
+                        value = if (state.llmProvider == LlmProviderId.OLLAMA) state.llmConfig.ollamaBaseUrl else state.llmConfig.lmStudioBaseUrl,
+                        onValueChange = {
+                            state.llmConfig = if (state.llmProvider == LlmProviderId.OLLAMA) {
+                                state.llmConfig.copy(ollamaBaseUrl = it)
+                            } else {
+                                state.llmConfig.copy(lmStudioBaseUrl = it)
+                            }
+                        },
+                        label = { Text("${state.llmProvider.label.substringBefore("（")} Base URL（仅内存持有）", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                if (state.llmProvider != LlmProviderId.AUTO && state.llmProvider != LlmProviderId.DETERMINISTIC_RULES) {
+                    LlmModelRow(state, state.llmProvider)
+                } else if (state.llmProvider == LlmProviderId.AUTO) {
+                    Text(
+                        "自动路由按 Gemini → OpenAI 兼容 → 本地 的顺序尝试，各通道使用其已选模型",
+                        fontSize = 11.sp,
+                        color = Palette.textDim
+                    )
+                }
+
                 OutlinedTextField(
                     value = goal,
                     onValueChange = { goal = it },
@@ -320,5 +352,94 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                 }
             }
         }
+    }
+}
+
+/** 「模型」一行：手输框（直接写 config 字段）+「拉取模型」按钮 + 下拉选择已拉取的模型。 */
+@Composable
+private fun LlmModelRow(state: StudioState, pid: LlmProviderId) {
+    val currentModel = when (pid) {
+        LlmProviderId.GEMINI -> state.llmConfig.geminiModel
+        LlmProviderId.OPENAI_COMPATIBLE -> state.llmConfig.openAiModel
+        LlmProviderId.OLLAMA -> state.llmConfig.ollamaModel
+        LlmProviderId.LMSTUDIO -> state.llmConfig.lmStudioModel
+        else -> return
+    }
+    val onModelChange: (String) -> Unit = { value ->
+        state.llmConfig = when (pid) {
+            LlmProviderId.GEMINI -> state.llmConfig.copy(geminiModel = value)
+            LlmProviderId.OPENAI_COMPATIBLE -> state.llmConfig.copy(openAiModel = value)
+            LlmProviderId.OLLAMA -> state.llmConfig.copy(ollamaModel = value)
+            LlmProviderId.LMSTUDIO -> state.llmConfig.copy(lmStudioModel = value)
+            else -> state.llmConfig
+        }
+    }
+    val loading = state.llmModelsLoading == pid
+    val options = state.llmModelOptions[pid].orEmpty()
+    var expanded by remember { mutableStateOf(false) }
+
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        OutlinedTextField(
+            value = currentModel,
+            onValueChange = onModelChange,
+            label = { Text("模型（手输或拉取后选择）", fontSize = 11.sp) },
+            singleLine = true,
+            modifier = Modifier.weight(1f)
+        )
+        OutlinedButton(
+            onClick = { state.fetchLlmModels(pid) },
+            enabled = !loading && !state.aiBusy,
+            modifier = Modifier.padding(top = 6.dp)
+        ) {
+            Text(if (loading) "拉取中…" else "拉取模型", fontSize = 11.sp)
+        }
+    }
+
+    if (options.isNotEmpty()) {
+        Box {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Palette.panel)
+                    .clickable { expanded = true }
+                    .padding(horizontal = 8.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    if (currentModel in options.map { it.id }) "已拉取 ${options.size} 个模型，点此更换 ▾"
+                    else "已拉取 ${options.size} 个模型，点此选择 ▾",
+                    fontSize = 11.sp,
+                    color = Palette.text,
+                    modifier = Modifier.weight(1f)
+                )
+                Text("▾", fontSize = 9.sp, color = Palette.textDim)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { m ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(m.displayName, fontSize = 11.sp)
+                                if (m.displayName != m.id) {
+                                    Text(m.id, fontSize = 10.sp, color = Palette.textDim)
+                                }
+                            }
+                        },
+                        onClick = {
+                            expanded = false
+                            state.selectLlmModel(pid, m.id)
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    state.llmModelsError[pid]?.let { err ->
+        Text(err, fontSize = 11.sp, color = Palette.err)
     }
 }

@@ -7,6 +7,7 @@ import cn.dumate.a6studio.ai.BlockPatch
 import cn.dumate.a6studio.ai.BlockPatchOp
 import cn.dumate.a6studio.ai.LlmClient
 import cn.dumate.a6studio.ai.LlmConfig
+import cn.dumate.a6studio.ai.LlmModelInfo
 import cn.dumate.a6studio.ai.LlmProviderId
 import cn.dumate.a6studio.ai.LlmRefineInput
 import cn.dumate.a6studio.ai.LlmRefineOutput
@@ -114,6 +115,15 @@ class StudioState(
     var devMode by mutableStateOf(false)
     var llmProvider by mutableStateOf(LlmProviderId.AUTO)
     var llmConfig by mutableStateOf(LlmConfig())
+    /** 「拉取并选择模型」：每个通道拉回的模型清单（内存，不入工程文件）。 */
+    var llmModelOptions by mutableStateOf<Map<LlmProviderId, List<LlmModelInfo>>>(emptyMap())
+        private set
+    /** 正在拉取模型的通道（null = 没有进行中的拉取）。 */
+    var llmModelsLoading by mutableStateOf<LlmProviderId?>(null)
+        private set
+    /** 每个通道最近一次拉取失败的错误文案，界面红字显示。 */
+    var llmModelsError by mutableStateOf<Map<LlmProviderId, String>>(emptyMap())
+        private set
     var mcpTransport by mutableStateOf(McpTransport.HTTP_JSONRPC)
     var proxyPinUrl by mutableStateOf("http://127.0.0.1:9000/mcp")
     var proxyPinToken by mutableStateOf("")
@@ -1026,6 +1036,49 @@ class StudioState(
                 aiBusy = false
             }
         }
+    }
+
+    // ---- LLM 模型拉取与选择 --------------------------------------------------------------
+
+    /** 拉取当前通道的可用模型清单；成功写入 [llmModelOptions] 并 toast，失败写入 [llmModelsError]。 */
+    fun fetchLlmModels(pid: LlmProviderId) {
+        if (llmModelsLoading != null) return
+        scope.launch {
+            llmModelsLoading = pid
+            try {
+                val models = withContext(Dispatchers.Default) { llmClient.listModels(pid, llmConfig) }
+                llmModelOptions = llmModelOptions + (pid to models)
+                llmModelsError = llmModelsError - pid
+                if (models.isEmpty()) {
+                    aiStatusMsg = "${pid.label} 返回了空模型列表（当前模型不会被改动）"
+                    toast(aiStatusMsg)
+                } else {
+                    aiStatusMsg = "已拉取 ${models.size} 个模型（${pid.label}）"
+                    toast("已拉取 ${models.size} 个模型")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                llmModelsError = llmModelsError + (pid to (e.message ?: e::class.simpleName ?: "拉取失败"))
+                aiStatusMsg = "模型拉取失败（${pid.label}）：${e.message}"
+                toast(aiStatusMsg)
+            } finally {
+                llmModelsLoading = null
+            }
+        }
+    }
+
+    /** 把选中的模型 id 写进 llmConfig 对应通道的字段（仅内存，与 Key 一样不持久化）。 */
+    fun selectLlmModel(pid: LlmProviderId, modelId: String) {
+        if (modelId.isBlank()) return
+        llmConfig = when (pid) {
+            LlmProviderId.GEMINI -> llmConfig.copy(geminiModel = modelId)
+            LlmProviderId.OPENAI_COMPATIBLE -> llmConfig.copy(openAiModel = modelId)
+            LlmProviderId.OLLAMA -> llmConfig.copy(ollamaModel = modelId)
+            LlmProviderId.LMSTUDIO -> llmConfig.copy(lmStudioModel = modelId)
+            else -> return
+        }
+        toast("已选择模型：$modelId")
     }
 
     fun applyRefinedToSelectedOrInsert() {

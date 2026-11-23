@@ -28,6 +28,7 @@ CI 在打 tag 时把对应小节连同产物的 SHA-256 一起写进 GitHub Rele
 
 ### 其他
 
+- AI 面板可从 Gemini / OpenAI 兼容 / Ollama / LM Studio 拉取可用模型并选择，也可手动输入；Ollama / LM Studio 地址可在界面里修改
 - 安装包运行时补上 `jdk.httpserver` 等模块，本地 MCP 在 MSI 安装版里可用；启动失败会显示原因
 - 「Local Bridge」合成数据仅在开发者模式可见，带【合成数据】标记，且不能回填到积木
 - 若干轻微问题修复（详见 `docs/agent-reports/round-04.md`）

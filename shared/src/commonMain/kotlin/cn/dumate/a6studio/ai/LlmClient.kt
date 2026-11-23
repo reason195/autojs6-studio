@@ -6,6 +6,7 @@ import cn.dumate.a6studio.security.RedactionStats
 import cn.dumate.a6studio.security.UrlSecurity
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.timeout
+import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -52,6 +53,9 @@ data class LlmConfig(
     val lmStudioModel: String = "local-model",
     val allowLocalInference: Boolean = true
 )
+
+/** 拉取回来的一个可用模型。displayName 取接口返回的展示名（缺省就是 id）。 */
+data class LlmModelInfo(val id: String, val displayName: String = id, val note: String = "")
 
 data class LlmRefineInput(
     val goal: String,
@@ -107,6 +111,9 @@ class LlmClient(private val http: HttpClient) {
                 "必须严格按 JSON 格式返回结果，包含 refinedKeywords (string[])、recommendedBrowseWaitMs (integer)、" +
                 "branchConditions (array of {when, action, reason})、extractedApiHints (array of {endpoint, field, meaning})、" +
                 "scriptSnippet (string)。按钮候选词应按可执行优先级排序，排除“已完成”等终态词。"
+
+        /** Gemini 固定官方域名（安全策略豁免单独校验）；internal 仅供测试注入替换。 */
+        internal var geminiBaseUrl = "https://generativelanguage.googleapis.com"
     }
 
     suspend fun refine(input: LlmRefineInput, config: LlmConfig = LlmConfig()): LlmRefineOutput {
@@ -185,6 +192,155 @@ class LlmClient(private val http: HttpClient) {
         ).copy(redactionStats = totalStats)
     }
 
+    /**
+     * 拉取指定通道的可用模型列表（用于「拉取并选择模型」）。
+     *
+     * 安全规则与 [callOpenAiCompat] 一致：所有非 Gemini 地址先过
+     * [UrlSecurity.validateEndpointUrlResolved]（DNS 解析后逐地址校验），本地通道在
+     * allowLocalInference=false 时直接拒绝；Gemini 走固定官方域名，无需校验，Key 只放
+     * `x-goog-api-key` 请求头，绝不拼进 URL 查询参数。
+     */
+    suspend fun listModels(pid: LlmProviderId, config: LlmConfig, timeoutMs: Long = 10_000): List<LlmModelInfo> {
+        when (pid) {
+            LlmProviderId.AUTO, LlmProviderId.DETERMINISTIC_RULES ->
+                throw IllegalArgumentException("该通道无需选择模型")
+            LlmProviderId.GEMINI -> return listGeminiModels(config, timeoutMs)
+            LlmProviderId.OPENAI_COMPATIBLE -> {
+                require(config.openAiBaseUrl.isNotBlank()) { "未配置 OpenAI 兼容 Base URL" }
+                require(config.openAiApiKey.isNotBlank()) { "未配置 OpenAI 兼容 API Key" }
+                return listOpenAiStyleModels(
+                    pid = pid,
+                    rawBaseUrl = config.openAiBaseUrl,
+                    apiKey = config.openAiApiKey,
+                    allowLocal = config.allowLocalInference,
+                    timeoutMs = timeoutMs
+                )
+            }
+            LlmProviderId.OLLAMA, LlmProviderId.LMSTUDIO -> {
+                if (!config.allowLocalInference) {
+                    throw IllegalStateException("未启用本地推理")
+                }
+                val rawBaseUrl = if (pid == LlmProviderId.OLLAMA) config.ollamaBaseUrl else config.lmStudioBaseUrl
+                require(rawBaseUrl.isNotBlank()) { "未配置 ${pid.label} Base URL" }
+                return listOpenAiStyleModels(
+                    pid = pid,
+                    rawBaseUrl = rawBaseUrl,
+                    apiKey = "",
+                    allowLocal = config.allowLocalInference,
+                    timeoutMs = timeoutMs
+                )
+            }
+        }
+    }
+
+    /** Gemini：`GET /v1beta/models`，Key 只进请求头；翻页最多 5 页，仅保留支持 generateContent 的模型。 */
+    private suspend fun listGeminiModels(config: LlmConfig, timeoutMs: Long): List<LlmModelInfo> {
+        val key = config.geminiApiKey.trim()
+        require(key.isNotEmpty()) { "未配置 Gemini API Key" }
+        val raw = mutableListOf<LlmModelInfo>()
+        var pageToken: String? = null
+        var fetchedPages = 0
+        // while + break：拿不到 nextPageToken 就停，绝不把同一页重复拉 5 次。
+        while (fetchedPages < 5) {
+            fetchedPages++
+            val endpoint = buildString {
+                append(geminiBaseUrl.trimEnd('/'))
+                append("/v1beta/models?pageSize=200")
+                pageToken?.let { append("&pageToken=").append(it) }
+            }
+            val resp = http.get(endpoint) {
+                timeout { requestTimeoutMillis = timeoutMs }
+                header("x-goog-api-key", key)
+            }
+            val rawText = resp.bodyAsText()
+            if (resp.status.value !in 200..299) {
+                throw IllegalStateException(httpFailureText(resp.status.value, rawText))
+            }
+            // 畸形响应体按空结果处理（SerializationException 是 IllegalArgumentException 子类，不能外抛）。
+            val root = runCatching { json.parseToJsonElement(rawText) as? JsonObject }.getOrNull() ?: break
+            (root["models"] as? JsonArray)?.forEach { el ->
+                val m = el as? JsonObject ?: return@forEach
+                val id = (m["name"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                    ?.removePrefix("models/") ?: return@forEach
+                if (id.isEmpty()) return@forEach
+                val methods = (m["supportedGenerationMethods"] as? JsonArray)
+                    ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                    .orEmpty()
+                if ("generateContent" !in methods) return@forEach
+                val display = (m["displayName"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull.orEmpty()
+                raw += LlmModelInfo(id = id, displayName = display.ifEmpty { id })
+            }
+            pageToken = (root["nextPageToken"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull ?: break
+        }
+        return finishModelList(raw)
+    }
+
+    /**
+     * OpenAI 兼容 / Ollama / LM Studio：`GET {base}/models` 解析 `data[].id`。
+     * Ollama 失败时回退到原生 `GET {base去尾 /v1}/api/tags` 解析 `models[].name`。
+     */
+    private suspend fun listOpenAiStyleModels(
+        pid: LlmProviderId,
+        rawBaseUrl: String,
+        apiKey: String,
+        allowLocal: Boolean,
+        timeoutMs: Long
+    ): List<LlmModelInfo> {
+        val check = UrlSecurity.validateEndpointUrlResolved(rawBaseUrl, allowLocal = allowLocal)
+        if (!check.valid || check.normalizedUrl == null) {
+            throw IllegalStateException(check.reason ?: "URL 校验失败")
+        }
+        val base = check.normalizedUrl ?: error("unreachable")
+        val resp = http.get("$base/models") {
+            timeout { requestTimeoutMillis = timeoutMs }
+            if (apiKey.isNotBlank()) header("Authorization", "Bearer ${apiKey.trim()}")
+        }
+        var rawText = resp.bodyAsText()
+        if (resp.status.value !in 200..299) {
+            // Ollama 的 OpenAI 兼容层不一定实现 /v1/models：404/501 时改走原生 /api/tags。
+            if (pid == LlmProviderId.OLLAMA && resp.status.value in setOf(404, 405, 501)) {
+                val nativeBase = base.removeSuffix("/v1")
+                val native = http.get("$nativeBase/api/tags") {
+                    timeout { requestTimeoutMillis = timeoutMs }
+                }
+                rawText = native.bodyAsText()
+                if (native.status.value in 200..299) {
+                    // 畸形响应体按空结果处理，绝不外抛 IllegalArgumentException 子类。
+                    val root = runCatching { json.parseToJsonElement(rawText) as? JsonObject }.getOrNull()
+                    val names = (root?.get("models") as? JsonArray)
+                        ?.mapNotNull { el ->
+                            val m = el as? JsonObject ?: return@mapNotNull null
+                            (m["name"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+                        }
+                        .orEmpty()
+                    return finishModelList(names.map { LlmModelInfo(id = it) })
+                }
+                throw IllegalStateException(httpFailureText(native.status.value, rawText))
+            }
+            throw IllegalStateException(httpFailureText(resp.status.value, rawText))
+        }
+        // 畸形响应体按空结果处理（SerializationException 是 IllegalArgumentException 子类，不能外抛）。
+        val root = runCatching { json.parseToJsonElement(rawText) as? JsonObject }.getOrNull()
+        val ids = (root?.get("data") as? JsonArray)
+            ?.mapNotNull { el ->
+                val m = el as? JsonObject ?: return@mapNotNull null
+                (m["id"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+            }
+            .orEmpty()
+        return finishModelList(ids.map { LlmModelInfo(id = it) })
+    }
+
+    /** 统一错误文案：非 2xx 响应体脱敏后拼进异常消息，401/403 给出 Key 提示。 */
+    private fun httpFailureText(statusCode: Int, body: String): String {
+        val sanitized = Redaction.redactTextPatterns(body.take(180)).text
+        val hint = if (statusCode == 401 || statusCode == 403) "（API Key 无效或无权限）" else ""
+        return "HTTP $statusCode$hint: $sanitized"
+    }
+
+    /** 去重、按 id 排序、最多 500 条。 */
+    private fun finishModelList(raw: List<LlmModelInfo>): List<LlmModelInfo> =
+        raw.distinctBy { it.id }.sortedBy { it.id }.take(500)
+
     private suspend fun callGemini(
         input: LlmRefineInput,
         config: LlmConfig,
@@ -195,7 +351,7 @@ class LlmClient(private val http: HttpClient) {
         val key = config.geminiApiKey.trim()
         require(key.isNotEmpty()) { "未配置 Gemini API Key" }
         val model = config.geminiModel.ifBlank { "gemini-2.5-flash" }
-        val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/${model.encodeURLPathPart()}:generateContent"
+        val endpoint = "${geminiBaseUrl.trimEnd('/')}/v1beta/models/${model.encodeURLPathPart()}:generateContent"
         val userPrompt = buildUserPrompt(input, sanitizedState, sanitizedTraffic)
 
         val payload = buildJsonObject {

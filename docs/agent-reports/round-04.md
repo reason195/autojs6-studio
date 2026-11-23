@@ -356,6 +356,46 @@ MSI 产物路径：`I:\Github\autojs6-studio\desktop\build\compose\binaries\main
   `FATAL EXCEPTION: com.android.commands.uiautomator` main / `java.lang.IllegalStateException: UiAutomationService already registered` —— Meizu Flyme 拒绝 shell 调起的 uiautomator，故 Meizu 上 UI dump/点按不可用，交互项移到 OPPO。
 - OPPO app 进程 logcat（--pid=32705）无 Exception / FATAL / NetworkOnMainThread；crash 缓冲区为空。
 - OPPO 系统级噪声（非崩溃）：`W VRI[MainActivity]: handleResized abandoned!`（InsetsController 键盘开合引起的 relayout 警告）、`W OnBackInvokedCallback: onBackInvokedCallback not enabled`（系统兼容提示）、偶发 `Choreographer` 跳帧。
+
+---
+
+## 10. 「拉取并选择大模型」（2026-11-24，已 commit + push master，未打 tag）
+
+### 10.1 需求
+
+AI 面板的四个模型通道（Gemini / OpenAI 兼容 / Ollama / LM Studio）可从服务端拉取可用模型列表并选择，也可手动输入；Ollama / LM Studio 的 Base URL 可在界面里修改。模型选择与 Key 一样仅存内存，绝不写入工程文件。
+
+### 10.2 实现
+
+| 文件 | 改动 |
+| --- | --- |
+| `shared/src/commonMain/…/ai/LlmClient.kt` | 新增 `LlmModelInfo(id, displayName, note)` 与 `listModels(pid, config, timeoutMs=10s)`：Gemini `GET /v1beta/models?pageSize=200`（Key 只进 `x-goog-api-key` 头、翻页最多 5 页、仅保留 supportedGenerationMethods 含 generateContent 的模型、剥 `models/` 前缀）；OpenAI 兼容 `GET {base}/models`（`Authorization: Bearer`）；Ollama 优先 `/v1/models`、404/405/501 回退原生 `/api/tags`；LM Studio `GET {base}/models`；AUTO / DETERMINISTIC_RULES 抛「该通道无需选择模型」。所有非 Gemini 地址先过 `UrlSecurity.validateEndpointUrlResolved`，本地通道在 allowLocalInference=false 时直接报「未启用本地推理」；非 2xx 报 `HTTP {code}` + 脱敏后响应体（401/403 附「API Key 无效或无权限」）；结果去重、按 id 排序、上限 500。`Companion.geminiBaseUrl` 设为 internal 供测试注入 |
+| `shared/src/commonMain/…/ui/StudioState.kt` | 新增 `llmModelOptions / llmModelsLoading / llmModelsError` 三个 Compose 状态、`fetchLlmModels(pid)`（后台线程拉取、成功 toast「已拉取 N 个模型」、空列表仅提示不改当前模型、失败写 error 并 toast）与 `selectLlmModel(pid, id)`（写进对应通道的 model 字段）。模型与 Key 一样仅存内存 |
+| `shared/src/commonMain/…/ui/AiTrafficPane.kt` | 四通道新增「模型」行：可手输的 OutlinedTextField +「拉取模型」按钮（拉取中显示「拉取中…」并禁用）+ 下拉列表（displayName 与 id 两行）；Ollama / LM Studio 的 Base URL 输入框；AUTO 通道给一行固定说明「自动路由按 Gemini → OpenAI 兼容 → 本地 的顺序……」；拉取失败的红色错误文案。桌面与 Android 同一份 UI |
+| `shared/src/jvmTest/…/LlmModelListTest.kt` | 新增 7 项回归（见 10.3） |
+
+### 10.3 测试（LlmModelListTest，全部通过）
+
+| 项 | 断言 |
+| --- | --- |
+| OpenAI 兼容解析/去重/排序 + Bearer 头 | 3 id 去重排序为 `[chat-b, gpt-4o-mini]`；恰好 1 个请求；`Authorization: Bearer <Key>` |
+| Ollama 404 回退 `/api/tags` | 访问序列 `[v1, tags]`，结果 `[llama3:8b, qwen2.5:7b]` |
+| 401 提示与脱敏 | 消息含 `HTTP 401`、`API Key 无效或无权限`、`[REDACTED_API_KEY]`（响应体里 24 字符假 sk- 令牌被脱敏） |
+| 未启用本地推理 | Ollama / LM Studio 均抛 `未启用本地推理`，服务端 0 请求 |
+| SSRF userinfo | `http://x@127.0.0.1:{port}/v1` 抛 `安全策略拦截`，0 请求 |
+| 畸形 JSON | `{"data":{}}` / `[]` / 纯文本 / `{"id":123}` 四种响应体都返回空列表，绝不抛 IllegalArgumentException（kotlinx 的 SerializationException 是它的子类，解析处全部 runCatching 包裹） |
+| Gemini | Key 只进 `x-goog-api-key` 头（URL 查询参数里绝不出现 `key=`）；两页翻页合并；不支持 generateContent 的 embedding 模型被过滤；`models/` 前缀剥离；displayName 生效 |
+
+### 10.4 验证
+
+- `./gradlew :shared:jvmTest`：**199 项全部通过**（原 192 + 新增 7），0 失败。
+- `./gradlew :desktop:compileKotlinJvm`：BUILD SUCCESSFUL。
+- `./gradlew :androidApp:assembleDebug`：BUILD SUCCESSFUL。
+
+### 10.5 交付说明
+
+- `docs/release-notes.md` v1.0.2「### 其他」首条新增该功能条目（见该文件）。
+- 已提交 `feat(ai): 拉取并选择大模型` 并 push master；**按用户要求未打 tag、未发版**。
 - 测试期间 OPPO 一次自动熄屏（04:27:56，mCurrentFocus → NotificationShade）导致一帧锁屏截图，`KEYCODE_WAKEUP` + 上滑解锁后 app 恢复前台，未影响任何结果。
 
 ### 9.5 结论
