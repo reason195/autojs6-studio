@@ -1,5 +1,7 @@
 package cn.dumate.a6studio.bridge
 
+import cn.dumate.a6studio.security.UrlSecurity
+
 /**
  * ProxyPin MCP 配置导入的纯解析逻辑（与 StudioState / 平台无关，可单测）。
  *
@@ -24,5 +26,24 @@ object ProxyPinImport {
         if (found.isEmpty()) return null
         return found.firstOrNull { it.name.contains("proxypin", true) || it.url.contains("proxypin", true) }
             ?: found.first()
+    }
+
+    /**
+     * 把状态写入之前的两道门槛抽成纯函数：地址先过
+     * [UrlSecurity.validateEndpointUrl]（allowLocal = true），令牌再过
+     * [McpClient.buildAuthorizationHeader]（CR/LF 等控制字符在这里就被拒）。
+     *
+     * 返回 null 表示可以继续 configure；否则返回应提示用户的错误文案。
+     * StudioState 只有在返回 null 时才把 url / token 写进界面状态，
+     * 所以坏令牌（如含 CR/LF）绝不会留在输入框里。
+     */
+    fun checkBeforeWrite(url: String, token: String): String? {
+        val check = UrlSecurity.validateEndpointUrl(url, allowLocal = true)
+        if (!check.valid || check.normalizedUrl == null) {
+            return "ProxyPin 地址被拒：${check.reason ?: "URL 无效"}"
+        }
+        return runCatching { McpClient.buildAuthorizationHeader(token) }
+            .exceptionOrNull()
+            ?.let { "ProxyPin 令牌被拒：${it.message}" }
     }
 }

@@ -95,4 +95,21 @@ class ProxyPinImportTest {
         assertEquals(null, ProxyPinImport.pick("hello world"))
         assertEquals(null, ProxyPinImport.pick("""{"mcpServers":{"x":{"command":"npx"}}}"""))
     }
+
+    @Test
+    fun `checkBeforeWrite rejects bad token or url before any state is written`() {
+        val goodUrl = "http://127.0.0.1:9000/mcp"
+        // 校验门槛：合法地址 + 合法令牌 → 放行（null）
+        assertEquals(null, ProxyPinImport.checkBeforeWrite(goodUrl, "token-ok"))
+        // 合法地址 + 空令牌 → 放行（无令牌也允许）
+        assertEquals(null, ProxyPinImport.checkBeforeWrite(goodUrl, ""))
+        // CR/LF 令牌 → 在写 proxyPinUrl/proxyPinToken 之前就被拒：StudioState 拿到非 null
+        // 文案就 toast 并 return 0，绝不会把坏令牌写进输入框再失败。
+        val err = ProxyPinImport.checkBeforeWrite(goodUrl, "abc\r\ndef")
+        assertTrue(err != null, "CR/LF 令牌必须在写状态前被拒")
+        assertTrue((err ?: "").contains("令牌被拒"), "应报令牌被拒: $err")
+        // userinfo 地址 → 同样在写状态前被拒
+        val urlErr = ProxyPinImport.checkBeforeWrite("http://x@169.254.169.254/mcp", "")
+        assertTrue(urlErr != null && (urlErr ?: "").contains("安全策略拦截"), "userinfo 地址应在写状态前被拒: $urlErr")
+    }
 }

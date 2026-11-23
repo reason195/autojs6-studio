@@ -835,12 +835,19 @@ class StudioState(
             toast("$source 里没有找到 ProxyPin MCP 地址（支持 mcpServers JSON、URL、IP）")
             return 0
         }
-        // 先校验地址，失败就不写状态、直接把原因给用户。
-        val check = UrlSecurity.validateEndpointUrl(picked.url, allowLocal = true)
-        if (!check.valid || check.normalizedUrl == null) {
-            toast("ProxyPin 地址被拒：${check.reason ?: "URL 无效"}")
+        // 写状态之前先过地址 + 令牌两道门槛。坏令牌（如含 CR/LF）在 configure 之前就被拒，
+        // 绝不会先写进上面的输入框再失败。
+        cn.dumate.a6studio.bridge.ProxyPinImport.checkBeforeWrite(picked.url, picked.token)
+            ?.let { toast(it); return 0 }
+        try {
+            proxyPin.configure(picked.url, picked.token, allowLocal = true)
+        } catch (e: BridgeException) {
+            toast("ProxyPin 配置失败：${e.message}")
             return 0
         }
+        // configure 成功后才写状态，界面上与桥接里是同一份干净配置。
+        proxyPinUrl = picked.url
+        proxyPinToken = picked.token
         // 多台时提示挑了哪台；只有一台就不用说。
         val foundCount = cn.dumate.a6studio.bridge.McpConfigParser
             .parseWithDefaultPort(text, cn.dumate.a6studio.bridge.ProxyPinImport.DEFAULT_PORT)
@@ -850,15 +857,6 @@ class StudioState(
                 picked.url.removePrefix("http://").removePrefix("https://").removeSuffix("/mcp")
             }
             toast("检测到 $foundCount 个，已使用：$label")
-        }
-        proxyPinUrl = picked.url
-        proxyPinToken = picked.token
-        try {
-            // CR/LF 令牌会在 configure 内部抛 INVALID_TOKEN，属于用户输入问题：提示即可，不能崩。
-            proxyPin.configure(picked.url, picked.token, allowLocal = true)
-        } catch (e: BridgeException) {
-            toast("ProxyPin 令牌被拒：${e.message}")
-            return 0
         }
         if (picked.token.isEmpty()) {
             toast("已应用 ProxyPin 地址（未带令牌）：${picked.url}")
