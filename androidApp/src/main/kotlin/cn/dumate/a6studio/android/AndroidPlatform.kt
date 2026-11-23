@@ -44,9 +44,9 @@ class AndroidPlatform(private val ctx: Context) : Platform {
     override suspend fun saveTextAs(suggestedName: String, content: String, mimeType: String): String? =
         suspendCancellableCoroutine { cont ->
             val started = SafBridge.saveText(suggestedName, content) { name ->
-                if (cont.isActive) cont.resume(name) {}
+                if (cont.isActive) cont.resume(name)
             }
-            if (!started) cont.resume(null) {}
+            if (!started) cont.resume(null)
         }
 
     override suspend fun openTextFile(extensions: List<String>): Pair<String, String>? =
@@ -57,9 +57,9 @@ class AndroidPlatform(private val ctx: Context) : Platform {
                 arrayOf("text/plain", "*/*")
             }
             val started = SafBridge.openText(mimes) { result ->
-                if (cont.isActive) cont.resume(result) {}
+                if (cont.isActive) cont.resume(result)
             }
-            if (!started) cont.resume(null) {}
+            if (!started) cont.resume(null)
         }
 
     override fun copyToClipboard(text: String) {

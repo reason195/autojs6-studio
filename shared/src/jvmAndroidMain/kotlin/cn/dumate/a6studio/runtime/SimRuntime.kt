@@ -79,7 +79,7 @@ class SimRuntime(
      */
     private val factory = object : ContextFactory() {
         override fun makeContext(): Context = super.makeContext().apply {
-            optimizationLevel = -1 // instruction observation only works in interpreted mode
+            isInterpretedMode = true // instruction observation only works in interpreted mode
             languageVersion = Context.VERSION_ES6
             instructionObserverThreshold = INSTRUCTION_SLICE
             // M3: deep or runaway recursion used to grow the JVM stack until StackOverflowError,

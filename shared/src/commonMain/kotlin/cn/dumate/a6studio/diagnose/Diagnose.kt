@@ -65,6 +65,30 @@ object Diagnose {
             add(Level.WARN, "UI 操作前没有 auto.waitFor()", "无障碍服务未就绪时选择器会全部落空；在主程序开头加一块「等待无障碍服务就绪」", firstUi)
         }
 
+        // L11: these params are pasted into the script as JS identifiers (`let <var> = …`,
+        // `function <name>()`). A space, a dash or a leading digit is a SyntaxError that stops
+        // the whole script, so flag it here instead of letting the run fail.
+        val identifierParams = mapOf(
+            "varSet" to listOf("name"), "varAssign" to listOf("name"),
+            "funcDef" to listOf("name"), "funcCall" to listOf("name"),
+            "forOf" to listOf("item"), "currentPkgVar" to listOf("name"), "clipGet" to listOf("name"),
+            "shellCmd" to listOf("var"), "nodeTextVar" to listOf("var"), "existsVar" to listOf("var"),
+            "findImage" to listOf("var"), "ocrText" to listOf("var"), "filesRead" to listOf("var"),
+            "filesExistsVar" to listOf("var"), "storageGet" to listOf("var"),
+            "httpGet" to listOf("var"), "httpPostJson" to listOf("var"),
+            "timerStart" to listOf("var"), "timerLap" to listOf("var"),
+            "jdTaskLoop" to listOf("taskVar"), "jdDoTask" to listOf("taskVar")
+        )
+        items.forEach { it ->
+            identifierParams[it.b.type]?.forEach { key ->
+                val v = it.b.params[key]?.asText().orEmpty().trim()
+                if (v.isNotEmpty() && !isJsIdentifier(v)) {
+                    add(Level.ERROR, "名称不是合法标识符：$v",
+                        "只能用字母、数字、_ 和 $，且不能以数字开头，也不能是 JS 关键字（如 let、if）", it)
+                }
+            }
+        }
+
         items.forEach { it ->
             val b = it.b
             fun s(key: String) = b.params[key]?.asText().orEmpty()
@@ -173,6 +197,17 @@ object Diagnose {
     }
 
     /** Human-readable block label used in diagnostics and the audit panel. */
+    private val jsIdentifier = Regex("^[A-Za-z_$][A-Za-z0-9_$]*$")
+    private val jsReserved = setOf(
+        "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do",
+        "else", "export", "extends", "finally", "for", "function", "if", "import", "in", "instanceof",
+        "new", "return", "super", "switch", "this", "throw", "try", "typeof", "var", "void", "while",
+        "with", "yield", "let", "static", "enum", "await", "null", "true", "false"
+    )
+
+    /** ASCII-only on purpose: Rhino's ES6 mode rejects some Unicode identifiers other engines accept. */
+    fun isJsIdentifier(text: String): Boolean = jsIdentifier.matches(text) && text !in jsReserved
+
     fun blockLabel(block: Block): String {
         val def = Catalog.byType(block.type) ?: return block.type
         return Catalog.cleanName(def)

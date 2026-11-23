@@ -19,7 +19,7 @@ class QuoteSafetyTest {
     private fun syntaxError(src: String): String? {
         val cx = Context.enter()
         return try {
-            cx.optimizationLevel = -1
+            cx.isInterpretedMode = true
             cx.languageVersion = Context.VERSION_ES6
             cx.compileFunction(cx.initStandardObjects(), src, "q", 1, null)
             null

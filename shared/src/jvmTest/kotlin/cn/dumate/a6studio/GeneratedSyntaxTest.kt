@@ -1,4 +1,3 @@
-@file:Suppress("DEPRECATION")
 
 package cn.dumate.a6studio
 
@@ -34,7 +33,7 @@ class GeneratedSyntaxTest {
     private fun parses(source: String): String? {
         val cx = Context.enter()
         return try {
-            cx.optimizationLevel = -1
+            cx.isInterpretedMode = true
             cx.languageVersion = Context.VERSION_ES6
             val scope = cx.initStandardObjects()
             installPermissiveGlobals(cx, scope as ScriptableObject)

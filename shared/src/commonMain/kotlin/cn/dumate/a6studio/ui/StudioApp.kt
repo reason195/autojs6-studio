@@ -10,7 +10,7 @@ import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -271,7 +271,7 @@ private fun MoreMenu(state: StudioState) {
         QuietAction("⋯", "更多") { open = true }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             group("视图")
-            item("模板库", Icons.Filled.List) { state.openTemplates() }
+            item("模板库", Icons.AutoMirrored.Filled.List) { state.openTemplates() }
             item("怎么做（新手引导）", Icons.Filled.Info) { state.showGuide = true }
             item(if (state.beginnerMode) "切换到完整模式" else "切换到简单模式", Icons.Filled.Settings) {
                 state.changeBeginnerMode(!state.beginnerMode)

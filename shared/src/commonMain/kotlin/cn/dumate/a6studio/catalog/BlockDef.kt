@@ -87,8 +87,10 @@ class GenContext(
 
     fun callModule(block: Block): String {
         val key = block.params["module"]?.asText() ?: ""
+        // L10: match by id only. The old name fallback let a renamed module, or a new module
+        // that happened to reuse an old name, silently receive calls meant for another one.
+        // Old projects that stored names are migrated to ids once, in ProjectRepo.load().
         val m = project.modules.firstOrNull { it.id == key }
-            ?: project.modules.firstOrNull { it.name == key } // 兼容旧项目：按名字兜底，但优先 id
             ?: return "// 未选择模块"
         val args = block.params["args"]?.asText().orEmpty()
         return Js.moduleName(m.name) + "(" + args + ");"

@@ -300,7 +300,9 @@ object Catalog {
         ) { b, c ->
             val v = c.str(b, "var").ifEmpty { "t" }
             val n = c.newVar("node")
-            "let $n = ${c.selector(b)}.findOne(2000);\nlet $v = $n ? $n.text() : null;\nlog(\"$v = \" + $v);"
+            // L11: the variable name also appears inside a log string; quote it so a name with
+            // a quote or backslash cannot break out of the literal.
+            "let $n = ${c.selector(b)}.findOne(2000);\nlet $v = $n ? $n.text() : null;\nlog(${c.quote("$v = ")} + $v);"
         }
         def(
             "existsVar", "ui", "{var} = 控件是否存在",

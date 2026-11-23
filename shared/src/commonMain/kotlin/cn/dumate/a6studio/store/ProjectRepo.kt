@@ -117,13 +117,24 @@ class ProjectRepo(private val storage: ProjectStorage) {
      */
     private fun normalizeProject(p: Project): Project {
         val seen = mutableSetOf<String>()
+        // L10: old projects stored the module *name* in moduleCall.module. Codegen now matches
+        // by id only, so rewrite a name to that module's id once here, when it is unambiguous.
+        val moduleIds = p.modules.map { it.id }.toSet()
+        val idByName = p.modules.groupBy { it.name }.filterValues { it.size == 1 }.mapValues { it.value.single().id }
         fun fix(b: Block): Block {
             val id = if (b.id.isEmpty() || !seen.add(b.id)) {
                 var fresh = Ids.next()
                 while (!seen.add(fresh)) fresh = Ids.next()
                 fresh
             } else b.id
-            return b.copy(id = id, children = b.children.mapValues { (_, kids) -> kids.map(::fix) })
+            var params = b.params
+            if (b.type == "moduleCall") {
+                val key = params["module"]?.asText().orEmpty()
+                if (key.isNotEmpty() && key !in moduleIds) {
+                    idByName[key]?.let { params = params + ("module" to cn.dumate.a6studio.model.ParamValue.Text(it)) }
+                }
+            }
+            return b.copy(id = id, params = params, children = b.children.mapValues { (_, kids) -> kids.map(::fix) })
         }
         return p.copy(
             root = p.root.copy(children = p.root.children.mapValues { (_, kids) -> kids.map(::fix) }),
@@ -534,7 +545,10 @@ class ProjectRepo(private val storage: ProjectStorage) {
     }
 
     fun setProjectDirect(p: Project) {
-        _projectState = p
+        // Imported files and templates get the same repair as a loaded file (unique ids,
+        // moduleCall name → id); otherwise an imported project could carry duplicate ids
+        // or calls that no longer resolve now that modules are matched by id only.
+        _projectState = normalizeProject(p)
         _scopeState = Scope.Root
         _selectedState = null
         save()
