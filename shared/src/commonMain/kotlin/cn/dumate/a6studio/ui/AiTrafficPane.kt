@@ -43,23 +43,65 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 0. 桌面端本地 Studio MCP 服务端（供 Cursor / Claude / Antigravity 外部接入）
-        state.localMcpEndpoint?.let { ep ->
-            Surface(
-                color = Palette.panelAlt,
-                shape = RoundedCornerShape(8.dp),
-                border = BorderStroke(1.dp, Palette.border)
-            ) {
+        // 0. 桌面端本地 Studio MCP 服务端（默认关闭，需手动开启；带随机 Bearer 令牌）
+        Surface(
+            color = Palette.panelAlt,
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, Palette.border)
+        ) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(
-                    Modifier.fillMaxWidth().padding(12.dp),
+                    Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("本地 Studio MCP 服务端（已启用）", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Palette.ok)
-                        Text(ep, fontSize = 11.sp, color = Palette.textDim)
+                        Text(
+                            if (state.localMcpEnabled) "本地 Studio MCP 服务端（已启用 · 需 Bearer 令牌）"
+                            else "本地 Studio MCP 服务端（默认关闭）",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (state.localMcpEnabled) Palette.ok else Palette.text
+                        )
+                        Text(
+                            state.localMcpEndpoint ?: "开启后仅监听 127.0.0.1，生成一次性 32 字节随机令牌",
+                            fontSize = 11.sp,
+                            color = Palette.textDim
+                        )
                     }
-                    OutlinedButton(onClick = { state.copyLocalMcpEndpoint() }) {
-                        Text("复制地址", fontSize = 11.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (state.localMcpEnabled) {
+                            OutlinedButton(onClick = { state.copyLocalMcpEndpoint() }) {
+                                Text("复制地址与令牌", fontSize = 11.sp)
+                            }
+                        }
+                        OutlinedButton(onClick = { state.toggleLocalMcp(!state.localMcpEnabled) }) {
+                            Text(if (state.localMcpEnabled) "关闭" else "开启", fontSize = 11.sp)
+                        }
+                    }
+                }
+                if (state.hasExternalMcpChanges || state.pendingExternalDeviceConfirm) {
+                    Surface(
+                        color = Palette.panel,
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(1.dp, Palette.warn)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                "当前工程包含外部 MCP 补丁修改，真机运行前请审查生成代码并确认",
+                                fontSize = 11.sp,
+                                color = Palette.warn,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Button(
+                                onClick = { state.confirmAndRunOnDevice() },
+                                colors = ButtonDefaults.buttonColors(containerColor = Palette.warn, contentColor = Palette.onAccent)
+                            ) {
+                                Text("确认并真机运行", fontSize = 11.sp)
+                            }
+                        }
                     }
                 }
             }
@@ -164,7 +206,7 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        onClick = { state.runAiRefine(goal) },
+                        onClick = { state.requestAiRefine(goal) },
                         enabled = !state.aiBusy,
                         colors = ButtonDefaults.buttonColors(containerColor = Palette.accent, contentColor = Palette.onAccent)
                     ) {
@@ -173,6 +215,30 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                     if (state.lastRefineOutput != null) {
                         OutlinedButton(onClick = { state.applyRefinedToSelectedOrInsert() }) {
                             Text("护栏回填到积木", fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                state.pendingCloudPreview?.let { preview ->
+                    Surface(
+                        color = Palette.panel,
+                        shape = RoundedCornerShape(6.dp),
+                        border = BorderStroke(1.dp, Palette.warn)
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("发往云端模型前的脱敏载荷预览（请确认无敏感信息）：", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = Palette.warn)
+                            Text(preview, fontSize = 10.5.sp, color = Palette.textDim)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { state.confirmCloudRefine() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Palette.warn, contentColor = Palette.onAccent)
+                                ) {
+                                    Text("确认发送云端", fontSize = 11.sp)
+                                }
+                                OutlinedButton(onClick = { state.cancelCloudRefine() }) {
+                                    Text("取消", fontSize = 11.sp)
+                                }
+                            }
                         }
                     }
                 }

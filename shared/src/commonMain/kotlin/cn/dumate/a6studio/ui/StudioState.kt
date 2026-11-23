@@ -118,17 +118,59 @@ class StudioState(
         private set
     var aiStatusMsg by mutableStateOf("")
         private set
+    var pendingCloudPreview by mutableStateOf<String?>(null)
+        private set
+    private var pendingCloudGoal: String = ""
     var localMcpEndpoint by mutableStateOf<String?>(null)
         private set
+    var localMcpToken by mutableStateOf<String?>(null)
+        private set
+    var localMcpEnabled by mutableStateOf(false)
+        private set
+    var onToggleLocalMcp: ((Boolean) -> Unit)? = null
+    var hasExternalMcpChanges by mutableStateOf(false)
+        private set
+    var pendingExternalDeviceConfirm by mutableStateOf(false)
+        private set
 
-    fun attachLocalMcpEndpoint(url: String?) {
+    fun attachLocalMcpEndpoint(url: String?, token: String? = null) {
         localMcpEndpoint = url
+        localMcpToken = token
+        localMcpEnabled = url != null
+    }
+
+    fun toggleLocalMcp(enable: Boolean) {
+        val cb = onToggleLocalMcp
+        if (cb == null) {
+            toast("当前平台不支持本地 MCP 服务端")
+            return
+        }
+        cb(enable)
     }
 
     fun copyLocalMcpEndpoint() {
         val url = localMcpEndpoint ?: return
-        platform.copyToClipboard(url)
-        toast("已复制本地 MCP 地址：$url")
+        val tok = localMcpToken.orEmpty()
+        val payload = "{\"url\":\"$url\",\"headers\":{\"Authorization\":\"Bearer $tok\"}}"
+        platform.copyToClipboard(payload)
+        toast("已复制本地 MCP 地址与 Bearer 令牌")
+    }
+
+    fun applyExternalMcpProject(p: cn.dumate.a6studio.model.Project) {
+        repo.snapshot("外部 MCP 补丁")
+        repo.setProjectDirect(p)
+        hasExternalMcpChanges = true
+        refreshAll()
+    }
+
+    fun confirmAndRunOnDevice() {
+        hasExternalMcpChanges = false
+        pendingExternalDeviceConfirm = false
+        runOnDevice()
+    }
+
+    fun dismissExternalDeviceConfirm() {
+        pendingExternalDeviceConfirm = false
     }
 
     var pane by mutableStateOf(Pane.CODE)
@@ -483,6 +525,12 @@ class StudioState(
     }
 
     private fun runOnDevice() {
+        if (hasExternalMcpChanges) {
+            pendingExternalDeviceConfirm = true
+            showPane(Pane.AI)
+            toast("工程含外部 MCP 修改，请先在「AI 抓包」面板确认后再真机运行")
+            return
+        }
         running = true
         runStatus = "运行中"
         runStatusLevel = "run"
@@ -781,6 +829,8 @@ class StudioState(
                 lastTrafficReport = report
                 aiStatusMsg = "已获取并脱敏：屏蔽键 ${report.stats.redactedKeyCount}，掩码 ${report.stats.maskedPatternCount}"
                 toast("ProxyPin 流量已脱敏载入")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 aiStatusMsg = "ProxyPin 拉取失败：${e.message}"
                 toast(aiStatusMsg)
@@ -788,6 +838,38 @@ class StudioState(
                 aiBusy = false
             }
         }
+    }
+
+    private fun mayUseCloudProvider(): Boolean = when (llmProvider) {
+        LlmProviderId.GEMINI -> llmConfig.geminiApiKey.isNotBlank()
+        LlmProviderId.OPENAI_COMPATIBLE -> llmConfig.openAiApiKey.isNotBlank() && llmConfig.openAiBaseUrl.isNotBlank()
+        LlmProviderId.AUTO -> llmConfig.geminiApiKey.isNotBlank() ||
+            (llmConfig.openAiApiKey.isNotBlank() && llmConfig.openAiBaseUrl.isNotBlank())
+        else -> false
+    }
+
+    fun requestAiRefine(goal: String) {
+        if (mayUseCloudProvider() && pendingCloudPreview == null) {
+            val traffic = lastTrafficReport?.redactedPayload ?: kotlinx.serialization.json.JsonNull
+            val redacted = Redaction.redactTrafficPayload(traffic).redactedPayload.toString()
+            pendingCloudGoal = goal
+            pendingCloudPreview = redacted.take(1200)
+            aiStatusMsg = "即将发送往云端模型，请先核对下方脱敏预览并点「确认发送云端」"
+            return
+        }
+        pendingCloudPreview = null
+        runAiRefine(goal)
+    }
+
+    fun confirmCloudRefine() {
+        val g = pendingCloudGoal
+        pendingCloudPreview = null
+        runAiRefine(g)
+    }
+
+    fun cancelCloudRefine() {
+        pendingCloudPreview = null
+        aiStatusMsg = "已取消发送云端"
     }
 
     fun runAiRefine(goal: String) {
@@ -812,6 +894,8 @@ class StudioState(
                 lastRefineOutput = out
                 aiStatusMsg = out.routingNote
                 toast("提炼完成（${out.providerUsed.label}）")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 aiStatusMsg = "提炼失败：${e.message}"
                 toast(aiStatusMsg)
@@ -825,8 +909,9 @@ class StudioState(
         val out = lastRefineOutput ?: return
         val keyword = out.refinedKeywords.firstOrNull() ?: return
         val selId = repo.selectedId
-        val ops = if (selId != null) {
-            listOf(BlockPatchOp.UpdateParam(selId, "value", ParamValue.Text(keyword)))
+        val selBlock = selId?.let { BlockPatch.locateBlock(repo.current, it) }
+        val ops = if (selBlock != null && selBlock.type in setOf("kitClick", "kitWaitFor")) {
+            listOf(BlockPatchOp.UpdateParam(selBlock.id, "value", ParamValue.Text(keyword)))
         } else {
             listOf(
                 BlockPatchOp.AddBlock(
@@ -1070,6 +1155,7 @@ class StudioState(
                     fix.first.endsWith("Matches") -> fix.first.removeSuffix("Matches") to "regex"
                     else -> fix.first to "eq"
                 }
+                if (baseBy !in setOf("text", "desc")) return@mapNotNull null
                 mapOf(
                     "by" to ParamValue.Text(baseBy),
                     "match" to ParamValue.Text(matchMode),

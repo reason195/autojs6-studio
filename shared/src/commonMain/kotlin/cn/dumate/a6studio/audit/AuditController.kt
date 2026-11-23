@@ -67,7 +67,8 @@ class AuditController(
             val p = b.params
             val rawBy = p["by"]?.asText() ?: ""
             val match = p["match"]?.asText() ?: ""
-            val by = if (b.type in setOf("kitWaitFor", "kitClick") && rawBy in setOf("text", "desc", "id")) {
+            val by = if (b.type in setOf("kitWaitFor", "kitClick")) {
+                if (rawBy !in setOf("text", "desc")) return
                 when (match) {
                     "contains" -> "${rawBy}Contains"
                     "regex" -> "${rawBy}Matches"

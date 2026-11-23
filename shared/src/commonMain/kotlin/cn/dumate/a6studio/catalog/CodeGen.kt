@@ -1,5 +1,6 @@
 package cn.dumate.a6studio.catalog
 
+import cn.dumate.a6studio.diagnose.Diagnose
 import cn.dumate.a6studio.model.Block
 import cn.dumate.a6studio.model.Project
 import cn.dumate.a6studio.model.StudioModule
@@ -56,6 +57,13 @@ object CodeGen {
 
     private fun generateBlock(block: Block, project: Project, ctx: GenContext): String {
         val def = Catalog.byType(block.type) ?: return ""
+        val identKeys = Diagnose.identifierParams[block.type].orEmpty()
+        for (key in identKeys) {
+            val raw = ctx.str(block, key).trim()
+            if (raw.isNotEmpty() && !Diagnose.isJsIdentifier(raw)) {
+                return "// 非法标识符已跳过: ${Js.commentSafe("${block.type}.$key = $raw")}"
+            }
+        }
         return try {
             def.gen(block, ctx)
         } catch (e: Exception) {

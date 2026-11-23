@@ -25,6 +25,20 @@ object Diagnose {
         "clickNode", "longClickNode", "setTextNode", "waitText", "scrollNode", "nodeTextVar", "existsVar"
     )
 
+    val identifierParams: Map<String, List<String>> = mapOf(
+        "varSet" to listOf("name"), "varAssign" to listOf("name"),
+        "funcDef" to listOf("name"), "funcCall" to listOf("name"),
+        "forRange" to listOf("i"), "forOf" to listOf("item"),
+        "tryCatch" to listOf("err"),
+        "currentPkgVar" to listOf("name"), "clipGet" to listOf("name"),
+        "shellCmd" to listOf("var"), "nodeTextVar" to listOf("var"), "existsVar" to listOf("var"),
+        "findImage" to listOf("var"), "ocrText" to listOf("var"), "filesRead" to listOf("var"),
+        "filesExistsVar" to listOf("var"), "storageGet" to listOf("var"),
+        "httpGet" to listOf("var"), "httpPostJson" to listOf("var"),
+        "timerStart" to listOf("var"), "timerLap" to listOf("var"),
+        "jdTaskLoop" to listOf("taskVar"), "jdDoTask" to listOf("taskVar")
+    )
+
     private data class Item(val b: Block, val scope: String, val index: Int, val ancestors: List<Block>)
 
     private fun collect(project: Project): List<Item> {
@@ -68,17 +82,6 @@ object Diagnose {
         // L11: these params are pasted into the script as JS identifiers (`let <var> = …`,
         // `function <name>()`). A space, a dash or a leading digit is a SyntaxError that stops
         // the whole script, so flag it here instead of letting the run fail.
-        val identifierParams = mapOf(
-            "varSet" to listOf("name"), "varAssign" to listOf("name"),
-            "funcDef" to listOf("name"), "funcCall" to listOf("name"),
-            "forOf" to listOf("item"), "currentPkgVar" to listOf("name"), "clipGet" to listOf("name"),
-            "shellCmd" to listOf("var"), "nodeTextVar" to listOf("var"), "existsVar" to listOf("var"),
-            "findImage" to listOf("var"), "ocrText" to listOf("var"), "filesRead" to listOf("var"),
-            "filesExistsVar" to listOf("var"), "storageGet" to listOf("var"),
-            "httpGet" to listOf("var"), "httpPostJson" to listOf("var"),
-            "timerStart" to listOf("var"), "timerLap" to listOf("var"),
-            "jdTaskLoop" to listOf("taskVar"), "jdDoTask" to listOf("taskVar")
-        )
         items.forEach { it ->
             identifierParams[it.b.type]?.forEach { key ->
                 val v = it.b.params[key]?.asText().orEmpty().trim()

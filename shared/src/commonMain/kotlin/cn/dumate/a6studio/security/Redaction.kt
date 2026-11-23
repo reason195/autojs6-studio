@@ -1,5 +1,6 @@
 package cn.dumate.a6studio.security
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -7,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 
 data class RedactionOptions(
     val maxStringLength: Int = 512,
@@ -32,18 +34,25 @@ data class RedactionReport(
 )
 
 /**
- * 流量脱敏与导出密钥泄露扫描（移植并适配自 OmniForge-Studio `src/core/redaction.ts`）。
- * 确保发送给外部大模型或导出的脚本不包含敏感凭据与个人隐私数据。
+ * 流量脱敏与导出密钥泄露扫描（N-S4 增强版）：
+ * - 支持 HAR `{name, value}` / `{key, value}` 头部结构；
+ * - 新增 `header_line`、`cookie_pair`、`basic_auth` 正则掩码；
+ * - 字符串以 `{` 或 `[` 开头时先尝试解析成 JSON 递归脱敏；
+ * - 敏感键名补充 `key`, `wskey`, `pin`, `h5st`, `eid`, `uuid`, `openudid`；
+ * - 超大字符串先截断到 64 KB 再执行单遍正则替换。
  */
 object Redaction {
 
+    const val HARD_MAX_INPUT_CHARS = 65_536
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
     private val SENSITIVE_KEY_REGEX = Regex(
-        "^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[-_]?key|apikey|token|access[-_]?token|refresh[-_]?token|id[-_]?token|csrf[-_]?token|secret|client[-_]?secret|app[-_]?secret|password|passwd|pwd|phone|mobile|tel|telephone|session|session[-_]?id|sid|signature|sign|credential|private[-_]?key|ssn|id[-_]?card|bank[-_]?card|cvv|pt[-_]?key|pt[-_]?pin)$",
+        "^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[-_]?key|apikey|key|wskey|pin|h5st|eid|uuid|openudid|token|access[-_]?token|refresh[-_]?token|id[-_]?token|csrf[-_]?token|secret|client[-_]?secret|app[-_]?secret|password|passwd|pwd|phone|mobile|tel|telephone|session|session[-_]?id|sid|signature|sign|credential|private[-_]?key|ssn|id[-_]?card|bank[-_]?card|cvv|pt[-_]?key|pt[-_]?pin)$",
         RegexOption.IGNORE_CASE
     )
 
     private val SENSITIVE_KEY_CONTAINS_REGEX = Regex(
-        "(authorization|cookie|secret|password|passwd|token|apikey|api_key|private_key|credential|phone|mobile)",
+        "(authorization|cookie|secret|password|passwd|token|apikey|api_key|private_key|credential|phone|mobile|wskey|h5st|openudid|pt_key|pt_pin)",
         RegexOption.IGNORE_CASE
     )
 
@@ -54,49 +63,53 @@ object Redaction {
         "outputtokens", "cachedtokens", "reasoningtokens", "tokentype"
     )
 
-    private data class PatternRule(val name: String, val regex: Regex, val replacement: String)
+    private data class PatternRule(val name: String, val regex: Regex, val transform: (MatchResult) -> String)
 
     private val SECRET_STRING_PATTERNS = listOf(
         PatternRule(
+            "header_line",
+            Regex("(?im)^(\\s*(?:cookie|set-cookie|authorization|proxy-authorization|x-api-key)\\s*:\\s*).+$")
+        ) { m -> "${m.groupValues[1]}[REDACTED]" },
+        PatternRule(
+            "cookie_pair",
+            Regex("(?i)\\b(pt_key|pt_pin|wskey|sid|session|token|[a-z_]*token|[a-z_]*key)=([^;&\\s\"']+)")
+        ) { m -> "${m.groupValues[1]}=[REDACTED]" },
+        PatternRule(
+            "basic_auth",
+            Regex("(?i)\\bBasic\\s+[A-Za-z0-9+/=]{8,}")
+        ) { "Basic [REDACTED]" },
+        PatternRule(
             "bearer_token",
-            Regex("\\bBearer\\s+[A-Za-z0-9\\-._~+/]+=*", RegexOption.IGNORE_CASE),
-            "Bearer [REDACTED]"
-        ),
+            Regex("\\bBearer\\s+[A-Za-z0-9\\-._~+/]+=*", RegexOption.IGNORE_CASE)
+        ) { "Bearer [REDACTED]" },
         PatternRule(
             "jwt",
-            Regex("\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b"),
-            "[REDACTED_JWT]"
-        ),
+            Regex("\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b")
+        ) { "[REDACTED_JWT]" },
         PatternRule(
             "api_key_prefix",
-            Regex("\\b(AIza[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z_-]{20,}|gh[pousr]_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|AKIA[0-9A-Z]{16})"),
-            "[REDACTED_API_KEY]"
-        ),
+            Regex("\\b(AIza[0-9A-Za-z_-]{20,}|sk-[0-9A-Za-z_-]{20,}|gh[pousr]_[0-9A-Za-z]{20,}|github_pat_[0-9A-Za-z_]{20,}|AKIA[0-9A-Z]{16})")
+        ) { "[REDACTED_API_KEY]" },
         PatternRule(
             "query_secret_param",
-            Regex("([?&](?:token|access_token|secret|password|phone|mobile|key|api_key|sign|sig|cookie)=)([^&#\\s]+)", RegexOption.IGNORE_CASE),
-            "$1[REDACTED]"
-        ),
+            Regex("([?&](?:token|access_token|secret|password|phone|mobile|key|api_key|sign|sig|cookie)=)([^&#\\s]+)", RegexOption.IGNORE_CASE)
+        ) { m -> "${m.groupValues[1]}[REDACTED]" },
         PatternRule(
             "cn_id_card",
-            Regex("(?<![0-9A-Za-z])(\\d{6})(?:18|19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])(\\d{3}[\\dXx])(?![0-9A-Za-z])"),
-            "$1********$2"
-        ),
+            Regex("(?<![0-9A-Za-z])(\\d{6})(?:18|19|20)\\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\\d|3[01])(\\d{3}[\\dXx])(?![0-9A-Za-z])")
+        ) { m -> "${m.groupValues[1]}********${m.groupValues[2]}" },
         PatternRule(
             "cn_mobile",
-            Regex("(?<!\\d)(1[3-9]\\d)\\d{4}(\\d{4})(?!\\d)"),
-            "$1****$2"
-        ),
+            Regex("(?<!\\d)(1[3-9]\\d)\\d{4}(\\d{4})(?!\\d)")
+        ) { m -> "${m.groupValues[1]}****${m.groupValues[2]}" },
         PatternRule(
             "intl_phone",
-            Regex("(\\+\\d{1,3}[-\\s]?)\\d{3,4}[-\\s]?\\d{3,4}[-\\s]?(\\d{2,4})"),
-            "$1***-$2"
-        ),
+            Regex("(\\+\\d{1,3}[-\\s]?)\\d{3,4}[-\\s]?\\d{3,4}[-\\s]?(\\d{2,4})")
+        ) { m -> "${m.groupValues[1]}***-${m.groupValues[2]}" },
         PatternRule(
             "email",
-            Regex("\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b"),
-            "[REDACTED_EMAIL]"
-        )
+            Regex("\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b")
+        ) { "[REDACTED_EMAIL]" }
     )
 
     private val EXPORT_FORBIDDEN_SECRET_PATTERNS: List<Pair<String, Regex>> = listOf(
@@ -119,21 +132,23 @@ object Redaction {
     }
 
     fun redactTextPatterns(input: String, maxStringLength: Int = 512): RedactTextResult {
-        var text = input
+        val preTruncated = input.length > HARD_MAX_INPUT_CHARS
+        var text = if (preTruncated) input.take(HARD_MAX_INPUT_CHARS) else input
         var maskedCount = 0
 
         for (rule in SECRET_STRING_PATTERNS) {
-            val matches = rule.regex.findAll(text).count()
-            if (matches > 0) {
-                maskedCount += matches
-                text = rule.regex.replace(text, rule.replacement)
+            text = rule.regex.replace(text) { m ->
+                maskedCount++
+                rule.transform(m)
             }
         }
 
-        var truncated = false
+        var truncated = preTruncated
         if (text.length > maxStringLength) {
             text = text.take(maxStringLength) + "...[TRUNCATED:${input.length}chars]"
             truncated = true
+        } else if (preTruncated) {
+            text = "$text...[TRUNCATED:${input.length}chars]"
         }
 
         return RedactTextResult(text, maskedCount, truncated)
@@ -152,7 +167,24 @@ object Redaction {
                 is JsonNull -> JsonNull
                 is JsonPrimitive -> {
                     if (value.isString) {
-                        val res = redactTextPatterns(value.content, options.maxStringLength)
+                        val raw = value.content
+                        val trimmed = raw.trim()
+                        if (depth < options.maxDepth && trimmed.length <= HARD_MAX_INPUT_CHARS &&
+                            ((trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+                                (trimmed.startsWith("[") && trimmed.endsWith("]")))
+                        ) {
+                            val parsed = runCatching { json.parseToJsonElement(trimmed) }.getOrNull()
+                            if (parsed is JsonObject || parsed is JsonArray) {
+                                val nested = walk(parsed, depth + 1).toString()
+                                return if (nested.length > options.maxStringLength) {
+                                    truncatedCount += 1
+                                    JsonPrimitive(nested.take(options.maxStringLength) + "...[TRUNCATED:${nested.length}chars]")
+                                } else {
+                                    JsonPrimitive(nested)
+                                }
+                            }
+                        }
+                        val res = redactTextPatterns(raw, options.maxStringLength)
                         maskedPatternCount += res.maskedCount
                         if (res.truncated) truncatedCount += 1
                         JsonPrimitive(res.text)
@@ -181,9 +213,16 @@ object Redaction {
                         truncatedCount += 1
                         return JsonPrimitive("[TRUNCATED_MAX_DEPTH]")
                     }
+                    // 支持 HAR 的 {name, value} 或 {key, value} 结构
+                    val headerName = (value["name"] ?: value["key"])
+                        ?.let { it as? JsonPrimitive }
+                        ?.takeIf { it.isString }
+                        ?.contentOrNull
+                    val isHarSensitive = value.containsKey("value") && headerName != null && isSensitiveKey(headerName)
+
                     buildJsonObject {
                         for ((k, v) in value) {
-                            if (isSensitiveKey(k)) {
+                            if ((isHarSensitive && k == "value") || isSensitiveKey(k)) {
                                 redactedKeyCount += 1
                                 put(k, JsonPrimitive("[REDACTED]"))
                             } else {

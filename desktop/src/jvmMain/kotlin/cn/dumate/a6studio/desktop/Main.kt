@@ -158,25 +158,47 @@ fun main() = application {
             engine = RhinoRunEngine
         ).also { it.init() }
     }
-    val mcpServer = remember {
-        val port = (System.getenv("A6STUDIO_MCP_PORT") ?: System.getProperty("a6studio.mcpPort"))
-            ?.toIntOrNull() ?: 0
-        runCatching {
-            DesktopMcpServer(
-                getProject = { state.repo.current },
-                setProject = { p ->
-                    state.scope.launch {
-                        state.repo.snapshot("外部 MCP 补丁")
-                        state.repo.setProjectDirect(p)
-                        state.refreshAll()
-                    }
-                },
-                port = port
-            ).also {
-                it.start()
-                state.attachLocalMcpEndpoint(it.endpointUrl)
+    val mcpServerHolder = remember { arrayOfNulls<DesktopMcpServer>(1) }
+    remember(state) {
+        state.onToggleLocalMcp = { enable ->
+            mcpServerHolder[0]?.let {
+                runCatching { it.stop() }
+                mcpServerHolder[0] = null
             }
-        }.getOrNull()
+            if (enable) {
+                val port = (System.getenv("A6STUDIO_MCP_PORT") ?: System.getProperty("a6studio.mcpPort"))
+                    ?.toIntOrNull() ?: 0
+                runCatching {
+                    DesktopMcpServer(
+                        getProject = { kotlinx.coroutines.runBlocking(Dispatchers.Main) { state.repo.current } },
+                        setProject = { p ->
+                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                                state.applyExternalMcpProject(p)
+                            }
+                        },
+                        port = port,
+                        mutateProjectSync = { transform ->
+                            kotlinx.coroutines.runBlocking(Dispatchers.Main) {
+                                val res = transform(state.repo.current)
+                                if (res.accepted) {
+                                    state.applyExternalMcpProject(res.project)
+                                }
+                                res
+                            }
+                        }
+                    ).also {
+                        it.start()
+                        mcpServerHolder[0] = it
+                        state.attachLocalMcpEndpoint(it.endpointUrl, it.authToken)
+                    }
+                }.onFailure {
+                    state.attachLocalMcpEndpoint(null, null)
+                }
+            } else {
+                state.attachLocalMcpEndpoint(null, null)
+            }
+        }
+        true
     }
 
     val widthDp: androidx.compose.ui.unit.Dp
@@ -215,7 +237,7 @@ fun main() = application {
     Window(
         onCloseRequest = {
             // Release the local MCP server, coroutine scope and connection pool before exit.
-            runCatching { mcpServer?.stop() }
+            runCatching { mcpServerHolder[0]?.stop() }
             state.dispose()
             exitApplication()
         },

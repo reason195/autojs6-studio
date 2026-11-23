@@ -608,8 +608,7 @@ object Catalog {
         )
         val byOpts = listOf(
             SelectOption("text", "文本 (text)"),
-            SelectOption("desc", "描述 (desc)"),
-            SelectOption("id", "控件 ID")
+            SelectOption("desc", "描述 (desc)")
         )
         val resultOpts = listOf(
             SelectOption("auto", "自动判定（有未完成报 WARN）"),
@@ -631,13 +630,13 @@ object Catalog {
             val maxMs = c.num(b, "maxRuntimeMs").toLong().let { if (it <= 0) 900000L else it }
             listOf(
                 "var \$kit = Kit.boot({",
-                "  id: $name,",
-                "  name: $name,",
-                "  pkg: $pkg,",
-                "  maxRuntimeMs: $maxMs,",
-                "  risk: \"stop_and_notify\",",
-                "  riskyActivityRe: \"Settlement|Checkout|ConfirmOrder|OrderSubmit|Pay|Cart|trade|permissioncontroller|GrantPermissions\",",
-                "  forbiddenZones: [[2130, 2400]]",
+                "  id: $name, name: $name, pkg: $pkg,",
+                "  policy: {",
+                "    maxRuntimeMs: $maxMs,",
+                "    riskyActivityRe: \"Settlement|Checkout|ConfirmOrder|OrderSubmit|Pay|Cart|trade|permissioncontroller|GrantPermissions\",",
+                "    forbiddenZones: [[2130, 2400]],",
+                "    skipKeywords: [\"下单\", \"支付\", \"绑卡\", \"邀请好友\", \"开通\"]",
+                "  }",
                 "});"
             ).joinToString("\n")
         }
@@ -689,7 +688,14 @@ object Catalog {
             val match = c.quote(c.str(b, "match").ifEmpty { "contains" })
             val value = c.quote(c.str(b, "value"))
             val ms = c.num(b, "timeoutMs").toLong().let { if (it <= 0) 15000L else it }
-            "if (!\$kit.waitFor({ by: $by, match: $match, value: $value, filters: { inScreen: true } }, $ms)) { \$kit.log(\"未等到控件: \" + $value); }"
+            listOf(
+                "if (!\$kit.waitFor({ by: $by, match: $match, value: $value, filters: { inScreen: true } }, $ms)) {",
+                "  \$kit.log(\"未等到控件: \" + $value);",
+                "  \$kit.reportLeftover($value);",
+                "  \$kit.stat(\"failed\");",
+                "  if (\$kit.overBudget() || \$kit.atRisk()) { \$kit.finish(\"failed\"); exit(); }",
+                "}"
+            ).joinToString("\n")
         }
 
         def(
@@ -703,7 +709,14 @@ object Catalog {
             val by = c.quote(c.str(b, "by").ifEmpty { "text" })
             val match = c.quote(c.str(b, "match").ifEmpty { "contains" })
             val value = c.quote(c.str(b, "value"))
-            "\$kit.click({ by: $by, match: $match, value: $value, filters: { inScreen: true } });"
+            listOf(
+                "var _r = \$kit.click({ by: $by, match: $match, value: $value, filters: { inScreen: true } });",
+                "if (!_r || !_r.ok) {",
+                "  if (_r && (_r.reason === \"guard\" || _r.reason === \"abort\")) { \$kit.finish(\"failed\"); exit(); }",
+                "  \$kit.reportLeftover($value);",
+                "  \$kit.stat(\"failed\");",
+                "}"
+            ).joinToString("\n")
         }
 
         def(
@@ -716,8 +729,8 @@ object Catalog {
             val minSec = c.num(b, "minDwellSec").toLong().let { if (it <= 0) 12L else it }
             val graceSec = c.num(b, "graceSec").toLong().let { if (it < 0) 2L else it }
             listOf(
-                "\$kit.waitCountdown({ minDwellSec: $minSec, graceSec: $graceSec });",
-                "\$kit.back();"
+                "var _cd = \$kit.waitCountdown({ fallbackDwellMs: ${minSec * 1000L}, graceMs: ${graceSec * 1000L} });",
+                "if (!_cd) { \$kit.backToBean(); }"
             ).joinToString("\n")
         }
 

@@ -2,10 +2,12 @@ package cn.dumate.a6studio.bridge
 
 import cn.dumate.a6studio.ai.BlockPatch
 import cn.dumate.a6studio.ai.BlockPatchOp
+import cn.dumate.a6studio.ai.PatchGuardResult
 import cn.dumate.a6studio.catalog.CodeGen
 import cn.dumate.a6studio.diagnose.Diagnose
 import cn.dumate.a6studio.model.Project
 import cn.dumate.a6studio.security.Redaction
+import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -17,27 +19,43 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.Executors
 
 /**
  * 桌面端本地 MCP over HTTP 服务端（JSON-RPC 2.0，仅绑定 127.0.0.1）。
- * 允许外部 AI IDE（Cursor / Claude / Antigravity）读取当前工程、执行静态诊断、
- * 生成代码以及通过 [BlockPatch.guardAndApply] 受控修改积木树。
+ *
+ * 安全策略（N-S2 / N-M7）：
+ * - 启动时生成 32 字节随机令牌（[authToken]），要求 `Authorization: Bearer <token>`，令牌仅驻留内存；
+ * - 强制校验 `Host` 为 `127.0.0.1:<port>` 或 `localhost:<port>`；
+ * - 任何携带 `Origin` 头的请求一律返回 403（阻断浏览器跨站请求）；
+ * - 强制要求 `Content-Type: application/json`（否则返回 415）；
+ * - 请求体上限 1 MB（`readNBytes`，超出返回 413）；
+ * - 使用固定大小线程池 `newFixedThreadPool(2)`，补丁修改通过 [mutateProjectSync] 原子执行。
  */
 class DesktopMcpServer(
     private val getProject: () -> Project,
     private val setProject: (Project) -> Unit,
-    port: Int = 0
+    port: Int = 0,
+    private val mutateProjectSync: (((Project) -> PatchGuardResult) -> PatchGuardResult)? = null
 ) {
+    companion object {
+        const val MAX_BODY_BYTES = 1_048_576
+        private fun generateToken(): String {
+            val bytes = ByteArray(32)
+            SecureRandom().nextBytes(bytes)
+            return bytes.joinToString("") { "%02x".format(it) }
+        }
+    }
+
+    val authToken: String = generateToken()
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val server: HttpServer = HttpServer.create(InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 0)
-    private val executor = Executors.newCachedThreadPool()
+    private val executor = Executors.newFixedThreadPool(2)
 
     val boundPort: Int get() = server.address.port
     val endpointUrl: String get() = "http://127.0.0.1:$boundPort/mcp"
@@ -45,61 +63,139 @@ class DesktopMcpServer(
     init {
         server.executor = executor
         server.createContext("/mcp") { exchange ->
-            if (exchange.requestMethod.equals("POST", ignoreCase = true).not()) {
-                val msg = "Method Not Allowed".toByteArray()
-                exchange.sendResponseHeaders(405, msg.size.toLong())
-                exchange.responseBody.use { it.write(msg) }
-                return@createContext
+            try {
+                handleExchange(exchange)
+            } catch (e: Throwable) {
+                runCatching {
+                    val errBytes = rpcError(JsonNull, -32603, "Internal server error").toByteArray(Charsets.UTF_8)
+                    exchange.responseHeaders.set("Content-Type", "application/json; charset=utf-8")
+                    exchange.sendResponseHeaders(500, errBytes.size.toLong())
+                    exchange.responseBody.use { it.write(errBytes) }
+                }
+            } finally {
+                runCatching { exchange.close() }
             }
-            val body = exchange.requestBody.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            val respText = handleJsonRpc(body)
-            val bytes = respText.toByteArray(Charsets.UTF_8)
-            exchange.responseHeaders.add("Content-Type", "application/json; charset=utf-8")
-            exchange.sendResponseHeaders(200, bytes.size.toLong())
-            exchange.responseBody.use { it.write(bytes) }
         }
+    }
+
+    private fun handleExchange(exchange: HttpExchange) {
+        if (!exchange.requestMethod.equals("POST", ignoreCase = true)) {
+            sendPlain(exchange, 405, "Method Not Allowed")
+            return
+        }
+
+        // 1. 拒绝任何携带 Origin 头的请求（阻断网页 CSRF / DNS Rebinding）
+        val origin = exchange.requestHeaders.getFirst("Origin")
+        if (!origin.isNullOrBlank()) {
+            sendPlain(exchange, 403, "Forbidden: Origin header is not allowed")
+            return
+        }
+
+        // 2. 校验 Host 头
+        val host = exchange.requestHeaders.getFirst("Host")?.trim()?.lowercase().orEmpty()
+        val allowedHosts = setOf("127.0.0.1:$boundPort", "localhost:$boundPort")
+        if (host !in allowedHosts) {
+            sendPlain(exchange, 403, "Forbidden: Invalid Host header")
+            return
+        }
+
+        // 3. 校验 Authorization: Bearer <token>
+        val auth = exchange.requestHeaders.getFirst("Authorization")?.trim().orEmpty()
+        val expectedAuth = "Bearer $authToken"
+        val authOk = MessageDigest.isEqual(
+            auth.toByteArray(Charsets.UTF_8),
+            expectedAuth.toByteArray(Charsets.UTF_8)
+        )
+        if (!authOk) {
+            sendPlain(exchange, 401, "Unauthorized")
+            return
+        }
+
+        // 4. 校验 Content-Type 必须为 application/json
+        val ct = exchange.requestHeaders.getFirst("Content-Type")?.trim()?.lowercase().orEmpty()
+        if (!ct.startsWith("application/json")) {
+            sendPlain(exchange, 415, "Unsupported Media Type: application/json required")
+            return
+        }
+
+        // 5. 限制请求体大小不超过 1 MB
+        val rawBytes = exchange.requestBody.use { it.readNBytes(MAX_BODY_BYTES + 1) }
+        if (rawBytes.size > MAX_BODY_BYTES) {
+            sendPlain(exchange, 413, "Payload Too Large")
+            return
+        }
+
+        val body = rawBytes.toString(Charsets.UTF_8)
+        val respText = handleJsonRpc(body)
+        val bytes = respText.toByteArray(Charsets.UTF_8)
+        exchange.responseHeaders.set("Content-Type", "application/json; charset=utf-8")
+        exchange.sendResponseHeaders(200, bytes.size.toLong())
+        exchange.responseBody.use { it.write(bytes) }
+    }
+
+    private fun sendPlain(exchange: HttpExchange, status: Int, text: String) {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        exchange.responseHeaders.set("Content-Type", "text/plain; charset=utf-8")
+        exchange.sendResponseHeaders(status, bytes.size.toLong())
+        exchange.responseBody.use { it.write(bytes) }
     }
 
     fun start() = server.start()
 
     fun stop() {
-        server.stop(0)
-        executor.shutdownNow()
+        runCatching { server.stop(0) }
+        runCatching { executor.shutdownNow() }
     }
 
     internal fun handleJsonRpc(rawBody: String): String {
-        val req = runCatching { json.parseToJsonElement(rawBody).jsonObject }.getOrNull()
+        val req = runCatching { json.parseToJsonElement(rawBody) as? JsonObject }.getOrNull()
             ?: return rpcError(JsonNull, -32700, "Parse error")
         val id = req["id"] ?: JsonNull
-        val method = req["method"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        val params = req["params"] as? JsonObject ?: JsonObject(emptyMap())
+        val methodEl = req["method"] as? JsonPrimitive
+        if (methodEl == null || !methodEl.isString) {
+            return rpcError(id, -32600, "Invalid Request: method must be a string")
+        }
+        val method = methodEl.contentOrNull.orEmpty()
+        val paramsEl = req["params"]
+        if (paramsEl != null && paramsEl !is JsonObject) {
+            return rpcError(id, -32602, "Invalid params: object expected")
+        }
+        val params = paramsEl as? JsonObject ?: JsonObject(emptyMap())
 
-        return when (method) {
-            "initialize" -> rpcResult(id, buildJsonObject {
-                put("protocolVersion", "2024-11-05")
-                put("serverInfo", buildJsonObject {
-                    put("name", "autojs6-studio-mcp")
-                    put("version", "1.0.0")
+        return try {
+            when (method) {
+                "initialize" -> rpcResult(id, buildJsonObject {
+                    put("protocolVersion", "2024-11-05")
+                    put("serverInfo", buildJsonObject {
+                        put("name", "autojs6-studio-mcp")
+                        put("version", "1.0.0")
+                    })
+                    put("capabilities", buildJsonObject {
+                        put("tools", buildJsonObject { })
+                    })
                 })
-                put("capabilities", buildJsonObject {
-                    put("tools", buildJsonObject { })
+                "notifications/initialized" -> rpcResult(id, buildJsonObject { })
+                "tools/list" -> rpcResult(id, buildJsonObject {
+                    put("tools", buildJsonArray {
+                        add(toolDef("studio_get_project", "读取当前工程 JSON 结构"))
+                        add(toolDef("studio_diagnose", "对当前工程执行静态诊断"))
+                        add(toolDef("studio_generate_code", "生成 AutoJs6 JS 代码并执行密钥扫描"))
+                        add(toolDef("studio_apply_patch", "通过受控护栏补丁修改当前工程"))
+                    })
                 })
-            })
-            "notifications/initialized" -> rpcResult(id, buildJsonObject { })
-            "tools/list" -> rpcResult(id, buildJsonObject {
-                put("tools", buildJsonArray {
-                    add(toolDef("studio_get_project", "读取当前工程 JSON 结构"))
-                    add(toolDef("studio_diagnose", "对当前工程执行静态诊断"))
-                    add(toolDef("studio_generate_code", "生成 AutoJs6 JS 代码并执行密钥扫描"))
-                    add(toolDef("studio_apply_patch", "通过受控护栏补丁修改当前工程"))
-                })
-            })
-            "tools/call" -> {
-                val name = params["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                val args = params["arguments"] as? JsonObject ?: JsonObject(emptyMap())
-                handleToolCall(id, name, args)
+                "tools/call" -> {
+                    val nameEl = params["name"] as? JsonPrimitive
+                    if (nameEl == null || !nameEl.isString) {
+                        return rpcError(id, -32602, "Invalid params: tool name must be a string")
+                    }
+                    val name = nameEl.contentOrNull.orEmpty()
+                    val args = params["arguments"] as? JsonObject ?: JsonObject(emptyMap())
+                    handleToolCall(id, name, args)
+                }
+                else -> rpcError(id, -32601, "Method not found: $method")
             }
-            else -> rpcError(id, -32601, "Method not found: $method")
+        } catch (e: Throwable) {
+            rpcError(id, -32603, "Internal error: ${e.message ?: e::class.simpleName}")
         }
     }
 
@@ -139,11 +235,15 @@ class DesktopMcpServer(
                 }.getOrElse {
                     return toolErr(id, "ops 解析失败：${it.message}")
                 }
-                val res = BlockPatch.guardAndApply(getProject(), ops)
+                val runner = mutateProjectSync ?: { transform ->
+                    val r = transform(getProject())
+                    if (r.accepted) setProject(r.project)
+                    r
+                }
+                val res = runner { current -> BlockPatch.guardAndApply(current, ops) }
                 if (!res.accepted) {
                     toolErr(id, "护栏拒绝补丁：\n" + res.errors.joinToString("\n"))
                 } else {
-                    setProject(res.project)
                     toolOk(id, "补丁已通过护栏校验并应用，当前工程：${res.project.name}")
                 }
             }
