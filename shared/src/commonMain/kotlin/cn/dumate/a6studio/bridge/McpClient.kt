@@ -6,6 +6,7 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -70,7 +71,12 @@ class McpClient(
     fun headersSnapshot(): Map<String, String> = authHeader?.let { mapOf("Authorization" to it) } ?: emptyMap()
 
     fun setUrl(newUrl: String) {
-        url = normalizeUrl(newUrl)
+        val u = normalizeUrl(newUrl)
+        // M10: applyBridgeConfig() calls this before every device action. Resetting an
+        // unchanged address dropped the live session mid-run (a 70s device run + opening the
+        // picker = a second handshake that invalidated the first).
+        if (u == url && ready) return
+        url = u
         ready = false
         sessionId = ""
         authHeader = authByUrl[url]
@@ -123,12 +129,20 @@ class McpClient(
             put("Content-Type", "application/json")
             authHeader?.let { put("Authorization", it) }
             if (sessionId.isNotEmpty()) put("mcp-session-id", sessionId)
-            putAll(extraHeaders)
+            // x-a6-* keys are local hints for this method, not headers for the device.
+            putAll(extraHeaders.filterKeys { !it.startsWith("x-a6-") })
         }
 
+        // M11: `http.post {}` buffers the whole body (SaveBody) before returning, so against
+        // a keep-alive SSE stream it only returned once the server closed the socket or the
+        // timeout fired — readFirstSsePayload was reading an in-memory copy. preparePost +
+        // execute { } hands over the live response; we read it inside the block and the
+        // connection is released as soon as the block returns.
         // Per-request timeout on the *shared* client: no derived client, no leaked pool.
-        val response: HttpResponse = try {
-            http.post(target) {
+        // Session handling, status checks and body reading all happen inside execute { }:
+        // the streamed body is only readable there.
+        val raw: Pair<Int, String> = try {
+            http.preparePost(target) {
                 contentType(ContentType.Application.Json)
                 headers.forEach { (k, v) -> header(k, v) }
                 setBody(payload.toString())
@@ -137,7 +151,11 @@ class McpClient(
                     connectTimeoutMillis = minOf(timeoutMs, 8_000)
                     socketTimeoutMillis = timeoutMs
                 }
+            }.execute { response ->
+                readResponse(response, target, timeoutMs, extraHeaders)
             }
+        } catch (e: BridgeException) {
+            throw e
         } catch (e: io.ktor.client.plugins.HttpRequestTimeoutException) {
             throw BridgeException(timeoutMessage(target, timeoutMs), "TIMEOUT")
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -153,7 +171,29 @@ class McpClient(
             }
             throw BridgeException(networkMessage(target, detail), "NETWORK")
         }
+        val (status, text) = raw
+        if (text.isBlank()) {
+            // Keep the raw SSE for diagnosis: "no response" hides whether the reply was malformed.
+            throw BridgeException(
+                "手机返回了空的响应体（HTTP $status）。若持续出现，请在手机上关闭再打开 MCP Server 插件。",
+                "EMPTY_BODY"
+            )
+        }
+        return parseJsonOrThrow(text) ?: throw BridgeException(
+            "无法解析 MCP 响应（原文前 160 字符：${text.take(160)}）",
+            "BAD_RESPONSE"
+        )
+    }
 
+    /** Runs inside execute { }: checks the status, records the session and reads the body. */
+    private suspend fun readResponse(
+        response: HttpResponse, target: String, timeoutMs: Long, extraHeaders: Map<String, String>
+    ): Pair<Int, String> {
+        if (response.status.value == 404 && extraHeaders["x-a6-had-session"] == "1") {
+            // M10: per the MCP spec an expired session answers 404. That is not a wrong
+            // address; rpc() re-initialises and retries once.
+            throw BridgeException("MCP 会话已过期", "SESSION_EXPIRED")
+        }
         if (response.status.value == 404 || response.status.value == 405) {
             throw BridgeException("HTTP ${response.status.value}：地址不是 MCP 端点，或桥接未启动", "BAD_ENDPOINT")
         }
@@ -170,7 +210,7 @@ class McpClient(
         }
 
         val contentType = response.headers["content-type"] ?: ""
-        val text = try {
+        val body = try {
             if (contentType.contains("text/event-stream")) {
                 // MCP answers over a *keep-alive* SSE stream, so reading until EOF blocks until the
                 // socket timeout (measured: raw socket got 200 in <1s while this timed out at 15s).
@@ -186,27 +226,11 @@ class McpClient(
         } catch (e: Exception) {
             throw BridgeException(timeoutMessage(target, timeoutMs), "TIMEOUT")
         }
-        if (text.isBlank()) {
-            // Keep the raw SSE for diagnosis: "no response" hides whether the reply was malformed.
-            throw BridgeException(
-                "手机返回了空的响应体（HTTP ${response.status.value}，Content-Type: $contentType）。" +
-                    "若持续出现，请在手机上关闭再打开 MCP Server 插件。",
-                "EMPTY_BODY"
-            )
-        }
-
-        val parsed = if (contentType.contains("text/event-stream")) {
-            // The payload may arrive with a leading `:` comment frame; SseFrames handles framing.
-            val payload = SseFrames.extractPayload(text) ?: text
-            parseJsonOrThrow(payload)
-        } else parseJsonOrThrow(text)
-        if (parsed == null) {
-            throw BridgeException(
-                "无法解析 MCP 响应（原文前 160 字符：${text.take(160)}）",
-                "BAD_RESPONSE"
-            )
-        }
-        return parsed
+        // The payload may arrive with a leading `:` comment frame; SseFrames handles framing.
+        val text = if (contentType.contains("text/event-stream") && body.isNotBlank()) {
+            SseFrames.extractPayload(body) ?: body
+        } else body
+        return response.status.value to text
     }
 
     /**
@@ -260,6 +284,20 @@ class McpClient(
             "②IP 是否变了；③网络是否可达（同一 Wi-Fi / 桥接代理）。"
 
     private suspend fun rpc(method: String, params: JsonObject?, timeoutMs: Long = 15_000): JsonElement {
+        return try {
+            rpcOnce(method, params, timeoutMs)
+        } catch (e: BridgeException) {
+            if (e.code != "SESSION_EXPIRED") throw e
+            mutex.withLock {
+                ready = false
+                sessionId = ""
+                initializeLocked()
+            }
+            rpcOnce(method, params, timeoutMs)
+        }
+    }
+
+    private suspend fun rpcOnce(method: String, params: JsonObject?, timeoutMs: Long): JsonElement {
         val id = ++seq
         val payload = buildJsonObject {
             put("jsonrpc", "2.0")
@@ -267,9 +305,20 @@ class McpClient(
             put("method", method)
             put("params", params ?: buildJsonObject { })
         }
-        val response = post(payload, timeoutMs = timeoutMs)
+        val marker = if (sessionId.isNotEmpty()) mapOf("x-a6-had-session" to "1") else emptyMap()
+        val response = post(payload, extraHeaders = marker, timeoutMs = timeoutMs)
             ?: throw BridgeException("空响应", "EMPTY_RESPONSE")
-        val obj = response.jsonObject
+        val obj = response as? JsonObject
+            ?: throw BridgeException("MCP 响应不是 JSON 对象：${response.toString().take(120)}", "BAD_RESPONSE")
+        // M10: a progress notification or a server request read off the SSE stream is not
+        // our answer. Say so instead of treating a missing `result` as success.
+        val respId = (obj["id"] as? JsonPrimitive)?.content
+        if (respId != null && respId != id.toString()) {
+            throw BridgeException("MCP 响应 id 不匹配（期望 $id，收到 $respId）", "BAD_RESPONSE")
+        }
+        if (respId == null && obj["result"] == null && obj["error"] == null) {
+            throw BridgeException("收到的是服务端通知而不是结果：${obj["method"] ?: obj.toString().take(80)}", "BAD_RESPONSE")
+        }
         (obj["error"] as? JsonObject)?.let { err ->
             throw BridgeException(err["message"]?.jsonPrimitive?.content ?: err.toString(), "RPC_ERROR")
         }

@@ -110,14 +110,26 @@ class ProjectRepo(private val storage: ProjectStorage) {
         return null
     }
 
-    private fun normalizeProject(p: Project): Project = p.copy(
-        root = normalizeBlock(p.root),
-        modules = p.modules.map { m -> m.copy(children = m.children.mapValues { (_, v) -> v.map(::normalizeBlock) }) }
-    )
-
-    private fun normalizeBlock(b: Block): Block = b.copy(
-        children = b.children.mapValues { (_, kids) -> kids.map(::normalizeBlock) }
-    )
+    /**
+     * M15: a hand-edited or imported file could carry empty or repeated block ids. Every
+     * edit addresses blocks by id, so a duplicate made one change hit two blocks. One shared
+     * [seen] set across root and all modules gives each block a unique id.
+     */
+    private fun normalizeProject(p: Project): Project {
+        val seen = mutableSetOf<String>()
+        fun fix(b: Block): Block {
+            val id = if (b.id.isEmpty() || !seen.add(b.id)) {
+                var fresh = Ids.next()
+                while (!seen.add(fresh)) fresh = Ids.next()
+                fresh
+            } else b.id
+            return b.copy(id = id, children = b.children.mapValues { (_, kids) -> kids.map(::fix) })
+        }
+        return p.copy(
+            root = p.root.copy(children = p.root.children.mapValues { (_, kids) -> kids.map(::fix) }),
+            modules = p.modules.map { m -> m.copy(children = m.children.mapValues { (_, v) -> v.map(::fix) }) }
+        )
+    }
 
     /**
      * Persists the project. Returns false on failure and records why in [lastSaveError].
@@ -171,6 +183,9 @@ class ProjectRepo(private val storage: ProjectStorage) {
         val (label, raw) = undoStack.removeLastOrNull() ?: return null
         _projectState = try { json.decodeFromString(Project.serializer(), raw) } catch (e: Exception) { current }
         _selectedState = null
+        // M15: undoing "新建模块" left the scope pointing at a module that no longer exists;
+        // later adds then updated nothing while still reporting success.
+        if (_scopeState is Scope.Module && currentModule() == null) _scopeState = Scope.Root
         // 撤销之后再输入同一字段必须能被单独撤销：不清掉这个标记就会被当成「同一次连续输入」。
         lastEditedField = null
         save()
@@ -203,6 +218,18 @@ class ProjectRepo(private val storage: ProjectStorage) {
         TreeOps.find(current.root.children["body"].orEmpty(), id)?.let { return it }
         for (m in current.modules) TreeOps.find(m.children["body"].orEmpty(), id)?.let { return it }
         return null
+    }
+
+    /**
+     * Like [locate] but only inside the scope being edited. Move / shift / duplicate rewrite
+     * just that scope's body, so locating a block in another module (M15) used to remove
+     * nothing there and insert a second copy with the same id here.
+     */
+    private fun locateInScope(id: String): cn.dumate.a6studio.model.LocatedBlock? {
+        val loc = locate(id) ?: return null
+        val rootId = scopeRootId()
+        val inScope = loc.parentId == rootId || TreeOps.find(scopeBodyInternal(), id) != null
+        return if (inScope) loc else null
     }
 
     /** Finds the list + index containing [id], so callers can move or delete it. */
@@ -320,7 +347,7 @@ class ProjectRepo(private val storage: ProjectStorage) {
             return false
         }
         snapshot("移动积木")
-        val loc = locate(id) ?: return false
+        val loc = locateInScope(id) ?: return false
         val moved = loc.block
         val without = TreeOps.remove(scopeBodyInternal(), id).first
         val inserted = TreeOps.insert(without, parentId, slot, index, moved, scopeRootId())
@@ -331,7 +358,7 @@ class ProjectRepo(private val storage: ProjectStorage) {
     }
 
     fun shiftBlock(id: String, delta: Int) {
-        val loc = locate(id) ?: return
+        val loc = locateInScope(id) ?: return
         val j = loc.index + delta
         if (j < 0 || j >= loc.list.size) return
         snapshot("调整顺序")
@@ -351,7 +378,7 @@ class ProjectRepo(private val storage: ProjectStorage) {
     }
 
     fun duplicateBlock(id: String) {
-        val loc = locate(id) ?: return
+        val loc = locateInScope(id) ?: return
         snapshot("复制积木")
         val copy = TreeOps.cloneBlock(loc.block)
         val body = TreeOps.insert(scopeBodyInternal(), loc.parentId, loc.slot, loc.index + 1, copy, scopeRootId())
