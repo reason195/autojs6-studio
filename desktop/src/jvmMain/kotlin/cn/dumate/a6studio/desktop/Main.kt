@@ -47,7 +47,9 @@ private class DesktopPlatform : Platform {
      * `../` in a name must not escape into the user's home.
      */
     private fun resolve(path: String): File? {
-        if (File(path).isAbsolute) return File(path)
+        // Absolute paths are refused: the doc above says "confined to configDir", and the old
+        // pass-through let any caller (or a future plugin) write anywhere in the user's home.
+        if (File(path).isAbsolute) return null
         val base = configDir.canonicalFile
         val target = File(configDir, path).canonicalFile
         val inside = target.path == base.path || target.path.startsWith(base.path + File.separator)
@@ -60,19 +62,47 @@ private class DesktopPlatform : Platform {
     override fun writeTextFile(path: String, content: String): Boolean = runCatching {
         val f = resolve(path) ?: return false
         f.parentFile?.mkdirs()
-        f.writeText(content)
-        // The remembered tokens are credentials: keep them owner-only. Windows has no POSIX
-        // mode (the call is a no-op there; %USERPROFILE% is already per-user).
-        if (f.name.startsWith("a6studio.tokens")) {
-            runCatching {
-                java.nio.file.Files.setPosixFilePermissions(
-                    f.toPath(),
-                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
-                )
-            }
-        }
+        // The remembered tokens are credentials. Writing first and chmod-ing afterwards left a
+        // window where the file was world-readable (typical umask 022), so create it owner-only
+        // from the start: temp file with 600 → atomic rename onto the target.
+        if (f.name.startsWith("a6studio.tokens")) writeSecret(f, content) else f.writeText(content)
         true
     }.getOrDefault(false)
+
+    /**
+     * Writes [f] so that it is never readable by other users, not even between the write and a
+     * later permission fix. Falls back to a plain write where POSIX attributes are unavailable
+     * (Windows: %USERPROFILE% is already per-user, so there is nothing to tighten).
+     */
+    private fun writeSecret(f: File, content: String) {
+        val dir = f.absoluteFile.parentFile ?: return
+        val tmp = File(dir, f.name + ".tmp")
+        val perms = java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")
+        try {
+            java.nio.file.Files.newByteChannel(
+                tmp.toPath(),
+                setOf(
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                    java.nio.file.StandardOpenOption.WRITE
+                ),
+                java.nio.file.attribute.PosixFilePermissions.asFileAttribute(perms)
+            ).use { ch ->
+                ch.write(java.nio.ByteBuffer.wrap(content.toByteArray()))
+            }
+            java.nio.file.Files.move(
+                tmp.toPath(), f.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE
+            )
+        } catch (e: UnsupportedOperationException) {
+            runCatching { tmp.delete() }
+            f.writeText(content)
+        } catch (e: java.io.IOException) {
+            runCatching { tmp.delete() }
+            throw e
+        }
+    }
 
     override suspend fun saveTextAs(suggestedName: String, content: String, mimeType: String): String? {
         val dialog = FileDialog(null as Frame?, "保存", FileDialog.SAVE).apply {
