@@ -1,6 +1,7 @@
 package cn.dumate.a6studio.ui.panes
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -94,7 +95,16 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
         // numbers line up with the wrong text.
         val hScroll = rememberScrollState()
         val widest = remember(lines) {
-            lines.maxOfOrNull { it.text.length } ?: 0
+            // Row width is estimated from the text, so the estimate decides whether long lines
+            // are cut off (`device.heigh…`). Count CJK/full-width chars as two columns, and
+            // leave room for the desktop fontScale (1.08) plus the line-number gutter.
+            var widestCols = 0
+            for (l in lines) {
+                var cols = 0
+                for (ch in l.text) cols += if (ch.code >= 0x2E80) 2 else 1
+                if (cols > widestCols) widestCols = cols
+            }
+            widestCols
         }
         LazyColumn(
             Modifier.weight(1f).background(P.codeBg).horizontalScroll(hScroll),
@@ -108,7 +118,7 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
                     val isHl = i in highlighted
                     Row(
                         Modifier.widthIn(min = 420.dp)
-                            .width((widest * 6.6f + 44).dp.coerceAtLeast(420.dp))
+                            .width((widest * 7.8f + 64).dp.coerceAtLeast(420.dp))
                             .background(if (isHl) P.codeHl else androidx.compose.ui.graphics.Color.Transparent)
                             .padding(horizontal = 8.dp, vertical = 1.dp)
                     ) {
@@ -174,7 +184,8 @@ private fun SimPhone(state: StudioState) {
         Column(
             Modifier.widthIn(max = 300.dp).fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
-                .background(androidx.compose.ui.graphics.Color(0xFF0A0C10))
+                .background(P.panelAlt)
+                .border(1.dp, P.border, RoundedCornerShape(16.dp))
                 .padding(6.dp)
         ) {
             Row(
@@ -191,7 +202,8 @@ private fun SimPhone(state: StudioState) {
             Column(
                 Modifier.fillMaxWidth().height(300.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(androidx.compose.ui.graphics.Color(0xFF12151B))
+                    .background(P.panel)
+                    .border(1.dp, P.borderSoft, RoundedCornerShape(10.dp))
                     .padding(6.dp)
             ) {
                 if (state.simNodes.isEmpty()) {

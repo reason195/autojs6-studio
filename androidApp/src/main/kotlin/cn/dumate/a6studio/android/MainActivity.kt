@@ -3,6 +3,7 @@ package cn.dumate.a6studio.android
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,15 +11,20 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cn.dumate.a6studio.model.AndroidProjectStorage
 import cn.dumate.a6studio.platform.Platform
 import cn.dumate.a6studio.runtime.RhinoRunEngine
+import cn.dumate.a6studio.ui.AndroidColors
+import cn.dumate.a6studio.ui.AndroidStyle
 import cn.dumate.a6studio.ui.Palette
 import cn.dumate.a6studio.ui.StudioApp
+import cn.dumate.a6studio.ui.StudioColors
 import cn.dumate.a6studio.ui.StudioState
+import cn.dumate.a6studio.ui.StudioStyle
 import cn.dumate.a6studio.ui.StudioTheme
 import io.ktor.client.engine.okhttp.OkHttp
 
@@ -123,6 +129,35 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val platform = AndroidPlatform(this)
+
+        // Build a StudioStyle for Android.
+        // On Android 12+ (API 31+) pull the system dynamic palette and map it onto StudioColors
+        // so the app feels native to the user's wallpaper colour.
+        // Below Android 12 use the fixed Material You purple fallback (AndroidColors).
+        val androidStyle: StudioStyle = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val dyn = dynamicLightColorScheme(this)
+            val dynColors = StudioColors(
+                bg         = dyn.background,
+                panel      = dyn.surface,
+                panelAlt   = dyn.surfaceVariant,
+                border     = dyn.outline,
+                borderSoft = dyn.outlineVariant,
+                text       = dyn.onSurface,
+                textDim    = dyn.onSurfaceVariant,
+                accent     = dyn.primary,
+                onAccent   = dyn.onPrimary,
+                ok         = AndroidColors.ok,
+                warn       = AndroidColors.warn,
+                err        = AndroidColors.err,
+                info       = AndroidColors.info,
+                codeBg     = dyn.surfaceContainer,
+                codeHl     = dyn.primaryContainer,
+            )
+            AndroidStyle.copy(colors = dynColors)
+        } else {
+            AndroidStyle
+        }
+
         setContent {
             val state = remember {
                 StudioState(
@@ -137,7 +172,7 @@ class MainActivity : ComponentActivity() {
             androidx.compose.runtime.DisposableEffect(Unit) {
                 onDispose { state.dispose() }
             }
-            StudioTheme {
+            StudioTheme(style = androidStyle) {
                 Surface(Modifier.fillMaxSize(), color = Palette.bg) {
                     androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().padding(0.dp)) {
                         StudioApp(state)

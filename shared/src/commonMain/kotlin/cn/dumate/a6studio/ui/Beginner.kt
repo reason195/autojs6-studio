@@ -107,7 +107,7 @@ fun GuideOverlay(state: StudioState) {
     val current = steps[step.coerceIn(0, steps.size - 1)]
 
     Box(
-        Modifier.fillMaxSize().background(Color(0xE605070A)).clickable(enabled = false) { },
+        Modifier.fillMaxSize().background(Color(0x661F2328)).clickable(enabled = false) { },
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -178,7 +178,7 @@ fun GuideOverlay(state: StudioState) {
 @Composable
 fun TemplateOverlay(state: StudioState) {
     Box(
-        Modifier.fillMaxSize().background(Color(0xCC05070A)).clickable { state.closeTemplates() },
+        Modifier.fillMaxSize().background(Color(0x551F2328)).clickable { state.closeTemplates() },
         contentAlignment = Alignment.Center
     ) {
         Column(

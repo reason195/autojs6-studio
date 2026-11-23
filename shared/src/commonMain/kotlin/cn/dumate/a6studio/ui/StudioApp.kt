@@ -59,6 +59,7 @@ import cn.dumate.a6studio.ui.components.Badge
 import cn.dumate.a6studio.ui.components.badgeKindOf
 import cn.dumate.a6studio.ui.fields.InlineField
 import cn.dumate.a6studio.ui.palette.PalettePanel
+import cn.dumate.a6studio.ui.currentStudioStyle
 import cn.dumate.a6studio.ui.panes.CodePane
 import cn.dumate.a6studio.ui.panes.DevicePane
 import cn.dumate.a6studio.ui.panes.DiagPane
@@ -149,7 +150,8 @@ private fun TopBar(state: StudioState) {
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    RunButton(state, Modifier.weight(1f))
+                    Spacer(Modifier.weight(1f))
+                    RunButton(state)
                     Spacer(Modifier.width(8.dp))
                     QuietAction("↶", "撤销") { state.undo() }
                     Spacer(Modifier.width(8.dp))
@@ -192,24 +194,25 @@ private fun BrandMark() {
     Box(
         Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)).background(Palette.accent),
         contentAlignment = Alignment.Center
-    ) { Text("A6", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White) }
+    ) { Text("A6", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Palette.onAccent) }
 }
 
 /** The one primary action: run, or stop while it runs. */
 @Composable
 private fun RunButton(state: StudioState, modifier: Modifier = Modifier) {
     val running = state.running
+    val cornerRadius = currentStudioStyle.shapeSm
     Text(
         if (running) "■ 停止" else "▶ 运行",
         fontSize = 12.5.sp,
         fontWeight = FontWeight.SemiBold,
-        color = Color.White,
+        color = Palette.onAccent,
         textAlign = TextAlign.Center,
         modifier = modifier
-            .clip(RoundedCornerShape(7.dp))
+            .clip(RoundedCornerShape(cornerRadius))
             .background(if (running) Palette.err.copy(alpha = 0.9f) else Palette.accent)
             .clickable { if (running) state.stopRun() else state.run() }
-            .padding(horizontal = 18.dp, vertical = 8.dp)
+            .padding(horizontal = 14.dp, vertical = 6.dp)
     )
 }
 
@@ -331,7 +334,7 @@ private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit, onDele
     Row(
         Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(if (active) Palette.accent.copy(alpha = 0.75f) else Palette.panelAlt)
+            .background(if (active) Palette.accent else Palette.panelAlt)
             .clickable(onClick = onClick)
             .padding(start = 8.dp, end = if (onDelete != null && active) 3.dp else 8.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -339,13 +342,13 @@ private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit, onDele
         Text(
             label,
             fontSize = 10.5.sp,
-            color = if (active) Color.White else Palette.textDim
+            color = if (active) Palette.onAccent else Palette.textDim
         )
         if (onDelete != null && active) {
             Text(
                 "✕",
                 fontSize = 10.sp,
-                color = Color.White.copy(alpha = 0.75f),
+                color = Palette.onAccent.copy(alpha = 0.8f),
                 modifier = Modifier
                     .clickable(onClick = onDelete)
                     .padding(start = 5.dp, end = 2.dp)
@@ -504,9 +507,9 @@ private fun PhoneyTabs(state: StudioState) {
             Text(
                 label,
                 fontSize = 11.sp,
-                color = if (active) Color.White else Palette.textDim,
+                color = if (active) Palette.onAccent else Palette.textDim,
                 modifier = Modifier.clip(RoundedCornerShape(4.dp))
-                    .background(if (active) Palette.accent.copy(alpha = 0.7f) else Palette.panelAlt)
+                    .background(if (active) Palette.accent else Palette.panelAlt)
                     .clickable { state.mobileSheet = sheet }
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )

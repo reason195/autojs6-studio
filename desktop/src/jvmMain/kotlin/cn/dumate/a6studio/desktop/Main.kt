@@ -19,6 +19,7 @@ import cn.dumate.a6studio.runtime.RhinoRunEngine
 import cn.dumate.a6studio.ui.StudioApp
 import cn.dumate.a6studio.ui.StudioState
 import cn.dumate.a6studio.ui.StudioTheme
+import cn.dumate.a6studio.ui.DesktopStyle
 import io.ktor.client.engine.cio.CIO
 import kotlinx.coroutines.delay
 import java.awt.FileDialog
@@ -111,9 +112,38 @@ fun main() = application {
         ).also { it.init() }
     }
 
-    val widthDp = (System.getenv("A6STUDIO_WIDTH") ?: "1440").toIntOrNull()?.dp ?: 1440.dp
-    val heightDp = (System.getenv("A6STUDIO_HEIGHT") ?: "920").toIntOrNull()?.dp ?: 920.dp
-    val windowState = rememberWindowState(width = widthDp, height = heightDp)
+    val widthDp: androidx.compose.ui.unit.Dp
+    val heightDp: androidx.compose.ui.unit.Dp
+    val windowX: Int
+    val windowY: Int
+    // Respect A6STUDIO_WIDTH/HEIGHT for smoke-test screenshots; otherwise use 80% of the
+    // usable screen area, centred. We read the AWT screen size *outside* Compose so we can
+    // pass it to rememberWindowState before the first frame.
+    if (System.getenv("A6STUDIO_WIDTH") != null) {
+        widthDp  = (System.getenv("A6STUDIO_WIDTH")  ?: "760").toIntOrNull()?.dp ?: 760.dp
+        heightDp = (System.getenv("A6STUDIO_HEIGHT") ?: "900").toIntOrNull()?.dp ?: 900.dp
+        windowX  = 0; windowY = 0
+    } else {
+        val screen = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+            .defaultScreenDevice.defaultConfiguration
+        // Compose Desktop uses the screen's device-pixel-ratio to convert dp→px internally.
+        // Reading the AWT screen size gives us physical pixels; dividing by the same ratio
+        // gives logical dp values that Compose will honour without any extra scaling.
+        val scale  = screen.defaultTransform.scaleX   // e.g. 1.5 on a 150% HiDPI display
+        println("A6STUDIO HiDPI scale=$scale (${screen.bounds.width}x${screen.bounds.height} px)")
+        val usable = java.awt.Toolkit.getDefaultToolkit().screenSize
+        val wPx = (usable.width  * 0.80).toInt()
+        val hPx = (usable.height * 0.80).toInt()
+        widthDp  = (wPx  / scale).toInt().dp
+        heightDp = (hPx / scale).toInt().dp
+        windowX  = ((usable.width  - wPx) / 2).toInt()
+        windowY  = ((usable.height - hPx) / 2).toInt()
+    }
+    val windowState = rememberWindowState(
+        width  = widthDp,
+        height = heightDp,
+        position = androidx.compose.ui.window.WindowPosition(windowX.dp, windowY.dp)
+    )
 
     Window(
         onCloseRequest = {
@@ -136,7 +166,7 @@ fun main() = application {
         val shotAction = System.getProperty("a6studio.screenshotAction") ?: System.getenv("A6STUDIO_SCREENSHOT_ACTION")
         val graphicsLayer = rememberGraphicsLayer()
 
-        StudioTheme {
+        StudioTheme(style = DesktopStyle) {
             Box(
                 Modifier.fillMaxSize().drawWithContent {
                     graphicsLayer.record { this@drawWithContent.drawContent() }

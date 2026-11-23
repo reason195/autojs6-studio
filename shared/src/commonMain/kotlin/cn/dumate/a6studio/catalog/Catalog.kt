@@ -627,6 +627,22 @@ object Catalog {
         return noPlaceholders.replace(Regex("\\s+"), " ").trim()
     }
 
+    /**
+     * Block title with `{param}` placeholders filled from the block's current values, for the
+     * canvas header. cleanName() is for the palette, where no values exist yet: using it on
+     * the canvas left gaps like 「保持屏幕常亮 毫秒」 and 「每页最多 个」.
+     */
+    fun filledName(def: BlockDef, params: Map<String, cn.dumate.a6studio.model.ParamValue>): String {
+        val filled = Regex("\\{([^}]*)\\}").replace(def.name) { m ->
+            val key = m.groupValues[1]
+            val v = params[key] ?: def.params.firstOrNull { it.key == key }?.default
+            // asText() already prints whole numbers without ".0"; long text is shortened so
+            // the header stays on one line.
+            v?.asText()?.let { if (it.length > 24) it.take(23) + "…" else it } ?: ""
+        }
+        return filled.replace(Regex("\\s+"), " ").trim()
+    }
+
     private fun dirname(path: String): String {
         val idx = path.lastIndexOf('/')
         return if (idx > 0) path.substring(0, idx) else path

@@ -67,7 +67,7 @@ private fun OverlayFrame(
     body: @Composable (Modifier) -> Unit
 ) {
     Box(
-        Modifier.fillMaxSize().background(Color(0xCC05070A)).clickable(onClick = onClose),
+        Modifier.fillMaxSize().background(Color(0x661F2328)).clickable(onClick = onClose),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -187,9 +187,9 @@ fun PickerOverlay(state: StudioState) {
 private fun ViewTab(label: String, active: Boolean, onClick: () -> Unit) {
     Text(
         label, fontSize = 10.5.sp,
-        color = if (active) Color.White else Palette.textDim,
+        color = if (active) Palette.onAccent else Palette.textDim,
         modifier = Modifier.clip(RoundedCornerShape(4.dp))
-            .background(if (active) Palette.accent.copy(alpha = 0.7f) else Palette.panelAlt)
+            .background(if (active) Palette.accent else Palette.panelAlt)
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 4.dp)
     )
@@ -256,7 +256,7 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
         BoxWithConstraints(
             Modifier.fillMaxWidth().height(520.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .background(Color(0xFF0A0C10))
+                .background(Palette.panelAlt)
         ) {
             // The image is letterboxed inside this box; map device coords onto the drawn area
             // so hot zones and taps line up with the screenshot.
@@ -272,6 +272,7 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
                 bitmap = remember(s.shotBase64) { decodeBase64ToImage(s.shotBase64!!) },
                 contentDescription = "device screen",
                 contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
                 modifier = Modifier.fillMaxSize()
             )
 
@@ -291,8 +292,8 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
                         .offset(x = px(n.left), y = py(n.top))
                         .size(width = drawnW * (w / dw), height = drawnH * (h / dh))
                         .border(
-                            1.dp,
-                            if (isSel) Color.White else if (n.clickable) Palette.ok.copy(alpha = 0.75f) else Palette.info.copy(alpha = 0.45f),
+                            if (isSel) 2.dp else 1.dp,
+                            if (isSel) Palette.accent else if (n.clickable) Palette.ok.copy(alpha = 0.75f) else Palette.info.copy(alpha = 0.45f),
                             RoundedCornerShape(1.dp)
                         )
                         .clickable { state.pickerSelect(n) }
@@ -343,7 +344,7 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
                             .background(if (i == 0) Palette.warn else Palette.ok),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(if (i == 0) "①" else "②", fontSize = 8.sp, color = Color.Black)
+                        Text(if (i == 0) "①" else "②", fontSize = 8.sp, color = Color.White)
                     }
                 }
             }

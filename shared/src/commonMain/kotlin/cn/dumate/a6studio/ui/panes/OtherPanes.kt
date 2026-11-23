@@ -410,14 +410,13 @@ private fun HelpItem(text: String) {
 
 @Composable
 fun SmallButton(label: String, primary: Boolean = false, onClick: () -> Unit) {
-    val color = if (primary) P.accent else P.textDim
     Text(
         label,
         fontSize = 10.5.sp,
-        color = if (primary) androidx.compose.ui.graphics.Color.White else P.text,
+        color = if (primary) P.onAccent else P.text,
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(if (primary) color.copy(alpha = 0.25f) else P.panelAlt)
+            .background(if (primary) P.accent else P.panelAlt)
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp)
     )

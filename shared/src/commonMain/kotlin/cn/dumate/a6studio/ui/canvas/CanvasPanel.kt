@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,6 +49,7 @@ import cn.dumate.a6studio.ui.EmptyCanvasGuide
 import cn.dumate.a6studio.ui.Palette as P
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.fields.InlineField
+import cn.dumate.a6studio.ui.currentStudioStyle
 
 /** Blocks that can have a param picked from the device, and which kind of pick it is. */
 private fun pickKindFor(block: Block, param: ParamDef): PickKind? {
@@ -79,7 +82,25 @@ fun CanvasPanel(
         Scope.Root -> project.root.children["body"].orEmpty()
     }
 
-    LazyColumn(modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+    val style = currentStudioStyle
+    val dotModifier = if (style.canvasDots) {
+        val dotColor = style.canvasDotsColor
+        Modifier.drawBehind {
+            val step = 16.dp.toPx()
+            val radius = 1.dp.toPx()
+            var x = step
+            while (x < size.width) {
+                var y = step
+                while (y < size.height) {
+                    drawCircle(color = dotColor, radius = radius, center = Offset(x, y))
+                    y += step
+                }
+                x += step
+            }
+        }
+    } else Modifier
+
+    LazyColumn(modifier.padding(horizontal = 16.dp, vertical = 14.dp).then(dotModifier)) {
         item {
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -173,7 +194,7 @@ private fun BlockCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(width = 3.dp, height = 15.dp).clip(RoundedCornerShape(2.dp)).background(accent))
             Spacer(Modifier.width(7.dp))
-            Text(Catalog.cleanName(def), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = P.text)
+            Text(Catalog.filledName(def, block.params), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = P.text)
             if (block.params["expr"]?.asText()?.isNotBlank() == true) {
                 Spacer(Modifier.width(6.dp))
                 Text(
@@ -319,16 +340,7 @@ private fun ParamRow(
                     )
                     when (param.kind) {
                         ParamKind.SELECT -> SelectField(block, param, value, repo, onCommit)
-                        ParamKind.NUMBER -> InlineField(
-                            value = value.asText(),
-                            onValueChange = {
-                                repo.updateParam(block.id, param.key, ParamValue.Num(it.toDoubleOrNull() ?: 0.0))
-                                onCommit()
-                            },
-                            placeholder = param.label,
-                            mono = true,
-                            modifier = Modifier.width(64.dp)
-                        )
+                        ParamKind.NUMBER -> NumberField(block, param, value, repo, onCommit)
                         ParamKind.EXPR -> InlineField(
                             value = value.asText(),
                             onValueChange = { repo.updateParam(block.id, param.key, ParamValue.Text(it)); onCommit() },
@@ -361,6 +373,35 @@ private fun ParamRow(
     }
 }
 
+/**
+ * Number input that keeps what the user is typing. Writing `toDoubleOrNull() ?: 0.0` back on
+ * every keystroke turned "1." into "1", "-" into "0" and "1e" into "0", so decimals and
+ * negatives could not be typed. The text lives locally; the model is updated only with a
+ * finite number, and an empty or half-typed value leaves the previous number in place.
+ */
+@Composable
+private fun NumberField(block: Block, param: ParamDef, value: ParamValue, repo: ProjectRepo, onCommit: () -> Unit) {
+    var text by remember(block.id, param.key) { mutableStateOf(value.asText()) }
+    // Follow outside changes (undo, picker, import) unless they match what is being typed.
+    val modelText = value.asText()
+    if (text.toDoubleOrNull() != value.asNumber(Double.NaN) && text.toDoubleOrNull() != null) text = modelText
+    InlineField(
+        value = text,
+        onValueChange = { raw ->
+            val cleaned = raw.filter { it.isDigit() || it == '.' || it == '-' }
+            text = cleaned
+            val n = cleaned.toDoubleOrNull()
+            if (n != null && n.isFinite()) {
+                repo.updateParam(block.id, param.key, ParamValue.Num(n))
+                onCommit()
+            }
+        },
+        placeholder = param.label,
+        mono = true,
+        modifier = Modifier.width(72.dp)
+    )
+}
+
 @Composable
 private fun CodeParamField(
     block: Block,
@@ -384,7 +425,9 @@ private fun CodeParamField(
             mono = true,
             singleLine = false,
             minLines = if (lines > 3) 3 else lines.coerceAtLeast(1),
-            maxLines = 14,
+            // Imported scripts are often 50+ lines; 14 visible lines made them hard to edit.
+            // Beyond this the field scrolls inside itself.
+            maxLines = 40,
             modifier = Modifier.fillMaxWidth()
         )
     }
