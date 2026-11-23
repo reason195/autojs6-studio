@@ -30,7 +30,7 @@ Windows / macOS / Linux 桌面端用 Compose Desktop，Android 用 Jetpack Compo
 ./gradlew :androidApp:assembleDebug
 # 产物：androidApp/build/outputs/apk/debug/androidApp-debug.apk
 
-# 核心逻辑单测（91 项）
+# 核心逻辑单测（130 项）
 ./gradlew :shared:jvmTest
 ```
 
@@ -287,7 +287,7 @@ A6_MCP_URL=http://<手机IP>:9637/mcp A6_MCP_TOKEN=<令牌>   ./gradlew :shared:
 
 **已在本次改版中实测：**
 
-- `./gradlew :shared:jvmTest` 91 项通过（代码生成、语法守卫、旧版逐行对齐、id 唯一性、树操作/撤销、模块作用域、
+- `./gradlew :shared:jvmTest` 130 项通过（代码生成、语法守卫、旧版逐行对齐、id 唯一性、树操作/撤销、模块作用域、
   Rhino 后台运行完整示例、死循环超时与手动停止控制、三个内置测试用例、SSE 分帧与分块 UTF-8 解码、导入脚本的
   语句顺序与嵌套、模拟器 Java 互操作拦截、拾取器候选/评分/兜底链/区域层级、录制解析与坐标归一化、坏项目文件
   备份与保存失败上报、转义一致性）。
