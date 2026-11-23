@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  AutoJs6 的 MCP Server 只提供 http://<手机局域网 IP>:<端口>，没有 TLS。
+  targetSdk ≥ 28 默认拒绝明文 HTTP；domain-config 不支持按网段（192.168.* / 10.*）放行，
+  而用户填的地址是任意局域网 IP，所以只能在 base-config 放开明文。
+  本 App 只连用户自己填写的设备地址，不访问其他网络服务。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

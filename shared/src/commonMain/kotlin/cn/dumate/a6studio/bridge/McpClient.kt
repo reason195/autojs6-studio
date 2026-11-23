@@ -140,8 +140,18 @@ class McpClient(
             }
         } catch (e: io.ktor.client.plugins.HttpRequestTimeoutException) {
             throw BridgeException(timeoutMessage(target, timeoutMs), "TIMEOUT")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            throw BridgeException(networkMessage(target, e.message ?: e.toString()), "NETWORK")
+            val detail = e.message ?: e.toString()
+            if (detail.contains("CLEARTEXT", ignoreCase = true) || detail.contains("cleartext", ignoreCase = true)) {
+                throw BridgeException(
+                    "系统拦截了明文 HTTP 连接（$target）。这是 App 的网络安全配置问题，不是手机或网络的问题：" +
+                        "请安装包含 network_security_config 的新版本。",
+                    "CLEARTEXT_BLOCKED"
+                )
+            }
+            throw BridgeException(networkMessage(target, detail), "NETWORK")
         }
 
         if (response.status.value == 404 || response.status.value == 405) {
@@ -170,6 +180,8 @@ class McpClient(
                 response.bodyAsText()
             }
         } catch (e: BridgeException) {
+            throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             throw BridgeException(timeoutMessage(target, timeoutMs), "TIMEOUT")
