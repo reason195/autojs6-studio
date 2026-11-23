@@ -97,4 +97,16 @@ class RunControlTest {
     fun `normal sample run is unaffected by the budget`() {
         assertEquals("finished", Runner.run(Samples.exampleProject()).status)
     }
+
+    @Test
+    fun `screen change updates package and activity without rendering`() {
+        // sink == null 时 publishRender 不跑 buildNodes；旧实现把 packageName 的同步绑在
+        // buildNodes 里，于是 launchPackage("com.jd.jrapp"); currentPackage() 返回旧包名。
+        val sim = SimRuntime()
+        sim.state.screen = "jd.finance"
+        assertEquals("com.jd.jrapp", sim.state.packageName)
+        assertEquals("JrappMainActivity", sim.state.activity)
+        sim.state.screen = "jd.mall"
+        assertEquals("com.jingdong.app.mall", sim.state.packageName)
+    }
 }

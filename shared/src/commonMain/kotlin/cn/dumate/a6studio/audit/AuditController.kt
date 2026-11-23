@@ -47,8 +47,14 @@ class AuditController(
 
     var rows: List<AuditRow> = emptyList()
         private set
-    var busy = false
-        private set
+
+    /**
+     * Bumped by every [run]. A previous run that was merely cancelled (not yet resumed) used to
+     * hold `busy` until its `finally` ran, so a quick second click saw `busy == true` and
+     * returned immediately — the panel kept showing the cancelled run's results. Instead of the
+     * flag, the older run notices it has been superseded and stops touching state.
+     */
+    private var generation = 0
 
     fun selText(by: String, value: String): String =
         (fn[by] ?: "text") + "(" + PickerLogic.quote(value) + ")"
@@ -85,23 +91,19 @@ class AuditController(
     }
 
     suspend fun run(project: Project) {
-        if (busy) return
-        busy = true
-        try {
-            rows = collect(project)
-            onRows(rows, if (rows.isEmpty()) "项目里没有 by/value 选择器积木" else "正在逐个校验…")
-            if (rows.isEmpty()) return
-
-            for (i in rows.indices) {
-                // Each auditOne is a phone round-trip (up to 15 s); stop promptly when the user
-                // closes the panel instead of grinding through the remaining rows.
-                currentCoroutineContext().ensureActive()
-                rows = rows.toMutableList().also { it[i] = auditOne(it[i]) }
-                onRows(rows, "体检中 ${i + 1}/${rows.size}…")
-            }
-        } finally {
-            busy = false
+        val gen = ++generation
+        rows = collect(project)
+        onRows(rows, if (rows.isEmpty()) "项目里没有 by/value 选择器积木" else "正在逐个校验…")
+        if (rows.isEmpty()) return
+        for (i in rows.indices) {
+            // Each auditOne is a phone round-trip (up to 15 s); stop promptly when the user
+            // closes the panel or starts a newer audit instead of finishing stale rows.
+            currentCoroutineContext().ensureActive()
+            if (gen != generation) return
+            rows = rows.toMutableList().also { it[i] = auditOne(it[i]) }
+            onRows(rows, "体检中 ${i + 1}/${rows.size}…")
         }
+        if (gen != generation) return
         val bad = rows.count { it.status in setOf(AuditStatus.MULTIPLE, AuditStatus.MISSING, AuditStatus.ERROR) }
         onRows(
             rows,

@@ -9,7 +9,17 @@ package cn.dumate.a6studio.runtime
 class SimState {
     data class Task(val id: String, val text: String, val desc: String, val crossApp: Boolean)
 
+    /**
+     * Current simulated screen. The package/activity follow it here instead of in
+     * `buildNodes()`: with `sink == null` (unit tests, CLI) `buildNodes` never runs, so
+     * `launchPackage("com.jd.jrapp"); currentPackage()` used to answer the old package.
+     */
     var screen: String = "jd.mall"
+        set(value) {
+            field = value
+            packageName = pkgMap[value] ?: packageName
+            activity = if (value == "jd.finance") "JrappMainActivity" else "BabelActivity"
+        }
     var signed: Boolean = false
     var packageName: String = "com.jingdong.app.mall"
     var activity: String = "MainActivity"
@@ -92,8 +102,6 @@ class SimState {
                 push("京东金融"); push("去完成", clickable = true)
             }
         }
-        packageName = pkgMap[screen] ?: packageName
-        activity = if (screen == "jd.finance") "JrappMainActivity" else "BabelActivity"
         return out
     }
 

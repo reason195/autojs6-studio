@@ -151,4 +151,11 @@ class SimSandboxTest {
         )
         assertEquals("error", status)
     }
+
+    @Test
+    fun `shell is stubbed so generated scripts do not crash as ReferenceError`() {
+        val (status, error, logs) = run("""log(shell("echo hi"));""")
+        assertEquals("finished", status, "error: $error")
+        assertContains(logs, "模拟器不执行 shell")
+    }
 }

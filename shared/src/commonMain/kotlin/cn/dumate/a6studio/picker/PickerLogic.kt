@@ -56,7 +56,8 @@ data class Candidate(
 object PickerLogic {
 
     private val shortClassRe = Regex("""^android\.(widget|view|webkit)\.""")
-    private val regexMeta = Regex("""[.*+?^${'$'}()|\[\]\\]""")
+    // `{` `}` are quantifier syntax: an unescaped `a{` makes the whole pattern fail.
+    private val regexMeta = Regex("""[.*+?^${'$'}()|\[\]{\}\\]""")
 
     fun shortClass(className: String): String = shortClassRe.replace(className, "")
 
