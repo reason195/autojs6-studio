@@ -90,7 +90,8 @@ object Catalog {
     // ===================== 流程与控制 =====================
     private fun defFlow() {
         def("comment", "flow", "注释", listOf(text("text", "内容", "说明"))) { b, c ->
-            "// " + c.str(b, "text").replace("\n", " ")
+            // 之前只把 \n 换成空格：从 Windows 粘进来的 \r 仍是行终止符，后半句会变成代码。
+            "// " + Js.commentSafe(c.str(b, "text"))
         }
         def("autoWait", "flow", "等待无障碍服务就绪") { _, _ -> "auto.waitFor();" }
         def("consoleShow", "flow", "显示控制台浮窗") { _, _ -> "console.show();" }
@@ -158,7 +159,8 @@ object Catalog {
             val g = c.newVar("guard")
             val cond = c.str(b, "cond").ifEmpty { "false" }
             "let $g = 0;\nwhile ($cond) {\n  if (++$g > ${c.num(b, "max").toLong().coerceAtLeast(1)}) " +
-                "{ log(\"循环保护触发: ${escForString(cond)}\"); break; }\n" +
+                // 条件写成多行表达式时，插进字符串字面量会变成未闭合的字符串；Js.quote 负责转义。
+                "{ log(${c.quote("循环保护触发: " + cond)}); break; }\n" +
                 c.body(b, "body", 1) + "\n}"
         }
         def(
@@ -378,7 +380,10 @@ object Catalog {
         }
         def("saveScreen", "vision", "截图保存到 {path}", listOf(text("path", "路径", "/sdcard/autojs6/shot.png"))) { b, c ->
             val p = c.str(b, "path")
-            "files.ensureDir(${c.quote(dirname(p))});\nimages.save(images.captureScreen(), ${c.quote(p)}, \"png\", 100);\nlog(\"截图已保存\");"
+            // AutoJs6 的 ensureDir(path) 是「确保这个文件所在的目录存在」（真机实测：
+            // ensureDir("/sdcard/x/a.png") 会建 /sdcard/x，不会把 a.png 建成目录）。
+            // 之前多套一层 dirname，只建了更上一级，保存截图会因为目录不存在而失败。
+            "files.ensureDir(${c.quote(p)});\nimages.save(images.captureScreen(), ${c.quote(p)}, \"png\", 100);\nlog(\"截图已保存\");"
         }
     }
 
@@ -390,7 +395,7 @@ object Catalog {
         ) { b, c ->
             val p = c.str(b, "path")
             val fn = if (b.params["append"]?.asBool() != false) "files.append(" else "files.write("
-            "files.ensureDir(${c.quote(dirname(p))});\n$fn${c.quote(p)}, ${c.str(b, "content").ifEmpty { "\"\"" }});"
+            "files.ensureDir(${c.quote(p)});\n$fn${c.quote(p)}, ${c.str(b, "content").ifEmpty { "\"\"" }});"
         }
         def(
             "filesRead", "data", "读文件 {path} → {var}",
@@ -643,11 +648,4 @@ object Catalog {
         return filled.replace(Regex("\\s+"), " ").trim()
     }
 
-    private fun dirname(path: String): String {
-        val idx = path.lastIndexOf('/')
-        return if (idx > 0) path.substring(0, idx) else path
-    }
-
-    /** Escape text that goes inside a generated double-quoted JS string literal. */
-    private fun escForString(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
 }

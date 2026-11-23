@@ -120,6 +120,38 @@ object Js {
         return sb.toString()
     }
 
+    /**
+     * Text that ends up inside a line comment or a block comment.
+     *
+     * Only line terminators matter here: one stray CR turns the rest of a line comment into
+     * code (`// 说明` + CR + `下一行` runs 「下一行」). For block comments the closing marker is
+     * neutralised too, otherwise an imported project name could end the comment early and the
+     * rest of it would be compiled as code that the UI never shows.
+     */
+    fun commentSafe(text: String, block: Boolean = false): String {
+        var out = text
+            .replace("\r\n", " ")
+            .replace('\r', ' ')
+            .replace('\n', ' ')
+            .replace("\u2028", " ")
+            .replace("\u2029", " ")
+        if (block) out = out.replace("*/", "* /")
+        return out
+    }
+
+    /** Identifier-safe text: keeps letters/digits/underscore/dollar and the CJK range. */
+    fun idSafe(text: String): String {
+        val cleaned = text.map { ch ->
+            if (ch.isLetterOrDigit() || ch == '_' || ch == '$' || (ch.code in 0x4E00..0x9FA5)) ch else '_'
+        }.joinToString("")
+        return if (cleaned.isEmpty() || cleaned[0].isDigit()) "_$cleaned" else cleaned
+    }
+
+    /** True when [text] can be used as a parameter name without quoting. */
+    fun isIdentifier(text: String): Boolean =
+        text.isNotEmpty() && (text[0].isLetter() || text[0] == '_' || text[0] == '$') &&
+            text.all { it.isLetterOrDigit() || it == '_' || it == '$' }
+
     fun indentLines(text: String, level: Int): String {
         if (text.isEmpty() || level <= 0) return text
         val pad = "  ".repeat(level)

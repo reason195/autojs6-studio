@@ -161,4 +161,91 @@ class GeneratedSyntaxTest {
         }
         assertTrue(failures.isEmpty(), failures.joinToString("\n"))
     }
+
+    // ── 文本进注释 / 函数签名 / 目录（审查报告 M5、M13） ────────────────────────
+
+    @Test
+    fun `project name cannot close the header comment`() {
+        val base = Samples.emptyProject()
+        val evil = base.copy(name = "x */ log(\"injected\"); /**")
+        val code = CodeGen.code(evil, markers = false)
+        parses(code)?.let { assertTrue(false, "header not parseable: $it") }
+        // 名字里的 */ 被中和后，头注释的结束标记仍必须在最后（否则后面整段会变成代码）。
+        val firstClose = code.indexOf("*/")
+        val lastNote = code.indexOf("目标运行时")
+        assertTrue(firstClose > lastNote, code.lineSequence().take(8).joinToString("\n"))
+        assertTrue(code.contains("x * / log"), code.lineSequence().take(8).joinToString("\n"))
+    }
+
+    @Test
+    fun `module description cannot close its comment`() {
+        val base = Samples.emptyProject()
+        val module = StudioModule(
+            id = "m1",
+            name = "helper",
+            desc = "说明 */ log(\"bad\");",
+            args = "pkg",
+            children = mapOf("body" to listOf(newBlock("log")))
+        )
+        val code = CodeGen.code(base.copy(modules = listOf(module)), markers = false)
+        parses(code)?.let { assertTrue(false, "module not parseable: $it") }
+        val descAt = code.indexOf("模块：")
+        val closeAt = code.indexOf("*/", descAt)
+        val note = code.substring(descAt, closeAt)
+        assertTrue(note.contains("说明 * / log"), note)
+    }
+
+    @Test
+    fun `module args that are not identifiers are dropped`() {
+        val base = Samples.emptyProject()
+        val module = StudioModule(
+            id = "m2",
+            name = "helper",
+            desc = "",
+            args = "pkg, a b, x-y, 1st",
+            children = mapOf("body" to listOf(newBlock("log")))
+        )
+        val code = CodeGen.code(base.copy(modules = listOf(module)), markers = false)
+        parses(code)?.let { assertTrue(false, "signature not parseable: $it") }
+        assertTrue(code.contains("function mod_helper(pkg)"), code.lineSequence().first { it.contains("function") })
+    }
+
+    @Test
+    fun `comment block with a carriage return stays a comment`() {
+        val block = newBlock("comment").copy(params = mapOf("text" to ParamValue.Text("说明\r下一行()")) )
+        val code = CodeGen.blockCode(block, Samples.emptyProject())
+        assertFalse(code.contains("\r"), code)
+        assertTrue(code.lines().size == 1, "comment must stay one line: $code")
+        parses(code)?.let { assertTrue(false, "comment not parseable: $it") }
+    }
+
+    @Test
+    fun `while guard with a multi-line condition still parses`() {
+        val block = newBlock("whileGuard").copy(
+            params = mapOf(
+                "cond" to ParamValue.Text("a &&\nb"),
+                "max" to ParamValue.Num(3.0)
+            ),
+            children = mapOf("body" to listOf(newBlock("log")))
+        )
+        val code = CodeGen.blockCode(block, Samples.emptyProject())
+        parses(code)?.let { assertTrue(false, "whileGuard not parseable: $it") }
+    }
+
+    @Test
+    fun `file blocks create the folder the file lives in`() {
+        // AutoJs6 的 ensureDir(p) 建的是 p 所在目录（真机实测）；多套一层 dirname 会漏建。
+        for (type in listOf("saveScreen", "filesWrite")) {
+            val code = CodeGen.blockCode(newBlock(type), Samples.emptyProject())
+            assertTrue(
+                code.contains("files.ensureDir(\"/sdcard/autojs6"),
+                "$type should ensure the file's own folder: $code"
+            )
+            assertTrue(
+                !code.contains("ensureDir(\"/sdcard\")"),
+                "$type must not truncate the path to its grandparent: $code"
+            )
+            parses(code)?.let { assertTrue(false, "$type not parseable: $it") }
+        }
+    }
 }

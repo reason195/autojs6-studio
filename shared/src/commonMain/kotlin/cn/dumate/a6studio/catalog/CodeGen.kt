@@ -46,7 +46,7 @@ object CodeGen {
                 text = "{\n" + Js.indentLines(text, 1) + "\n}"
             }
             if (text.isEmpty()) null
-            else if (ctx.markers) "//@${b.id}\n$text" else text
+            else if (ctx.markers) "//@${Js.idSafe(b.id)}\n$text" else text
         }.joinToString("\n")
     }
 
@@ -55,24 +55,36 @@ object CodeGen {
         return try {
             def.gen(block, ctx)
         } catch (e: Exception) {
-            "// 生成失败: ${block.type} (${e.message})"
+            "// 生成失败: ${Js.commentSafe("${block.type} (${e.message})")}"
         }
     }
 
     private fun modulesCode(project: Project, ctx: GenContext): String =
         project.modules.joinToString("\n\n") { m ->
             val body = generateList(m.children["body"].orEmpty(), project, ctx)
-            "/** 模块：${m.desc.ifBlank { m.name }} */\n" +
-                "function ${Js.moduleName(m.name)}(${m.args}) {\n" +
+            "/** 模块：${Js.commentSafe(m.desc.ifBlank { m.name }, block = true)} */\n" +
+                "function ${Js.moduleName(m.name)}(${moduleArgs(m.args)}) {\n" +
                 Js.indentLines(body.ifEmpty { "// 空模块" }, 1) + "\n}"
         }
+
+    /**
+     * Module parameter list. `m.args` is free text, so `a b`, `x-y` or a multi-line value used
+     * to land straight in the function signature — a SyntaxError, or worse a second statement.
+     * Keep the valid identifiers, drop the rest (the module call still passes arguments by
+     * position, which is what the block editor shows).
+     */
+    private fun moduleArgs(raw: String): String =
+        raw.split(',')
+            .map { it.trim() }
+            .filter { Js.isIdentifier(it) }
+            .joinToString(", ")
 
     private fun header(project: Project): String {
         val now = nowLocal()
         val stamp = "${now.year}-${pad(now.month)}-${pad(now.day)} ${pad(now.hour)}:${pad(now.minute)}"
         return listOf(
             "/**",
-            " * ${project.name.ifBlank { "AutoJs6 脚本" }}",
+            " * ${Js.commentSafe(project.name.ifBlank { "AutoJs6 脚本" }, block = true)}",
             " * 由 AutoJs6 Studio 可视化积木生成 · $stamp",
             " * 目标运行时：AutoJs6 6.x（Rhino）· 语法遵循 AutoJs6 全局 API",
             " */",
