@@ -71,4 +71,30 @@ class StorageSafetyTest {
         assertEquals("v1", AtomicFiles.readOrNull(f))
         assertNull(AtomicFiles.readOrNull(File(dir, "other.json")))
     }
+
+    @Test
+    fun `saving right after load does not rewrite the file`() {
+        val storage = CountingStorage()
+        val repo = ProjectRepo(storage)
+        assertNull(repo.load())
+        repo.save()
+        val writesAfterFirst = storage.writes
+        repo.save()
+        assertEquals(writesAfterFirst, storage.writes, "identical content must not be written twice")
+    }
+
+    @Test
+    fun `saving after a real load writes nothing when the model is unchanged`() {
+        val storage = CountingStorage()
+        val seed = ProjectRepo(storage)
+        seed.load()
+        seed.addBlock("sleep")
+        val writesAfterSeed = storage.writes
+
+        val reopened = ProjectRepo(storage)
+        reopened.load()
+        reopened.save()
+
+        assertEquals(writesAfterSeed, storage.writes, "重新打开后未改动就保存，不应再写盘")
+    }
 }

@@ -104,6 +104,9 @@ class ProjectRepo(private val storage: ProjectStorage) {
             return null
         }
         _projectState = normalizeProject(parsed)
+        lastSavedJson = runCatching {
+            json.encodeToString(Project.serializer(), _projectState)
+        }.getOrNull()
         return null
     }
 
@@ -168,6 +171,8 @@ class ProjectRepo(private val storage: ProjectStorage) {
         val (label, raw) = undoStack.removeLastOrNull() ?: return null
         _projectState = try { json.decodeFromString(Project.serializer(), raw) } catch (e: Exception) { current }
         _selectedState = null
+        // 撤销之后再输入同一字段必须能被单独撤销：不清掉这个标记就会被当成「同一次连续输入」。
+        lastEditedField = null
         save()
         return label
     }

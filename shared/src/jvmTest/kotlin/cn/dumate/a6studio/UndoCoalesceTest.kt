@@ -68,4 +68,20 @@ class UndoCoalesceTest {
         // Should have reverted back to the default (1000ms for sleep).
         assertEquals(1000.0, v2)
     }
+
+    @Test
+    fun `typing after an undo gets its own undo point`() {
+        val r = repo()
+        val blk = r.addBlock("sleep")
+
+        r.updateParam(blk.id, "ms", ParamValue.Num(500.0))
+        r.undo()
+
+        // 撤销之后再改同一字段：必须能单独撤销这次输入，而不是连「添加积木」一起退掉。
+        r.updateParam(blk.id, "ms", ParamValue.Num(700.0))
+        r.undo()
+
+        assertNotNull(r.blockById(blk.id), "undo must only revert the second edit")
+        assertEquals(1000.0, r.blockById(blk.id)?.params?.get("ms")?.asNumber() ?: 0.0)
+    }
 }

@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -36,7 +37,12 @@ fun InlineField(
     mono: Boolean = false,
     singleLine: Boolean = true,
     minLines: Int = 1,
-    maxLines: Int = Int.MAX_VALUE
+    maxLines: Int = Int.MAX_VALUE,
+    /**
+     * Called once when the field loses focus. Parameter edits coalesce into one undo point per
+     * field, so this is what ends a run of keystrokes when the user taps somewhere else.
+     */
+    onEditingFinished: (() -> Unit)? = null
 ) {
     // `wrapContentHeight` keeps the field one line tall even when its parent row is stretched
     // by a taller sibling (measured on device: the project-name field grew to 129px).
@@ -65,7 +71,10 @@ fun InlineField(
                 fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default
             ),
             cursorBrush = SolidColor(P.accent),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().then(
+                if (onEditingFinished == null) Modifier
+                else Modifier.onFocusChanged { if (!it.isFocused) onEditingFinished() }
+            )
         )
     }
 }

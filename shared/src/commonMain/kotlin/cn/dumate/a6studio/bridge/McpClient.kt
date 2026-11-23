@@ -276,7 +276,10 @@ class McpClient(
         return obj["result"] ?: JsonPrimitive("")
     }
 
-    suspend fun initialize(): JsonElement = mutex.withLock {
+    suspend fun initialize(): JsonElement = mutex.withLock { initializeLocked() }
+
+    /** Body of [initialize]; the caller must hold [mutex]. */
+    private suspend fun initializeLocked(): JsonElement {
         val payload = buildJsonObject {
             put("jsonrpc", "2.0")
             put("id", ++seq)
@@ -308,11 +311,17 @@ class McpClient(
         }
         ready = true
         // `post` returns the whole JSON-RPC envelope ({"id":…,"result":…}), so unwrap `result`.
-        obj["result"] ?: JsonPrimitive("")
+        return obj["result"] ?: JsonPrimitive("")
     }
 
+    /**
+     * Two coroutines starting at once (audit + picker) both saw `!ready` and each sent
+     * `initialize`; the second reply overwrote `sessionId` and the first session's next request
+     * was rejected by the device. Re-check inside the lock so the handshake happens once.
+     */
     private suspend fun ensureReady() {
-        if (!ready) initialize()
+        if (ready) return
+        mutex.withLock { if (!ready) initializeLocked() }
     }
 
     suspend fun callTool(name: String, args: JsonObject = buildJsonObject { }, timeoutMs: Long = 15_000): McpToolResult {

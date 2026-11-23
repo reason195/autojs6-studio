@@ -346,13 +346,15 @@ private fun ParamRow(
                             onValueChange = { repo.updateParam(block.id, param.key, ParamValue.Text(it)); onCommit() },
                             placeholder = param.label,
                             mono = true,
-                            modifier = Modifier.widthIn(min = 90.dp, max = 260.dp)
+                            modifier = Modifier.widthIn(min = 90.dp, max = 260.dp),
+                            onEditingFinished = { repo.endParamEdit() }
                         )
                         else -> InlineField(
                             value = value.asText(),
                             onValueChange = { repo.updateParam(block.id, param.key, ParamValue.Text(it)); onCommit() },
                             placeholder = param.label,
-                            modifier = Modifier.widthIn(min = 70.dp, max = 200.dp)
+                            modifier = Modifier.widthIn(min = 70.dp, max = 200.dp),
+                            onEditingFinished = { repo.endParamEdit() }
                         )
                     }
                     val pick = pickKindFor(block, param)
@@ -398,7 +400,8 @@ private fun NumberField(block: Block, param: ParamDef, value: ParamValue, repo: 
         },
         placeholder = param.label,
         mono = true,
-        modifier = Modifier.width(72.dp)
+        modifier = Modifier.width(72.dp),
+        onEditingFinished = { repo.endParamEdit() }
     )
 }
 
