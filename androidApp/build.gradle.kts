@@ -15,7 +15,7 @@ android {
         minSdk = 26
         targetSdk = 35
         // versionCode 必须随 versionName 一起涨，否则覆盖安装会被系统当成同一版。
-        versionCode = 3
+        versionCode = 4
         versionName = providers.gradleProperty("a6studio.version").get()
     }
 
