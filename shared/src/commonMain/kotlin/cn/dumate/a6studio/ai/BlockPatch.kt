@@ -63,6 +63,8 @@ object BlockPatch {
 
     private val GUARD_TYPES = setOf("kitBoot", "kitGuard", "kitFinish")
     private val CODE_INJECTION_RE = Regex("\\bfunction\\s*\\(|=>|\\brequire\\s*\\(|\\beval\\s*\\(")
+    private const val MIN_KIT_RUNTIME_MS = 30_000.0
+    private const val MAX_KIT_RUNTIME_MS = 3_600_000.0
 
     fun apply(project: Project, ops: List<BlockPatchOp>): Project {
         var cur = project
@@ -144,12 +146,27 @@ object BlockPatch {
     fun guardAndApply(before: Project, ops: List<BlockPatchOp>): PatchGuardResult {
         val errs = mutableListOf<String>()
 
-        // 0. 预先对所有补丁指令中的新增积木和修改参数执行递归白名单校验
+        // 0. 按递进状态逐条校验并应用：允许同批先 AddBlock 再 UpdateParam，同时拦截重复/空 ID
+        val existingIds = mutableSetOf<String>().apply {
+            add(before.root.id)
+            before.modules.forEach { add(it.id) }
+            flattenAllProjectBlocks(before).forEach { add(it.id) }
+        }
+        var cur = before
         for (op in ops) {
             when (op) {
-                is BlockPatchOp.AddBlock -> validateBlockRecursive(op.block, errs)
+                is BlockPatchOp.AddBlock -> {
+                    validateBlockRecursive(op.block, errs)
+                    for (nb in flattenBlocks(listOf(op.block))) {
+                        if (nb.id.isBlank()) {
+                            errs += "拒绝：新增积木缺少非空 id (${nb.type})"
+                        } else if (!existingIds.add(nb.id)) {
+                            errs += "拒绝：新增积木 id 与现有节点冲突 (${nb.id})"
+                        }
+                    }
+                }
                 is BlockPatchOp.UpdateParam -> {
-                    val target = locateBlock(before, op.blockId)
+                    val target = locateBlock(cur, op.blockId)
                     if (target == null) {
                         errs += "拒绝：目标积木不存在 (${op.blockId})"
                     } else {
@@ -157,8 +174,11 @@ object BlockPatch {
                     }
                 }
                 is BlockPatchOp.RemoveBlock -> {
-                    if (locateBlock(before, op.blockId) == null) {
+                    val target = locateBlock(cur, op.blockId)
+                    if (target == null) {
                         errs += "拒绝：目标积木不存在 (${op.blockId})"
+                    } else {
+                        flattenBlocks(listOf(target)).forEach { existingIds.remove(it.id) }
                     }
                 }
                 is BlockPatchOp.RenameProject -> {
@@ -168,16 +188,18 @@ object BlockPatch {
                     else if (op.name.any { it in "\\/:|*?\"<>" }) errs += "拒绝：项目名包含文件名非法字符（\\/:|*?\"<>）"
                 }
             }
+            cur = try {
+                apply(cur, listOf(op))
+            } catch (e: Exception) {
+                return PatchGuardResult(false, before, (errs + "补丁应用失败：${e.message}").distinct())
+            }
         }
-
-        val after = try {
-            apply(before, ops)
-        } catch (e: Exception) {
-            return PatchGuardResult(false, before, (errs + "补丁应用失败：${e.message}").distinct())
-        }
+        val after = cur
 
         val flatBefore = flattenAllProjectBlocks(before)
         val flatAfter = flattenAllProjectBlocks(after)
+        val rootBefore = flattenBlocks(before.root.children["body"].orEmpty())
+        val rootAfter = flattenBlocks(after.root.children["body"].orEmpty())
 
         // 1. 只校验本次补丁「新增」或「改动」的积木（R-1）。
         //    用户手工搭建的 if.cond / varSet.expr / rawJs 等既有积木不属于补丁通道，
@@ -202,24 +224,29 @@ object BlockPatch {
             }
         }
 
-        // 2. 护栏积木不可被删除
+        // 2. 护栏积木不可被删除（同时锁住主程序 root，防止删除主流程护栏并在未调用模块塞入替身）
         for (gt in GUARD_TYPES) {
             if (flatBefore.any { it.type == gt } && flatAfter.none { it.type == gt }) {
                 errs += "拒绝：补丁删除了护栏积木「$gt」"
+            } else if (rootBefore.any { it.type == gt } && rootAfter.none { it.type == gt }) {
+                errs += "拒绝：补丁删除了主程序中的护栏积木「$gt」"
             }
         }
 
-        // 3. kitBoot 总超时护栏不可放大超 2 倍或低于 30s
-        val bootBefore = flatBefore.firstOrNull { it.type == "kitBoot" }
-        val bootAfter = flatAfter.firstOrNull { it.type == "kitBoot" }
-        if (bootBefore != null && bootAfter != null) {
-            val ms0 = bootBefore.params["maxRuntimeMs"]?.asNumber(900_000.0) ?: 900_000.0
-            val ms1 = bootAfter.params["maxRuntimeMs"]?.asNumber(900_000.0) ?: 900_000.0
-            if (ms1 > ms0 * 2.0) {
-                errs += "拒绝：kitBoot.maxRuntimeMs 从 ${ms0.toLong()} 放大到 ${ms1.toLong()}（超过 2 倍上限）"
+        // 3. 所有 kitBoot 总超时护栏必须有限且落在 [30s, 3600s] 内，且既有 kitBoot 单次不可放大超 2 倍
+        val bootsBeforeById = flatBefore.filter { it.type == "kitBoot" }.associateBy { it.id }
+        for (bootAfter in flatAfter.filter { it.type == "kitBoot" }) {
+            val ms1 = bootAfter.params["maxRuntimeMs"]?.asNumber(Double.NaN) ?: 900_000.0
+            if (!ms1.isFinite() || ms1 < MIN_KIT_RUNTIME_MS || ms1 > MAX_KIT_RUNTIME_MS) {
+                errs += "拒绝：kitBoot(${bootAfter.id}).maxRuntimeMs 超出安全范围 [${MIN_KIT_RUNTIME_MS.toLong()}, ${MAX_KIT_RUNTIME_MS.toLong()}]"
+                continue
             }
-            if (ms1 < 30_000.0) {
-                errs += "拒绝：kitBoot.maxRuntimeMs 不得低于 30000ms"
+            val bootBefore = bootsBeforeById[bootAfter.id]
+            if (bootBefore != null) {
+                val ms0 = bootBefore.params["maxRuntimeMs"]?.asNumber(900_000.0) ?: 900_000.0
+                if (ms0.isFinite() && ms1 > ms0 * 2.0) {
+                    errs += "拒绝：kitBoot.maxRuntimeMs 从 ${ms0.toLong()} 放大到 ${ms1.toLong()}（超过 2 倍上限）"
+                }
             }
         }
 
@@ -233,12 +260,12 @@ object BlockPatch {
             }
         }
 
-        // 5. 生成代码不能因补丁引入新的明文密钥（已有的不再拒绝，避免把用户自己写的 rawJs 也拦掉）
+        // 5. 生成代码不能因补丁引入新的明文密钥（按命中次数增量比对，防止已有同类标签时漏拦新密钥）
         val generatedBefore = CodeGen.code(before)
         val generatedAfter = CodeGen.code(after)
-        val secretsBefore = Redaction.assertNoPlaintextSecrets(generatedBefore).toSet()
-        val secretsAfter = Redaction.assertNoPlaintextSecrets(generatedAfter)
-        val newSecrets = secretsAfter.filter { it !in secretsBefore }
+        val secretsBefore = Redaction.countPlaintextSecrets(generatedBefore)
+        val secretsAfter = Redaction.countPlaintextSecrets(generatedAfter)
+        val newSecrets = secretsAfter.filter { (label, cnt) -> cnt > (secretsBefore[label] ?: 0) }.keys
         if (newSecrets.isNotEmpty()) {
             errs += "拒绝：补丁在生成代码中引入新的疑似明文凭据（${newSecrets.joinToString(", ")}）"
         }
@@ -322,6 +349,11 @@ object BlockPatch {
         val identKeys = Diagnose.identifierParams[blockType].orEmpty()
         if (key in identKeys && !Diagnose.isJsIdentifier(value.asText().trim())) {
             errs += "拒绝：$blockType.$key 不是合法标识符 (${value.asText()})"
+        }
+        // funcDef.args 不加引号直接拼进函数签名，必须是逗号分隔的标识符列表
+        val listKeys = Diagnose.identifierListParams[blockType].orEmpty()
+        if (key in listKeys && !Diagnose.isJsIdentifierList(value.asText())) {
+            errs += "拒绝：$blockType.$key 不是合法参数列表 (${value.asText()})"
         }
     }
 

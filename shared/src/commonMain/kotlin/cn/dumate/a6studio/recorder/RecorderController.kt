@@ -223,7 +223,20 @@ setInterval(function () {}, 1000);
     suspend fun stop() {
         update { it.copy(status = RecorderStatus.IDLE) }
         val id = state.executionId ?: return
-        runCatching { bridge.scriptStop(id) }
+        try {
+            bridge.scriptStop(id)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Swallowing this left the listener script running on the phone while the UI said
+            // "stopped"; the next recording then appended to the same file.
+            update {
+                it.copy(
+                    status = RecorderStatus.ERROR,
+                    note = "停止失败：${e.message}。手机上的录制脚本可能还在运行，请按音量下键手动停止。"
+                )
+            }
+        }
     }
 
     /** Reads the JSONL file and normalises events (some devices report 1/100 px coordinates). */

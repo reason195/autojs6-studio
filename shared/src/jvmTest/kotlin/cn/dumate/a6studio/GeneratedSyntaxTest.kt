@@ -78,7 +78,7 @@ class GeneratedSyntaxTest {
             "auto", "console", "device", "app", "images", "ocr", "files", "storages", "http",
             "threads", "engines", "text", "desc", "id", "className", "textContains",
             "descContains", "textMatches", "descMatches", "idMatches", "classNameMatches",
-            "shell", "gesture", "press", "click", "longClick", "swipe", "back", "home", "exit",
+            "shell", "gesture", "press", "KeyCode", "click", "longClick", "swipe", "back", "home", "recents", "exit",
             "toast", "log", "sleep", "currentPackage", "currentActivity", "waitForPackage",
             "waitForActivity", "setClip", "getClip", "doTask", "task", "t0", "setTimeout",
             "clearTimeout", "setInterval"

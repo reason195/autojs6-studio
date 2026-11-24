@@ -188,7 +188,7 @@ object Catalog {
             listOf(SlotDef("body", "函数体"))
         ) { b, c ->
             val name = c.str(b, "name").ifEmpty { "fn" }
-            "function $name(${c.str(b, "args")}) {\n" + c.body(b, "body", 1) + "\n}"
+            "function $name(${Js.paramList(c.str(b, "args"))}) {\n" + c.body(b, "body", 1) + "\n}"
         }
         def(
             "funcCall", "flow", "调用函数 {name}({args})",
@@ -217,7 +217,9 @@ object Catalog {
             "launchPackage", "app", "启动应用 {pkg}",
             listOf(text("pkg", "包名", "com.jingdong.app.mall"), num("wait", "等待毫秒", 1500.0))
         ) { b, c ->
-            "app.launchPackage(${c.quote(c.str(b, "pkg"))});\nsleep(${c.num(b, "wait").toLong()});"
+            val wait = c.num(b, "wait").toLong()
+            val launch = "app.launchPackage(${c.quote(c.str(b, "pkg"))});"
+            if (wait > 0) "$launch\nsleep($wait);" else launch
         }
         def("openUrl", "app", "打开链接 / 深链", listOf(text("url", "URL", "https://pro.m.jd.com/"))) { b, c ->
             "app.openUrl(${c.quote(c.str(b, "url"))});"
@@ -349,7 +351,7 @@ object Catalog {
             "swipe(device.width / 2, device.height * 0.78, device.width / 2, device.height * 0.28, 420);"
         }
         def("edgeBackGesture", "gesture", "左边缘右滑（切回上个应用）") { _, _ ->
-            "gesture(2, device.height * 0.5, device.width * 0.65, device.height * 0.5, 320);"
+            "gesture(320, [2, device.height * 0.5], [device.width * 0.65, device.height * 0.5]);"
         }
         def(
             "pressKey", "gesture", "按键 {key}",
@@ -362,7 +364,13 @@ object Catalog {
                 )
             )
         ) { b, c ->
-            "press(${c.quote(c.str(b, "key").ifEmpty { "back" })});"
+            when (c.str(b, "key").ifEmpty { "back" }) {
+                "back" -> "back();"
+                "home" -> "home();"
+                "recents" -> "recents();"
+                "menu" -> "KeyCode(\"KEYCODE_MENU\");"
+                else -> "back();"
+            }
         }
     }
 
@@ -561,7 +569,7 @@ object Catalog {
             listOf(
                 "// 跳到京东金融后不要在其中等待：手势条右滑切回京东",
                 "sleep(800);",
-                "gesture(2, device.height * 0.5, device.width * 0.65, device.height * 0.5, 320);",
+                "gesture(320, [2, device.height * 0.5], [device.width * 0.65, device.height * 0.5]);",
                 "sleep(1500);",
                 "log(\"已切回京东\");"
             ).joinToString("\n")

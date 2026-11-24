@@ -17,7 +17,7 @@ object Runner {
             return RunResult(
                 status = status,
                 error = error,
-                logs = sim.state.logs.toList(),
+                logs = synchronized(sim.state.logs) { sim.state.logs.toList() },
                 code = code,
                 virtualMs = sim.state.clock,
                 sim = sim.state.stateView(1080, 2400)
@@ -50,7 +50,7 @@ object Runner {
                     name = t.name,
                     ok = status == "finished" || status == "exited",
                     error = error ?: "",
-                    logs = sim.state.logs.toList()
+                    logs = synchronized(sim.state.logs) { sim.state.logs.toList() }
                 )
             } finally {
                 sim.close()

@@ -38,13 +38,14 @@ class ProxyPinBridge(
         if (!check.valid || check.normalizedUrl == null) {
             throw BridgeException(check.reason ?: "ProxyPin MCP 地址无效", "INVALID_URL")
         }
+        // 先校验令牌再落状态，避免非法控制字符抛异常后残留半提交的 URL/Token
+        val desiredHeader = McpClient.buildAuthorizationHeader(token)
         configuredUrl = check.normalizedUrl
         configuredToken = token
         configuredAllowLocal = allowLocal
         if (check.normalizedUrl != mcp.currentUrl) {
             mcp.setUrl(check.normalizedUrl)
         }
-        val desiredHeader = McpClient.buildAuthorizationHeader(token)
         if (desiredHeader != mcp.currentAuthHeader()) {
             mcp.setAuth(token)
         }

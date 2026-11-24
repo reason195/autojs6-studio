@@ -11,9 +11,7 @@ data class Template(
     val summary: String,
     val needsDevice: Boolean,
     val build: () -> Project
-) {
-    val beginnerSafe: Boolean get() = !needsDevice || true
-}
+)
 
 object Templates {
 
@@ -206,8 +204,7 @@ object Templates {
                     "body" to listOf(
                         newBlock("swipeUpList"),
                         newBlock("sleep", mapOf("ms" to ParamValue.Num(800.0)))
-                    ),
-                    "else" to emptyList()
+                    )
                 )
             ),
             newBlock("toast", mapOf("text" to ParamValue.Text("滑完了")))

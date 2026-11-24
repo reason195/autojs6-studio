@@ -112,7 +112,7 @@ class SimRuntime(
     private var scope: Scriptable? = null
     private var stateObject: NativeObject? = null
 
-    private fun log(level: String, msg: String) = state.add(level, clip(msg))
+    private fun log(level: String, msg: String) = synchronized(state.logs) { state.add(level, clip(msg)) }
 
     private fun clip(s: String) = if (s.length > 4000) s.substring(0, 4000) + "…" else s
 
@@ -303,6 +303,7 @@ class SimRuntime(
         val o = NativeObject()
         put(o, "find") { _, s -> toNodeArray(nodes(), s) }
         put(o, "untilFind") { _, s -> toNodeArray(nodes(), s) }
+        put(o, "findOnce") { _, _ -> nodes().firstOrNull()?.let { nodeObject(it, sc) } }
         put(o, "findOne") { args, _ ->
             val timeout = (args.getOrNull(0) as? Number)?.toInt() ?: 0
             val r = nodes()
@@ -375,7 +376,7 @@ class SimRuntime(
                 false
             } else {
                 log("info", "点击 → ${node.label}")
-                if (state.nodeClick(node)) { publishRender(); true } else false
+                if (synchronized(state.logs) { state.nodeClick(node) }) { publishRender(); true } else false
             }
         }
         put(o, "longClick") { _, _ -> log("info", "长按 → ${node.label}"); true }
@@ -505,7 +506,7 @@ class SimRuntime(
         put(s, "waitForActivity") { a, _ -> state.activity == a.getOrNull(0)?.toString() }
 
         put(s, "sleep") { a, _ ->
-            val ms = (a.getOrNull(0) as? Number)?.toLong() ?: 0
+            val ms = ((a.getOrNull(0) as? Number)?.toLong() ?: 0L).coerceAtLeast(0L)
             checkLimits()
             state.clock += ms
             if (ms >= 1000) log("debug", "sleep ${ms}ms")
@@ -532,17 +533,25 @@ class SimRuntime(
         put(console, "error") { a, _ -> log("error", a.getOrNull(0)?.toString() ?: ""); null }
         put(console, "show") { _, _ -> log("debug", "显示控制台"); null }
         put(console, "hide") { _, _ -> log("debug", "隐藏控制台"); null }
-        put(console, "clear") { _, _ -> state.logs.clear(); null }
+        put(console, "clear") { _, _ -> synchronized(state.logs) { state.logs.clear() }; null }
         ScriptableObject.putProperty(s, "console", console)
 
         put(s, "exit") { _, _ -> throw SimExit() }
-        put(s, "back") { _, _ -> state.back(); publishRender(); null }
-        put(s, "home") { _, _ -> state.home(); publishRender(); null }
+        put(s, "back") { _, _ -> synchronized(state.logs) { state.back() }; publishRender(); null }
+        put(s, "home") { _, _ -> synchronized(state.logs) { state.home() }; publishRender(); null }
         put(s, "recents") { _, _ -> log("info", "任务键"); null }
+        put(s, "KeyCode") { a, _ -> log("info", "按键 ${a.getOrNull(0)}"); true }
         put(s, "press") { a, _ ->
-            val key = a.getOrNull(0)?.toString() ?: ""
-            log("info", "按键 $key")
-            if (key == "back") { state.back(); publishRender() }
+            if (a.size >= 2 && a.getOrNull(0) is Number && a.getOrNull(1) is Number) {
+                val x = (a[0] as Number).toInt()
+                val y = (a[1] as Number).toInt()
+                val dur = (a.getOrNull(2) as? Number)?.toInt() ?: 100
+                log("info", "按住坐标 ($x, $y) ${dur}ms")
+            } else {
+                val key = a.getOrNull(0)?.toString() ?: ""
+                log("info", "按键 $key")
+                if (key == "back") { synchronized(state.logs) { state.back() }; publishRender() }
+            }
             null
         }
         put(s, "click") { a, _ ->
@@ -552,7 +561,7 @@ class SimRuntime(
             val hit = state.buildNodes().firstOrNull { n ->
                 n.clickable && x >= n.bounds[0] && x <= n.bounds[2] && y >= n.bounds[1] && y <= n.bounds[3]
             }
-            if (hit != null && state.nodeClick(hit)) publishRender()
+            if (hit != null && synchronized(state.logs) { state.nodeClick(hit) }) publishRender()
             null
         }
         put(s, "longClick") { a, _ -> log("info", "长按坐标 ${a.getOrNull(0)}, ${a.getOrNull(1)}"); null }
@@ -567,7 +576,7 @@ class SimRuntime(
             null
         }
         put(s, "gesture") { a, _ ->
-            log("debug", "手势 ${a.getOrNull(1)}")
+            log("debug", "手势 ${a.getOrNull(0) ?: ""}")
             if (state.screen == "jd.finance") {
                 state.screen = "jd.panel"
                 log("info", "手势右滑切回京东")
@@ -587,6 +596,32 @@ class SimRuntime(
     // ---- files / storage / vision / debug ----------------------------------
     private val files = mutableMapOf<String, String>()
     private val storage = mutableMapOf<String, Any?>()
+    private val storageSizes = mutableMapOf<String, Long>()
+    private var totalStorageChars = 0L
+
+    /**
+     * The virtual file system lives in the app's heap. Without a cap, `while (true) files.append(...)`
+     * grew it until the JVM ran out of memory — on Android that took the whole app down rather
+     * than ending the run. Throwing a JS error lets the script catch it, or ends the run as 异常.
+     */
+    private fun checkFileBudget(key: String, newLength: Long) {
+        if (key !in files && files.size >= MAX_FILES) {
+            throw org.mozilla.javascript.Context.reportRuntimeError("模拟器文件数已达 $MAX_FILES 个上限")
+        }
+        val total = files.values.sumOf { it.length.toLong() } - (files[key]?.length?.toLong() ?: 0L) + newLength
+        if (total > MAX_FILE_CHARS) {
+            throw org.mozilla.javascript.Context.reportRuntimeError(
+                "模拟器文件总大小超过 ${MAX_FILE_CHARS / 1024 / 1024}M 字符上限（$key）"
+            )
+        }
+    }
+
+    private fun estimateStorageChars(v: Any?): Long = when (v) {
+        null, org.mozilla.javascript.Undefined.instance -> 0L
+        is String -> v.length.toLong()
+        is Number, is Boolean -> 16L
+        else -> v.toString().length.toLong()
+    }
 
     private fun installDataAndDebug(s: ScriptableObject) {
         val filesObj = NativeObject()
@@ -594,7 +629,10 @@ class SimRuntime(
         put(filesObj, "exists") { a, _ -> files.containsKey(a.getOrNull(0)?.toString()) }
         put(filesObj, "read") { a, _ -> files[a.getOrNull(0)?.toString()] }
         put(filesObj, "write") { a, _ ->
-            files[a.getOrNull(0)?.toString() ?: ""] = a.getOrNull(1)?.toString() ?: ""
+            val k = a.getOrNull(0)?.toString() ?: ""
+            val content = a.getOrNull(1)?.toString() ?: ""
+            checkFileBudget(k, content.length.toLong())
+            files[k] = content
             log("debug", "写入文件 ${a.getOrNull(0)}")
             true
         }
@@ -604,11 +642,15 @@ class SimRuntime(
             // N-L7：只对模拟器日志文件（jdstudio_*.log）限制大小，避免长时间运行时 O(n²) 累积
             val existing = files[k] ?: ""
             val MAX_LOG_CHARS = 65_536
-            files[k] = if (k.contains("jdstudio_") && k.endsWith(".log") && existing.length > MAX_LOG_CHARS) {
+            val isTrimmedLog = k.contains("jdstudio_") && k.endsWith(".log") && existing.length > MAX_LOG_CHARS
+            val baseLen = if (isTrimmedLog) MAX_LOG_CHARS / 2 else existing.length
+            checkFileBudget(k, baseLen.toLong() + addition.length.toLong())
+            val next = if (isTrimmedLog) {
                 existing.takeLast(MAX_LOG_CHARS / 2) + addition
             } else {
                 existing + addition
             }
+            files[k] = next
             true
         }
         put(filesObj, "remove") { a, _ -> files.remove(a.getOrNull(0)?.toString()); true }
@@ -624,8 +666,33 @@ class SimRuntime(
             val keyPrefix = "$name:"
             val o = NativeObject()
             put(o, "get") { b, _ -> storage[keyPrefix + (b.getOrNull(0)?.toString() ?: "")] ?: b.getOrNull(1) }
-            put(o, "put") { b, _ -> storage[keyPrefix + (b.getOrNull(0)?.toString() ?: "")] = b.getOrNull(1); true }
-            put(o, "remove") { b, _ -> storage.remove(keyPrefix + (b.getOrNull(0)?.toString() ?: "")); null }
+            put(o, "put") { b, _ ->
+                val key = keyPrefix + (b.getOrNull(0)?.toString() ?: "")
+                val value = b.getOrNull(1)
+                if (key !in storage && storage.size >= MAX_STORAGE_KEYS) {
+                    throw org.mozilla.javascript.Context.reportRuntimeError(
+                        "模拟器存储已达 $MAX_STORAGE_KEYS 个键的上限（真机上请检查是否在循环里不断写新键）"
+                    )
+                }
+                val newSize = estimateStorageChars(value)
+                val prevSize = storageSizes[key] ?: 0L
+                val nextTotal = totalStorageChars - prevSize + newSize
+                if (nextTotal > MAX_STORAGE_CHARS) {
+                    throw org.mozilla.javascript.Context.reportRuntimeError(
+                        "模拟器存储总大小超过 ${MAX_STORAGE_CHARS / 1024 / 1024}M 字符上限（$key）"
+                    )
+                }
+                storage[key] = value
+                storageSizes[key] = newSize
+                totalStorageChars = nextTotal
+                true
+            }
+            put(o, "remove") { b, _ ->
+                val key = keyPrefix + (b.getOrNull(0)?.toString() ?: "")
+                storage.remove(key)
+                totalStorageChars = (totalStorageChars - (storageSizes.remove(key) ?: 0L)).coerceAtLeast(0L)
+                null
+            }
             o
         }
         ScriptableObject.putProperty(s, "storages", storages)
@@ -763,7 +830,7 @@ class SimRuntime(
             if (!truthy(a.getOrNull(0))) throw RuntimeException("断言失败：${a.getOrNull(1) ?: ""}")
             null
         }
-        put(s, "\$log") { _, sc -> arrayOfStrings(sc, state.logs.map { it.msg }) }
+        put(s, "\$log") { _, sc -> arrayOfStrings(sc, synchronized(state.logs) { state.logs.map { it.msg } }) }
         put(s, "\$setScreen") { a, _ ->
             state.screen = a.getOrNull(0)?.toString() ?: state.screen
             publishRender()
@@ -788,13 +855,7 @@ class SimRuntime(
         }
     }
 
-    private fun truthy(v: Any?): Boolean = when (v) {
-        null -> false
-        is Boolean -> v
-        is Number -> v.toDouble() != 0.0
-        is String -> v.isNotEmpty()
-        else -> true
-    }
+    private fun truthy(v: Any?): Boolean = Context.toBoolean(v)
 
     /**
      * Real AutoJs6 scripts often start with `importClass(java.io.File)`. The simulator blocks
@@ -863,21 +924,18 @@ class SimRuntime(
     }
 
     private companion object {
+        /** Virtual file system caps (see [checkFileBudget]): 16M chars ≈ 32MB of heap. */
+        const val MAX_FILES = 1_000
+        const val MAX_FILE_CHARS = 16L * 1024 * 1024
+        /** storages.create(...).put keys and total character budget across all named storages. */
+        const val MAX_STORAGE_KEYS = 10_000
+        const val MAX_STORAGE_CHARS = 16L * 1024 * 1024
         /** Interpreted instructions between stop/timeout checks (~sub-millisecond). */
         const val INSTRUCTION_SLICE = 10_000
         /** Grace period after wall-clock budget before abandoning a stuck native thread. */
         const val GRACE_MS = 2_000L
-        /** Fallback budget label when abandoning a cancel-only run stuck in native code. */
-        const val DEFAULT_ABANDON_MS = 20_000L
 
         const val JAVA_INTEROP_HINT =
             "（模拟器不提供 Java 互操作，避免导入的脚本在电脑上执行任意 Java 代码；这段请在真机运行）"
-
-        /** Packages a script must not reach: JDK internals, the engine itself, Kotlin runtime. */
-        fun isJavaClass(className: String): Boolean =
-            className.startsWith("java.") || className.startsWith("javax.") ||
-                className.startsWith("jdk.") || className.startsWith("sun.") ||
-                className.startsWith("com.sun.") || className.startsWith("org.mozilla.javascript") ||
-                className.startsWith("kotlin.")
     }
 }

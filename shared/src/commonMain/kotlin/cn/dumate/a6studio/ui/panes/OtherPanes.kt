@@ -27,6 +27,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.dumate.a6studio.diagnose.Level
@@ -71,10 +73,10 @@ fun TestPane(state: StudioState, modifier: Modifier = Modifier) {
                     )
                 }
             }
-            items(count = project.tests.size) { i ->
+            items(count = project.tests.size, key = { i -> project.tests[i].id }) { i ->
                 val t = project.tests[i]
-                var name by remember(t.id) { mutableStateOf(t.name) }
-                var code by remember(t.id) { mutableStateOf(t.code) }
+                var name by remember(t.id, t.name) { mutableStateOf(t.name) }
+                var code by remember(t.id, t.code) { mutableStateOf(t.code) }
                 val result = state.testResults.firstOrNull { it.id == t.id }
 
                 Column(
@@ -90,7 +92,8 @@ fun TestPane(state: StudioState, modifier: Modifier = Modifier) {
                             value = name,
                             onValueChange = { name = it; state.repo.updateTest(t.id, name = it) },
                             placeholder = "用例名",
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            onEditingFinished = { state.repo.endParamEdit() }
                         )
                         // 结果放在标题行：一列用例扫一眼就知道哪个挂了，不用逐张卡片找底部徽标。
                         result?.let {
@@ -117,7 +120,8 @@ fun TestPane(state: StudioState, modifier: Modifier = Modifier) {
                         mono = true,
                         singleLine = false,
                         minLines = 4,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        onEditingFinished = { state.repo.endParamEdit() }
                     )
                     Spacer(Modifier.height(5.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -200,7 +204,13 @@ fun DiagPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolea
                         .clip(RoundedCornerShape(6.dp))
                         .background(color.copy(alpha = 0.07f))
                         .clickable {
-                            issue.blockId?.let { state.repo.select(it) }
+                            issue.blockId?.let { id ->
+                                state.repo.scopeOfBlock(id)?.let { targetScope ->
+                                    if (state.repo.currentScope != targetScope) state.repo.setScope(targetScope)
+                                }
+                                state.repo.select(id)
+                                state.mobileSheet = cn.dumate.a6studio.ui.MobileSheet.CANVAS
+                            }
                         }
                         .padding(9.dp)
                 ) {
@@ -308,14 +318,22 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
         Text("从 AutoJs6「插件中心 → MCP Server」复制，或直连 http://手机IP:9637/mcp", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(top = 3.dp))
 
         Spacer(Modifier.height(10.dp))
-        Text("令牌（可选，默认只存内存）", fontSize = 11.sp, color = P.textDim)
+        Text("令牌（可选，开启下方开关后自动保存在本机）", fontSize = 11.sp, color = P.textDim)
         Spacer(Modifier.height(4.dp))
-        InlineField(state.bridgeToken, { state.updateBridgeToken(it) }, placeholder = "Bearer token（没有就留空）", mono = true, modifier = Modifier.fillMaxWidth())
-        // 「记住令牌」只在真有令牌时才有意义，空着的时候它只是多一个要读的开关。
-        if (state.bridgeToken.isNotBlank()) {
-            Spacer(Modifier.height(4.dp))
-            TinyToggle("记住令牌（写进本机存储，公用电脑别勾）", state.rememberToken) { state.changeRememberToken(it) }
+        var showToken by remember { mutableStateOf(false) }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            InlineField(
+                state.bridgeToken,
+                { state.updateBridgeToken(it) },
+                placeholder = "Bearer token（没有就留空）",
+                mono = true,
+                visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+                modifier = Modifier.weight(1f)
+            )
+            SmallButton(if (showToken) "隐藏" else "显示") { showToken = !showToken }
         }
+        Spacer(Modifier.height(4.dp))
+        TinyToggle("记住本机令牌与密钥（写进本机私有存储，不进项目文件）", state.rememberToken) { state.changeRememberToken(it) }
 
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

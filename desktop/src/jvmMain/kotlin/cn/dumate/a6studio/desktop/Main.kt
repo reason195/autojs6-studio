@@ -109,27 +109,33 @@ private class DesktopPlatform : Platform {
     }
 
     override suspend fun saveTextAs(suggestedName: String, content: String, mimeType: String): String? {
-        val dialog = FileDialog(null as Frame?, "保存", FileDialog.SAVE).apply {
-            file = suggestedName
-            isVisible = true
+        val dialog = FileDialog(null as Frame?, "保存", FileDialog.SAVE)
+        val (dir, name) = try {
+            dialog.file = suggestedName
+            dialog.isVisible = true
+            dialog.directory to dialog.file
+        } finally {
+            dialog.dispose()
         }
-        val dir = dialog.directory ?: return null
-        val name = dialog.file ?: return null
+        if (dir == null || name == null) return null
         val target = File(dir, name)
-        return runCatching { target.writeText(content); target.name }.getOrNull()
+        return withContext(Dispatchers.IO) { runCatching { target.writeText(content); target.name }.getOrNull() }
     }
 
     override suspend fun openTextFile(extensions: List<String>): Pair<String, String>? {
-        val dialog = FileDialog(null as Frame?, "打开", FileDialog.LOAD).apply {
+        val dialog = FileDialog(null as Frame?, "打开", FileDialog.LOAD)
+        val (dir, name) = try {
             if (extensions.isNotEmpty()) {
-                filenameFilter = java.io.FilenameFilter { _, n ->
+                dialog.filenameFilter = java.io.FilenameFilter { _, n ->
                     extensions.any { ext -> n.lowercase().endsWith(".${ext.lowercase().removePrefix(".")}") }
                 }
             }
-            isVisible = true
+            dialog.isVisible = true
+            dialog.directory to dialog.file
+        } finally {
+            dialog.dispose()
         }
-        val dir = dialog.directory ?: return null
-        val name = dialog.file ?: return null
+        if (dir == null || name == null) return null
         val file = File(dir, name)
         val text = withContext(Dispatchers.IO) { runCatching { file.readText() }.getOrNull() } ?: return null
         return file.name to text
@@ -234,15 +240,16 @@ fun main() = application {
         // Compose Desktop uses the screen's device-pixel-ratio to convert dp→px internally.
         // Reading the AWT screen size gives us physical pixels; dividing by the same ratio
         // gives logical dp values that Compose will honour without any extra scaling.
-        val scale  = screen.defaultTransform.scaleX   // e.g. 1.5 on a 150% HiDPI display
+        val scale = screen.defaultTransform.scaleX.takeIf { it > 0 } ?: 1.0   // e.g. 1.5 on a 150% HiDPI display
+        val scaleY = screen.defaultTransform.scaleY.takeIf { it > 0 } ?: scale
         println("A6STUDIO HiDPI scale=$scale (${screen.bounds.width}x${screen.bounds.height} px)")
         val usable = java.awt.Toolkit.getDefaultToolkit().screenSize
         val wPx = (usable.width  * 0.80).toInt()
         val hPx = (usable.height * 0.80).toInt()
         widthDp  = (wPx  / scale).toInt().dp
-        heightDp = (hPx / scale).toInt().dp
-        windowX  = ((usable.width  - wPx) / 2).toInt()
-        windowY  = ((usable.height - hPx) / 2).toInt()
+        heightDp = (hPx / scaleY).toInt().dp
+        windowX  = (((usable.width  - wPx) / 2) / scale).toInt()
+        windowY  = (((usable.height - hPx) / 2) / scaleY).toInt()
     }
     val windowState = rememberWindowState(
         width  = widthDp,

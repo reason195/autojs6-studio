@@ -47,7 +47,8 @@ def main() -> int:
         for p in files:
             z.write(p, f"{src.name}/{p.relative_to(src).as_posix()}")
 
-    names = zipfile.ZipFile(out).namelist()
+    with zipfile.ZipFile(out) as z:
+        names = z.namelist()
     backslashes = [n for n in names if "\\" in n]
     if backslashes:
         print(f"条目里有反斜杠，解压会出错：{backslashes[:3]}", file=sys.stderr)

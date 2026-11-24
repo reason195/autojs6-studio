@@ -1,5 +1,6 @@
 package cn.dumate.a6studio.catalog
 
+import cn.dumate.a6studio.diagnose.Diagnose
 import cn.dumate.a6studio.model.Block
 import cn.dumate.a6studio.model.ParamValue
 import cn.dumate.a6studio.model.Project
@@ -154,6 +155,17 @@ object Js {
     fun isIdentifier(text: String): Boolean =
         text.isNotEmpty() && (text[0].isLetter() || text[0] == '_' || text[0] == '$') &&
             text.all { it.isLetterOrDigit() || it == '_' || it == '$' }
+
+    /**
+     * Comma-separated parameter list for a function signature. The text is free-form, so keep
+     * only plain, non-reserved identifiers: `a) {} evil(); function z(b` used to land verbatim
+     * in `function name(...)` and run at the script's top level.
+     */
+    fun paramList(raw: String): String =
+        raw.split(',')
+            .map { it.trim() }
+            .filter { Diagnose.isJsIdentifier(it) }
+            .joinToString(", ")
 
     fun indentLines(text: String, level: Int): String {
         if (text.isEmpty() || level <= 0) return text

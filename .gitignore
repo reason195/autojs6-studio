@@ -24,3 +24,6 @@ captures/
 # 真机 MCP 令牌（绝不入库）
 mcp.txt
 *.mcp.json
+
+# Mimosa 安全扫描缓存（各级目录都会生成）
+.mimosa/

@@ -46,7 +46,10 @@ object ScriptImporter {
             newBlock("log", mapOf("text" to ParamValue.Text(m.groupValues[2])))
         },
         Rule(Regex("""^\s*app\.launchPackage\(\s*(['"`])(.*?)\1\s*\)\s*;?\s*$""")) { m ->
-            newBlock("launchPackage", mapOf("pkg" to ParamValue.Text(m.groupValues[2])))
+            newBlock("launchPackage", mapOf(
+                "pkg" to ParamValue.Text(m.groupValues[2]),
+                "wait" to ParamValue.Num(0.0)
+            ))
         },
         Rule(Regex("""^\s*app\.openUrl\(\s*(['"`])(.*?)\1\s*\)\s*;?\s*$""")) { m ->
             newBlock("openUrl", mapOf("url" to ParamValue.Text(m.groupValues[2])))
@@ -156,9 +159,9 @@ object ScriptImporter {
                 }
                 i++
             }
-            // A quote never survives a real line break in JS, so drop it at end of line: that
-            // keeps one malformed line from swallowing the whole rest of the file.
-            quote = null
+            // 普通单/双引号在 JS 中不能直接跨行，行尾重置避免异常行吞掉后文；
+            // 但反引号模板字符串合法支持跨行，必须保留状态直到遇到闭合反引号。
+            if (quote != SYM_BACKTICK) quote = null
             escaped = false
         }
     }
@@ -336,7 +339,9 @@ object ScriptImporter {
         if (!clean.all { it.isDigit() || it in "+-*/.()" }) return null
         val tokens = Regex("""\d+\.?\d*|[()*/+-]""").findAll(clean).map { it.value }.toList()
         if (tokens.joinToString("") != clean) return null
-        return runCatching { Parser(tokens).parse() }.getOrNull()
+        // `1/0` and `0/0` evaluate to Infinity / NaN. The project JSON cannot encode either, so
+        // importing `sleep(1/0)` left a project that failed on every save; keep it as raw code.
+        return runCatching { Parser(tokens).parse() }.getOrNull()?.takeIf { it.isFinite() }
     }
 
     /** Minimal recursive-descent parser: expr = term ((+|-) term)*, term = factor ((*|/) factor)*. */

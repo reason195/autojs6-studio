@@ -64,7 +64,7 @@ class PickerController(
             PickerState(
                 target = target,
                 view = PickerView.LIST,
-                swipePoints = if (target.kind == PickKind.SWIPE) null to null else null to null
+                swipePoints = null to null
             )
         }
         refresh()
@@ -118,6 +118,7 @@ class PickerController(
         update { it.copy(selected = node, candidates = emptyList(), chosen = null) }
         if (state.target?.kind == PickKind.SWIPE) {
             takeSwipePoint(node.centerX, node.centerY)
+            return
         }
         if (state.target?.kind == PickKind.COORD) return
 
@@ -166,6 +167,8 @@ class PickerController(
             }
         }
     }
+
+    fun clearSwipePoints() = update { it.copy(swipePoints = null to null, coord = null) }
 
     fun setCoord(x: Int, y: Int) = update { it.copy(coord = x to y) }
 

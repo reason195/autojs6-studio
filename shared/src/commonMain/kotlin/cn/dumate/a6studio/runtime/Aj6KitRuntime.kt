@@ -116,7 +116,7 @@ var Kit = (function () {
          * 所以这种「按几何找无名可点卡」的场景必须单独走一次全树遍历。
          */
         allNodes: function () {
-            var c = call('className', [/.*/]);
+            var c = call('classNameMatches', ['.*']) || call('className', [/.*/]);
             if (!c) return null;
             try { return c.find(); } catch (e) { kitRethrowStop(e); return null; }
         },
@@ -431,6 +431,10 @@ var Kit = (function () {
             if (!guardRisk()) return false;
             dismissDialogs();
             guardRisky();
+            if (riskyRe && riskyRe.test(PRIM.currentActivity())) {
+                log('  ! 安全阀：连续 4 次 back 仍停留在危险页面 ' + PRIM.currentActivity() + '，安全停止');
+                return false;
+            }
             return true;
         }
 
@@ -1577,11 +1581,11 @@ var Kit = (function () {
         /* ---------------- OCR 兜底 ---------------- */
 
         function ocrLines(band) {
-            var img = null, out = [];
+            var img = null, src = null, out = [];
             try {
                 img = PRIM.captureScreen();
                 if (!img) return [];
-                var src = img;
+                src = img;
                 if (band) {
                     src = PRIM.clip(img, 0, band[0], W, band[1] - band[0]) || img;
                 }
@@ -1590,7 +1594,7 @@ var Kit = (function () {
                 for (var i = 0; i < rs.length; i++) {
                     var b = rs[i].bounds;
                     if (!b) continue;
-                    var t = (rs[i].text || '').replace(/\s/g, '');
+                    var t = (rs[i].label || rs[i].text || '').replace(/\s/g, '');
                     if (!t) continue;
                     out.push({
                         t: t,
@@ -1601,9 +1605,11 @@ var Kit = (function () {
                         cy: Math.round((b.top + b.bottom) / 2) + dy
                     });
                 }
-                if (band && src && src !== img) PRIM.recycle(src);
             } catch (e) { kitRethrowStop(e); log('  ! OCR 异常 ' + e); }
-            PRIM.recycle(img);
+            finally {
+                if (band && src && src !== img) PRIM.recycle(src);
+                if (img) PRIM.recycle(img);
+            }
             return out;
         }
 
@@ -1896,10 +1902,7 @@ var Kit = (function () {
             }
 
             if (seq.length > 1) log('  · 倒计时轨迹: ' + seq.join('→') + '（' + seq.length + ' 次读数）');
-            if (doneAt) {
-                var wait = (doneAt + grace) - PRIM.now();
-                if (wait > 0) { log('  · 再等 ' + Math.round(wait) + 'ms 余量'); PRIM.sleepIn(wait); }
-            } else {
+            if (!doneAt) {
                 log('  ! 到达停留硬上限 ' + Math.round(hard / 1000) + 's，直接尝试返回');
             }
 

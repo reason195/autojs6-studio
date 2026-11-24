@@ -58,7 +58,13 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 enum class Pane { CODE, RUN, TEST, DIAG, DEVICE, AI, HELP }
@@ -86,12 +92,11 @@ class StudioState(
     val repo = ProjectRepo(storage)
     // M2: without a handler, any exception that escapes a launch {} (a device reply in an
     // unexpected shape, an engine bug) crashes the Android app. Log it and keep the UI alive.
+    // Run/test state is not touched here: every run path resets it in its own finally, and
+    // clearing it from an unrelated failure (a toast bubble, the recorder) re-enabled 运行
+    // while a simulation was still going, so a second run could start alongside it.
     val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Main + kotlinx.coroutines.CoroutineExceptionHandler { _, e ->
-            running = false
-            testsRunning = false
-            runControl = null
-            testControl = null
             toast("内部错误：${e.message ?: e::class.simpleName}")
         }
     )
@@ -102,6 +107,7 @@ class StudioState(
     // grew with every MCP call.
     private val http = HttpClient(engineFactory) {
         expectSuccess = false
+        followRedirects = false
         install(io.ktor.client.plugins.HttpTimeout) {
             requestTimeoutMillis = 15_000
             connectTimeoutMillis = 8_000
@@ -215,6 +221,7 @@ class StudioState(
     var beginnerMode by mutableStateOf(true)
     var showGuide by mutableStateOf(false)
     var showTemplatePicker by mutableStateOf(false)
+    val textFocusTracker = cn.dumate.a6studio.ui.fields.TextFocusTracker()
 
 
     var pickerState by mutableStateOf(PickerState())
@@ -321,10 +328,30 @@ class StudioState(
         // would then be saved over the user's file on the next edit. `load()` returns a message
         // when that happened (and keeps a backup when the host supports it).
         val loadWarning = repo.load()
-        bridgeUrl = repo.current.bridge.url.ifBlank { cn.dumate.a6studio.config.AppConfig.defaultUrl }
-        rememberToken = platform.readTextFile(rememberMarkerPath()) == "1"
+        val savedBridge = readSavedBridgeConfig()
+        rememberToken = platform.readTextFile(rememberMarkerPath()) != "0"
         if (rememberToken) loadRememberedTokens()
+
+        val defaultUrl = cn.dumate.a6studio.config.AppConfig.defaultUrl
+        val projectUrl = repo.current.bridge.url
+        bridgeUrl = when {
+            !savedBridge?.first.isNullOrBlank() -> savedBridge!!.first
+            projectUrl.isNotBlank() && projectUrl != defaultUrl -> projectUrl
+            // 兼容旧版本：若尚未有独立桥接配置文件且仅记住了一台设备令牌，优先恢复该设备地址
+            rememberToken && bridge.authMap().size == 1 -> bridge.authMap().keys.first()
+            else -> projectUrl.ifBlank { defaultUrl }
+        }
+        if (bridgeUrl.isNotBlank() && repo.current.bridge.url != bridgeUrl) {
+            repo.updateBridgeUrl(bridgeUrl)
+        }
+        savedBridge?.second?.forEach { (u, n) ->
+            if (u.isNotBlank() && repo.current.bridge.devices.none { normUrl(it.url) == normUrl(u) }) {
+                repo.saveDevice(u, n)
+            }
+        }
         bridge.setUrl(bridgeUrl)
+        bridgeToken = bridge.authMap()[normUrl(bridgeUrl)]?.removePrefix("Bearer ").orEmpty()
+        loadAiConfig()
 
         // A first run should not land on an empty canvas with no explanation.
         val seenGuide = platform.readTextFile(GUIDE_MARKER) == "1"
@@ -348,6 +375,9 @@ class StudioState(
     private companion object {
         const val GUIDE_MARKER = "a6studio.guide.seen"
         const val BEGINNER_MARKER = "a6studio.beginner.mode"
+        const val BRIDGE_CONFIG_PATH = "a6studio.bridge.v1"
+        const val AI_CONFIG_PATH = "a6studio.ai.v1"
+        const val AI_TOKENS_PATH = "a6studio.tokens.ai.v1"
     }
 
     fun dismissGuide() {
@@ -394,6 +424,12 @@ class StudioState(
 
     fun clearRunLogs() { runLogs = emptyList() }
 
+    fun clearDeviceLog() { deviceLog = emptyList() }
+
+    fun clearActiveRunLogs() {
+        if (sendToDevice) deviceLog = emptyList() else runLogs = emptyList()
+    }
+
     // ---- code / diagnostics -------------------------------------------------
     fun refreshCode() {
         val marked = CodeGen.code(repo.current, markers = true)
@@ -437,9 +473,10 @@ class StudioState(
 
     // ---- editor intents ------------------------------------------------------
     fun addBlock(type: String) {
+        val def = cn.dumate.a6studio.catalog.Catalog.byType(type) ?: return
         repo.addBlock(type)
         commit()
-        toast("已添加：${cn.dumate.a6studio.catalog.Catalog.cleanName(cn.dumate.a6studio.catalog.Catalog.byType(type)!!)}")
+        toast("已添加：${cn.dumate.a6studio.catalog.Catalog.cleanName(def)}")
     }
 
     /** Drag from the palette onto the canvas. Shared by both panels so they see one gesture. */
@@ -575,8 +612,10 @@ class StudioState(
                 val entries = (obj?.get("entries") ?: obj?.get("lines")) as? kotlinx.serialization.json.JsonArray
                 entries?.forEach { el ->
                     val o = el as? kotlinx.serialization.json.JsonObject
-                    val level = o?.get("level")?.toString()?.trim('"') ?: "info"
-                    val msg = o?.get("message")?.toString()?.trim('"') ?: o?.get("msg")?.toString()?.trim('"') ?: el.toString()
+                    val level = (o?.get("level") as? JsonPrimitive)?.contentOrNull ?: "info"
+                    val msg = (o?.get("message") as? JsonPrimitive)?.contentOrNull
+                        ?: (o?.get("msg") as? JsonPrimitive)?.contentOrNull
+                        ?: el.toString()
                     appendDevice(level, msg)
                 }
                 runStatus = "真机 · 完成"
@@ -632,9 +671,21 @@ class StudioState(
     }
 
     // ---- device --------------------------------------------------------------
+    private fun normUrl(url: String): String = url.trim().trimEnd('/')
+
+    private fun redactUrlForLog(raw: String): String = raw
+        .replace(Regex("""://([^/@\s]+)@"""), "://***@")
+        .replace(Regex("""([?&])(token|key|secret|password)=([^&\s]+)""", RegexOption.IGNORE_CASE), "$1$2=***")
+
     fun applyBridgeConfig() {
         bridge.setUrl(bridgeUrl)
-        if (bridgeToken.isNotBlank()) bridge.setAuthFor(bridgeUrl, bridgeToken)
+        if (bridgeToken.isNotBlank()) {
+            try {
+                bridge.setAuthFor(bridgeUrl, bridgeToken)
+            } catch (e: BridgeException) {
+                toast(e.message ?: "MCP 令牌无效")
+            }
+        }
     }
 
     fun connectDevice() {
@@ -718,36 +769,78 @@ class StudioState(
     }
 
     fun updateBridgeUrl(url: String) {
+        val prevToken = bridgeToken
         bridgeUrl = url
         repo.updateBridgeUrl(url)
         bridge.setUrl(url)
-        bridgeToken = bridge.authMap()[url]?.removePrefix("Bearer ").orEmpty()
+        val savedForNew = bridge.authMap()[normUrl(url)]?.removePrefix("Bearer ").orEmpty()
+        if (savedForNew.isNotEmpty()) {
+            bridgeToken = savedForNew
+        } else if (prevToken.isNotBlank()) {
+            // 手工编辑地址时保留当前已填令牌并绑定到新地址，避免每改一个字符就清空令牌
+            bridgeToken = prevToken
+            try {
+                bridge.setAuthFor(url, prevToken)
+                persistTokens()
+            } catch (_: BridgeException) {
+                // 地址或令牌尚在输入中时忽略中间态异常
+            }
+        } else {
+            bridgeToken = ""
+        }
+        persistBridgeConfig()
     }
 
     fun updateBridgeToken(token: String) {
         bridgeToken = token
-        bridge.setAuthFor(bridgeUrl, token)
-        persistTokens()
+        try {
+            bridge.setAuthFor(bridgeUrl, token)
+            persistTokens()
+        } catch (e: BridgeException) {
+            toast(e.message ?: "MCP 令牌无效")
+        }
     }
 
     fun changeRememberToken(v: Boolean) {
         rememberToken = v
         platform.writeTextFile(rememberMarkerPath(), if (v) "1" else "0")
-        if (v) loadRememberedTokens() else persistTokens()
-        bridgeToken = bridge.authMap()[bridgeUrl]?.removePrefix("Bearer ").orEmpty()
+        if (v) {
+            // 合并磁盘已有令牌与当前内存令牌（当前内存优先），绝不清空用户刚输入的令牌
+            val merged = readRememberedTokensMap().toMutableMap()
+            merged.putAll(bridge.authMap())
+            if (bridgeToken.isNotBlank() && bridgeUrl.isNotBlank()) {
+                runCatching { McpClient.buildAuthorizationHeader(bridgeToken) }.getOrNull()?.let { hdr ->
+                    merged[normUrl(bridgeUrl)] = hdr
+                }
+            }
+            bridge.setAuthMap(merged)
+            persistTokens()
+            persistAiTokens()
+        } else {
+            // 关闭记住开关只清空磁盘凭据文件，保留当前会话内存中的输入
+            platform.writeTextFile(tokenPath(), "{}")
+            platform.writeTextFile(AI_TOKENS_PATH, "{}")
+        }
     }
 
     private fun rememberMarkerPath() = "a6studio.remember.v1"
     private fun tokenPath() = "a6studio.tokens.v1"
 
-    private fun loadRememberedTokens() {
-        val raw = platform.readTextFile(tokenPath()) ?: return
-        val map = runCatching {
+    private fun readRememberedTokensMap(): Map<String, String> {
+        val raw = platform.readTextFile(tokenPath()) ?: return emptyMap()
+        return runCatching {
             Json.parseToJsonElement(raw).let { el ->
-                (el as? kotlinx.serialization.json.JsonObject)?.mapValues { it.value.toString().trim('"') }.orEmpty()
+                (el as? JsonObject)
+                    ?.entries
+                    ?.mapNotNull { (k, v) -> (v as? JsonPrimitive)?.contentOrNull?.let { normUrl(k) to it } }
+                    ?.toMap()
+                    .orEmpty()
             }
         }.getOrDefault(emptyMap())
-        bridge.setAuthMap(map)
+    }
+
+    private fun loadRememberedTokens() {
+        bridge.setAuthMap(readRememberedTokensMap())
     }
 
     private fun persistTokens() {
@@ -759,14 +852,197 @@ class StudioState(
         platform.writeTextFile(tokenPath(), obj.toString())
     }
 
+    private fun readSavedBridgeConfig(): Pair<String, List<Pair<String, String>>>? {
+        val raw = platform.readTextFile(BRIDGE_CONFIG_PATH) ?: return null
+        return runCatching {
+            val obj = Json.parseToJsonElement(raw) as? JsonObject ?: return null
+            val url = (obj["url"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            val devices = (obj["devices"] as? JsonArray)?.mapNotNull { el ->
+                val d = el as? JsonObject ?: return@mapNotNull null
+                val u = (d["url"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                val n = (d["name"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                if (u.isEmpty()) null else u to n
+            }.orEmpty()
+            url to devices
+        }.getOrNull()
+    }
+
+    private fun persistBridgeConfig() {
+        val obj = buildJsonObject {
+            put("version", 1)
+            put("url", bridgeUrl)
+            put("devices", buildJsonArray {
+                repo.current.bridge.devices.forEach { d ->
+                    add(buildJsonObject {
+                        put("url", d.url)
+                        put("name", d.name)
+                    })
+                }
+            })
+        }
+        platform.writeTextFile(BRIDGE_CONFIG_PATH, obj.toString())
+    }
+
+    private fun loadAiConfig() {
+        var legacyProxyToken = ""
+        var legacyGeminiKey = ""
+        var legacyOpenAiKey = ""
+        var migratedLegacySecrets = false
+
+        platform.readTextFile(AI_CONFIG_PATH)?.let { raw ->
+            runCatching {
+                val obj = Json.parseToJsonElement(raw) as? JsonObject ?: return@runCatching
+                (obj["mcpTransport"] as? JsonPrimitive)?.contentOrNull?.let { trId ->
+                    McpTransport.entries.firstOrNull { it.id == trId || it.name == trId }?.let { tr ->
+                        if (tr == McpTransport.HTTP_JSONRPC || devMode) mcpTransport = tr
+                    }
+                }
+                (obj["proxyPinUrl"] as? JsonPrimitive)?.contentOrNull?.let { if (it.isNotBlank()) proxyPinUrl = it }
+                (obj["proxyPinDomainFilter"] as? JsonPrimitive)?.contentOrNull?.let { proxyPinDomainFilter = it }
+                (obj["llmProvider"] as? JsonPrimitive)?.contentOrNull?.let { pid ->
+                    LlmProviderId.entries.firstOrNull { it.id == pid || it.name == pid }?.let { llmProvider = it }
+                }
+                (obj["proxyPinToken"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                    legacyProxyToken = it
+                    migratedLegacySecrets = true
+                }
+                val lc = obj["llmConfig"] as? JsonObject
+                if (lc != null) {
+                    fun s(k: String, fallback: String): String =
+                        (lc[k] as? JsonPrimitive)?.contentOrNull ?: fallback
+                    (lc["geminiApiKey"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                        legacyGeminiKey = it
+                        migratedLegacySecrets = true
+                    }
+                    (lc["openAiApiKey"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotEmpty() }?.let {
+                        legacyOpenAiKey = it
+                        migratedLegacySecrets = true
+                    }
+                    llmConfig = llmConfig.copy(
+                        geminiModel = s("geminiModel", llmConfig.geminiModel),
+                        openAiBaseUrl = s("openAiBaseUrl", llmConfig.openAiBaseUrl),
+                        openAiModel = s("openAiModel", llmConfig.openAiModel),
+                        ollamaBaseUrl = s("ollamaBaseUrl", llmConfig.ollamaBaseUrl),
+                        ollamaModel = s("ollamaModel", llmConfig.ollamaModel),
+                        lmStudioBaseUrl = s("lmStudioBaseUrl", llmConfig.lmStudioBaseUrl),
+                        lmStudioModel = s("lmStudioModel", llmConfig.lmStudioModel),
+                        allowLocalInference = (lc["allowLocalInference"] as? JsonPrimitive)?.booleanOrNull
+                            ?: llmConfig.allowLocalInference
+                    )
+                }
+            }
+        }
+
+        if (rememberToken) {
+            var tokenFromFile = ""
+            var geminiFromFile = ""
+            var openAiFromFile = ""
+            platform.readTextFile(AI_TOKENS_PATH)?.let { raw ->
+                runCatching {
+                    val obj = Json.parseToJsonElement(raw) as? JsonObject ?: return@runCatching
+                    tokenFromFile = (obj["proxyPinToken"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                    geminiFromFile = (obj["geminiApiKey"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                    openAiFromFile = (obj["openAiApiKey"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                }
+            }
+            proxyPinToken = tokenFromFile.ifEmpty { legacyProxyToken }
+            llmConfig = llmConfig.copy(
+                geminiApiKey = geminiFromFile.ifEmpty { legacyGeminiKey },
+                openAiApiKey = openAiFromFile.ifEmpty { legacyOpenAiKey }
+            )
+            if (migratedLegacySecrets) {
+                persistAiTokens()
+                persistAiConfig()
+            }
+        } else if (migratedLegacySecrets) {
+            // 关闭记住令牌时，也顺手清理旧版配置文件中的明文凭据
+            persistAiConfig()
+        }
+
+        if (proxyPinUrl.isNotBlank()) {
+            runCatching { proxyPin.configure(proxyPinUrl, proxyPinToken, allowLocal = true) }
+        }
+    }
+
+    private fun persistAiConfig() {
+        val obj = buildJsonObject {
+            put("version", 1)
+            put("mcpTransport", mcpTransport.id)
+            put("proxyPinUrl", proxyPinUrl)
+            put("proxyPinDomainFilter", proxyPinDomainFilter)
+            put("llmProvider", llmProvider.id)
+            put("llmConfig", buildJsonObject {
+                put("geminiModel", llmConfig.geminiModel)
+                put("openAiBaseUrl", llmConfig.openAiBaseUrl)
+                put("openAiModel", llmConfig.openAiModel)
+                put("ollamaBaseUrl", llmConfig.ollamaBaseUrl)
+                put("ollamaModel", llmConfig.ollamaModel)
+                put("lmStudioBaseUrl", llmConfig.lmStudioBaseUrl)
+                put("lmStudioModel", llmConfig.lmStudioModel)
+                put("allowLocalInference", llmConfig.allowLocalInference)
+            })
+        }
+        platform.writeTextFile(AI_CONFIG_PATH, obj.toString())
+    }
+
+    private fun persistAiTokens() {
+        if (!rememberToken) {
+            platform.writeTextFile(AI_TOKENS_PATH, "{}")
+            return
+        }
+        val obj = buildJsonObject {
+            if (proxyPinToken.isNotEmpty()) put("proxyPinToken", proxyPinToken)
+            if (llmConfig.geminiApiKey.isNotEmpty()) put("geminiApiKey", llmConfig.geminiApiKey)
+            if (llmConfig.openAiApiKey.isNotEmpty()) put("openAiApiKey", llmConfig.openAiApiKey)
+        }
+        platform.writeTextFile(AI_TOKENS_PATH, obj.toString())
+    }
+
+    fun updateMcpTransport(tr: McpTransport) {
+        mcpTransport = tr
+        persistAiConfig()
+    }
+
+    fun updateProxyPinUrl(url: String) {
+        proxyPinUrl = url
+        persistAiConfig()
+    }
+
+    fun updateProxyPinToken(token: String) {
+        proxyPinToken = token
+        persistAiTokens()
+    }
+
+    fun updateProxyPinDomainFilter(filter: String) {
+        proxyPinDomainFilter = filter
+        persistAiConfig()
+    }
+
+    fun updateLlmProvider(pid: LlmProviderId) {
+        llmProvider = pid
+        persistAiConfig()
+    }
+
+    fun updateLlmConfig(cfg: LlmConfig) {
+        val secretChanged = cfg.geminiApiKey != llmConfig.geminiApiKey || cfg.openAiApiKey != llmConfig.openAiApiKey
+        llmConfig = cfg
+        persistAiConfig()
+        if (secretChanged) persistAiTokens()
+    }
+
     fun saveCurrentDevice() {
         repo.saveDevice(bridgeUrl, "")
+        persistBridgeConfig()
         toast("已保存设备")
     }
 
     fun switchDevice(url: String) {
         if (url.isBlank()) return
-        updateBridgeUrl(url)
+        bridgeUrl = url
+        repo.updateBridgeUrl(url)
+        bridge.setUrl(url)
+        bridgeToken = bridge.authMap()[normUrl(url)]?.removePrefix("Bearer ").orEmpty()
+        persistBridgeConfig()
         applyBridgeConfig()
         toast("已切换到 ${url.removePrefix("http://").removePrefix("https://")}")
     }
@@ -780,9 +1056,22 @@ class StudioState(
      * 「记住令牌」 is on) and switches to the first one. Returns how many were imported.
      */
     fun importMcpConfig(text: String, source: String): Int {
-        val found = cn.dumate.a6studio.bridge.McpConfigParser.parse(text)
-        if (found.isEmpty()) {
+        val parsed = cn.dumate.a6studio.bridge.McpConfigParser.parse(text)
+        if (parsed.isEmpty()) {
             toast("$source 里没有找到 MCP 地址（支持 mcpServers JSON、URL、IP，每行一台）")
+            return 0
+        }
+        // Same gate as ProxyPin import: an imported file must not be able to point the client at
+        // a metadata endpoint or smuggle CR/LF into the Authorization header.
+        val rejected = mutableListOf<String>()
+        val found = parsed.filter { c ->
+            val reason = cn.dumate.a6studio.bridge.McpImportCheck.reject(c.url, c.token)
+            if (reason != null) rejected += "${redactUrlForLog(c.url)}：$reason"
+            reason == null
+        }
+        rejected.forEach { appendDevice("error", "已跳过 $it") }
+        if (found.isEmpty()) {
+            toast("$source 里的 MCP 地址都被安全策略拒绝了，详情见设备日志")
             return 0
         }
         found.forEach { c ->
@@ -791,7 +1080,11 @@ class StudioState(
         }
         persistTokens()
         val first = found.first()
-        updateBridgeUrl(first.url)
+        bridgeUrl = first.url
+        repo.updateBridgeUrl(first.url)
+        bridge.setUrl(first.url)
+        bridgeToken = first.token.ifBlank { bridge.authMap()[normUrl(first.url)]?.removePrefix("Bearer ").orEmpty() }
+        persistBridgeConfig()
         applyBridgeConfig()
         val withToken = found.count { it.token.isNotEmpty() }
         val names = found.joinToString("、") { cn.dumate.a6studio.bridge.McpConfigParser.label(it) }
@@ -845,23 +1138,26 @@ class StudioState(
             toast("ProxyPin 配置失败：${e.message}")
             return 0
         }
-        // configure 成功后才写状态，界面上与桥接里是同一份干净配置。
+        // configure 成功后才写状态，界面上与桥接里是同一份干净配置，并持久化到本机私有存储。
         proxyPinUrl = picked.url
         proxyPinToken = picked.token
+        persistAiConfig()
+        persistAiTokens()
         // 多台时提示挑了哪台；只有一台就不用说。
         val foundCount = cn.dumate.a6studio.bridge.McpConfigParser
             .parseWithDefaultPort(text, cn.dumate.a6studio.bridge.ProxyPinImport.DEFAULT_PORT)
             .size
-        if (foundCount > 1) {
+        val multiPrefix = if (foundCount > 1) {
             val label = picked.name.ifBlank {
                 picked.url.removePrefix("http://").removePrefix("https://").removeSuffix("/mcp")
             }
-            toast("检测到 $foundCount 个，已使用：$label")
-        }
+            "检测到 $foundCount 个，已使用 $label · "
+        } else ""
         if (picked.token.isEmpty()) {
-            toast("已应用 ProxyPin 地址（未带令牌）：${picked.url}")
+            toast("${multiPrefix}已应用 ProxyPin 地址（未带令牌）：${redactUrlForLog(picked.url)}")
         } else {
-            toast("已应用 ProxyPin 地址与令牌（仅内存持有）")
+            val suffix = if (rememberToken) "已保存在本机" else "仅内存持有"
+            toast("${multiPrefix}已应用 ProxyPin 地址与令牌（$suffix）")
         }
         return 1
     }
@@ -889,7 +1185,7 @@ class StudioState(
             repo.current.bridge.devices.forEach { d ->
                 put(d.name.ifBlank { d.url }, buildJsonObject {
                     put("url", d.url)
-                    bridge.authMap()[d.url]?.let { auth -> put("headers", buildJsonObject { put("Authorization", auth) }) }
+                    bridge.authMap()[normUrl(d.url)]?.let { auth -> put("headers", buildJsonObject { put("Authorization", auth) }) }
                 })
             }
         }
@@ -916,10 +1212,12 @@ class StudioState(
         devMode = enable
         if (!enable && mcpTransport == McpTransport.LOCAL_BRIDGE) {
             mcpTransport = McpTransport.HTTP_JSONRPC
+            persistAiConfig()
         }
     }
 
     fun fetchAutoJsDeviceState() {
+        if (aiBusy) return
         scope.launch {
             aiBusy = true
             aiStatusMsg = "正在通过 AutoJs6 MCP 采集设备与控件树状态…"
@@ -966,6 +1264,7 @@ class StudioState(
     }
 
     fun fetchProxyPinTraffic() {
+        if (aiBusy) return
         scope.launch {
             aiBusy = true
             aiStatusMsg = "正在连接 ProxyPin MCP 并拉取流量…"
@@ -1028,7 +1327,8 @@ class StudioState(
     }
 
     fun requestAiRefine(goal: String) {
-        if (mayUseCloudProvider() && pendingCloudPreview == null) {
+        if (aiBusy) return
+        if (mayUseCloudProvider()) {
             val devState = lastAutoJsStateReport?.redactedPayload ?: kotlinx.serialization.json.JsonNull
             val traffic = lastTrafficReport?.redactedPayload ?: kotlinx.serialization.json.JsonNull
             val combined = buildJsonObject {
@@ -1045,6 +1345,7 @@ class StudioState(
     }
 
     fun confirmCloudRefine() {
+        if (aiBusy) return
         val g = pendingCloudGoal
         pendingCloudPreview = null
         runAiRefine(g)
@@ -1056,6 +1357,7 @@ class StudioState(
     }
 
     fun runAiRefine(goal: String) {
+        if (aiBusy) return
         scope.launch {
             aiBusy = true
             aiStatusMsg = "正在联合双 MCP 上下文提炼…"
@@ -1132,7 +1434,7 @@ class StudioState(
         }
     }
 
-    /** 把选中的模型 id 写进 llmConfig 对应通道的字段（仅内存，与 Key 一样不持久化）。 */
+    /** 把选中的模型 id 写进 llmConfig 对应通道并持久化到本机 AI 配置。 */
     fun selectLlmModel(pid: LlmProviderId, modelId: String) {
         if (modelId.isBlank()) return
         llmConfig = when (pid) {
@@ -1142,6 +1444,7 @@ class StudioState(
             LlmProviderId.LMSTUDIO -> llmConfig.copy(lmStudioModel = modelId)
             else -> return
         }
+        persistAiConfig()
         toast("已选择模型：$modelId")
     }
 
@@ -1263,7 +1566,22 @@ class StudioState(
     fun refreshAll() {
         refreshCode()
         recomputeDiag()
-        bridgeUrl = repo.current.bridge.url.ifBlank { bridgeUrl }
+        // 导入脚本/切换模板时保留本机已保存的真机地址与设备列表，不被默认占位地址冲掉
+        val defaultUrl = cn.dumate.a6studio.config.AppConfig.defaultUrl
+        val projUrl = repo.current.bridge.url
+        if (bridgeUrl.isNotBlank() && (projUrl.isBlank() || projUrl == defaultUrl)) {
+            repo.updateBridgeUrl(bridgeUrl)
+        } else if (projUrl.isNotBlank() && projUrl != bridgeUrl) {
+            bridgeUrl = projUrl
+            bridge.setUrl(bridgeUrl)
+            bridgeToken = bridge.authMap()[normUrl(bridgeUrl)]?.removePrefix("Bearer ").orEmpty()
+            persistBridgeConfig()
+        }
+        readSavedBridgeConfig()?.second?.forEach { (u, n) ->
+            if (u.isNotBlank() && repo.current.bridge.devices.none { normUrl(it.url) == normUrl(u) }) {
+                repo.saveDevice(u, n)
+            }
+        }
     }
 
     fun saveNow() {
@@ -1276,7 +1594,13 @@ class StudioState(
     }
 
     fun copyCode() {
-        platform.copyToClipboard(CodeGen.code(repo.current))
+        val code = CodeGen.code(repo.current)
+        val leaked = Redaction.assertNoPlaintextSecrets(code)
+        if (leaked.isNotEmpty()) {
+            toast("复制已拦截：脚本包含疑似明文凭据（${leaked.joinToString("、")}）")
+            return
+        }
+        platform.copyToClipboard(code)
         toast("代码已复制")
     }
 
@@ -1330,6 +1654,7 @@ class StudioState(
     fun pickerClearRegion() { picker.clearRegion() }
     fun pickerCoord(x: Int, y: Int) { picker.setCoord(x, y) }
     fun pickerSwipePoint(x: Int, y: Int) { picker.takeSwipePoint(x, y) }
+    fun pickerClearSwipePoints() { picker.clearSwipePoints() }
 
     fun applyPick(result: cn.dumate.a6studio.picker.PickResult) {
         val loc = repo.locate(result.blockId)
@@ -1420,12 +1745,18 @@ class StudioState(
             }
             row.blockId to paramMap
         }
+        if (patches.isEmpty()) {
+            toast("没有可自动写入的修复项（护栏积木不支持 id 定位，请用拾取器重拾）")
+            return
+        }
+        val appliedIds = patches.map { it.first }.toSet()
         repo.patchParamsBatch(patches, "体检修好选择器")
         val n = patches.size
+        val skipped = fixable.size - n
         commit()
         auditRows = auditRows.map { r ->
             val fix = r.fix
-            if (fix != null) r.copy(
+            if (fix != null && r.blockId in appliedIds) r.copy(
                 by = fix.first,
                 value = fix.second,
                 status = cn.dumate.a6studio.audit.AuditStatus.UNIQUE,
@@ -1433,7 +1764,10 @@ class StudioState(
                 fix = null
             ) else r
         }
-        toast("已修好 $n 处选择器")
+        toast(
+            if (skipped > 0) "已修好 $n 处选择器（另有 $skipped 处护栏积木不支持该定位方式，请用拾取器重拾）"
+            else "已修好 $n 处选择器"
+        )
     }
 
     fun copyAuditReport() {

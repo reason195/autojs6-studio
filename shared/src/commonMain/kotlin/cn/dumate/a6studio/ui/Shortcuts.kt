@@ -24,6 +24,8 @@ fun Modifier.studioShortcuts(state: StudioState): Modifier {
         .onKeyEvent { ev ->
             if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
             val ctrl = ev.isCtrlPressed || ev.isMetaPressed
+            val editingText = state.textFocusTracker.hasFocus
+            val hasModal = state.overlay != Overlay.NONE || state.showTemplatePicker || state.showGuide
             when {
                 ev.key == Key.F5 && ev.isShiftPressed -> { state.stopRun(); true }
                 ev.key == Key.F5 -> { state.run(); true }
@@ -32,11 +34,25 @@ fun Modifier.studioShortcuts(state: StudioState): Modifier {
                 ev.key == Key.F8 -> { state.openAudit(); true }
                 ev.key == Key.F9 -> { state.openRecorder(); true }
                 ctrl && ev.key == Key.S -> { state.saveNow(); true }
-                ctrl && ev.key == Key.Z -> { state.undo(); true }
+                ctrl && ev.key == Key.Z -> {
+                    if (editingText || hasModal) false else { state.undo(); true }
+                }
                 ctrl && ev.key == Key.E -> { state.exportJs(); true }
-                ev.key == Key.Escape -> { state.closeOverlay(); true }
+                ev.key == Key.Escape -> {
+                    if (hasModal) {
+                        state.closeOverlay()
+                        state.showTemplatePicker = false
+                        state.showGuide = false
+                        true
+                    } else if (state.repo.selectedId != null) {
+                        state.repo.select(null)
+                        true
+                    } else false
+                }
                 ev.key == Key.Delete -> {
-                    if (state.repo.selectedId != null) { state.removeSelected(); true } else false
+                    if (!editingText && !hasModal && state.repo.selectedId != null) {
+                        state.removeSelected(); true
+                    } else false
                 }
                 else -> false
             }

@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +60,8 @@ import cn.dumate.a6studio.ui.canvas.CanvasPanel
 import cn.dumate.a6studio.ui.components.Badge
 import cn.dumate.a6studio.ui.components.badgeKindOf
 import cn.dumate.a6studio.ui.fields.InlineField
+import cn.dumate.a6studio.ui.fields.LocalTextFocusTracker
+import cn.dumate.a6studio.ui.fields.trackTextFocus
 import cn.dumate.a6studio.ui.palette.PalettePanel
 import cn.dumate.a6studio.ui.currentStudioStyle
 import cn.dumate.a6studio.ui.panes.CodePane
@@ -71,6 +74,13 @@ import cn.dumate.a6studio.ui.panes.TestPane
 
 @Composable
 fun StudioApp(state: StudioState) {
+    CompositionLocalProvider(LocalTextFocusTracker provides state.textFocusTracker) {
+        StudioAppContent(state)
+    }
+}
+
+@Composable
+private fun StudioAppContent(state: StudioState) {
     val project = state.repo.current
     val selected = state.repo.selectedId
     val scope = state.repo.currentScope
@@ -345,7 +355,7 @@ private fun PlainNameField(value: String, onChange: (String) -> Unit) {
             fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Palette.text
         ),
         cursorBrush = androidx.compose.ui.graphics.SolidColor(Palette.accent),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().trackTextFocus()
     )
 }
 
@@ -537,7 +547,9 @@ private fun PaletteColumn(state: StudioState, modifier: Modifier, wideLayout: Bo
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("${cn.dumate.a6studio.model.TreeOps.count(project.root.children["body"].orEmpty())} 块", fontSize = 10.sp, color = Palette.textDim)
+            val totalBlocks = cn.dumate.a6studio.model.TreeOps.count(project.root.children["body"].orEmpty()) +
+                project.modules.sumOf { cn.dumate.a6studio.model.TreeOps.count(it.children["body"].orEmpty()) }
+            Text("$totalBlocks 块", fontSize = 10.sp, color = Palette.textDim)
             Text("${project.modules.size} 模块", fontSize = 10.sp, color = Palette.textDim)
             Text("${project.tests.size} 测试", fontSize = 10.sp, color = Palette.textDim)
         }

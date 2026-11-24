@@ -3,6 +3,7 @@ package cn.dumate.a6studio.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
@@ -32,8 +33,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -248,8 +251,15 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
     val dh = s.deviceHeight
 
     Column(modifier.verticalScroll(rememberScrollState()).padding(8.dp)) {
-        if (s.shotBase64 == null) {
+        val shotBase64 = s.shotBase64
+        if (shotBase64 == null) {
             EmptyHint("切到「截图」会自动抓一张当前屏幕；拖拽可框选一块区域下钻", Modifier.padding(8.dp))
+            SmallButton("重新截图") { state.pickerCapture() }
+            return@Column
+        }
+        val bitmap = remember(shotBase64) { runCatching { decodeBase64ToImage(shotBase64) }.getOrNull() }
+        if (bitmap == null) {
+            EmptyHint("截图解码失败（图片数据无效或格式不受支持）", Modifier.padding(8.dp))
             SmallButton("重新截图") { state.pickerCapture() }
             return@Column
         }
@@ -260,6 +270,7 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
         ) {
             // The image is letterboxed inside this box; map device coords onto the drawn area
             // so hot zones and taps line up with the screenshot.
+            val density = LocalDensity.current
             val boxW = maxWidth
             val boxH = maxHeight
             val scale = minOf(boxW / dw.dp, boxH / dh.dp)
@@ -267,9 +278,18 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
             val drawnH = dh.dp * scale
             val offsetX = (boxW - drawnW) / 2
             val offsetY = (boxH - drawnH) / 2
+            val offsetXPx = with(density) { offsetX.toPx() }
+            val offsetYPx = with(density) { offsetY.toPx() }
+            val drawnWPx = with(density) { drawnW.toPx() }.coerceAtLeast(1f)
+            val drawnHPx = with(density) { drawnH.toPx() }.coerceAtLeast(1f)
+            var dragStart by remember(shotBase64) { mutableStateOf<Offset?>(null) }
+            var dragEnd by remember(shotBase64) { mutableStateOf<Offset?>(null) }
+
+            fun toDevX(pxVal: Float) = ((pxVal - offsetXPx) / drawnWPx * dw).toInt().coerceIn(0, dw)
+            fun toDevY(pyVal: Float) = ((pyVal - offsetYPx) / drawnHPx * dh).toInt().coerceIn(0, dh)
 
             androidx.compose.foundation.Image(
-                bitmap = remember(s.shotBase64) { decodeBase64ToImage(s.shotBase64!!) },
+                bitmap = bitmap,
                 contentDescription = "device screen",
                 contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                 filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
@@ -296,18 +316,16 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
                             if (isSel) Palette.accent else if (n.clickable) Palette.ok.copy(alpha = 0.75f) else Palette.info.copy(alpha = 0.45f),
                             RoundedCornerShape(1.dp)
                         )
-                        .clickable { state.pickerSelect(n) }
                 )
             }
 
-            // Tap anywhere on the screenshot: coord mode stores the point, swipe mode takes
-            // successive points, selector mode selects the topmost node under the tap.
+            // Tap anywhere on the screenshot or drag to drill into a sub-region.
             Box(
                 Modifier.fillMaxSize()
-                    .pointerInput(s.shotBase64, s.target?.kind) {
+                    .pointerInput(shotBase64, s.target?.kind, s.visibleNodes, offsetXPx, offsetYPx, drawnWPx, drawnHPx, dw, dh) {
                         detectTapGestures { pos ->
-                            val dx = ((pos.x - offsetX.value) / (drawnW.value.coerceAtLeast(1f)) * dw).toInt().coerceIn(0, dw)
-                            val dy = ((pos.y - offsetY.value) / (drawnH.value.coerceAtLeast(1f)) * dh).toInt().coerceIn(0, dh)
+                            val dx = toDevX(pos.x)
+                            val dy = toDevY(pos.y)
                             when (s.target?.kind) {
                                 PickKind.COORD -> state.pickerCoord(dx, dy)
                                 PickKind.SWIPE -> {
@@ -323,7 +341,52 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
                             }
                         }
                     }
+                    .pointerInput(shotBase64, offsetXPx, offsetYPx, drawnWPx, drawnHPx, dw, dh) {
+                        detectDragGestures(
+                            onDragStart = { start ->
+                                dragStart = start
+                                dragEnd = start
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                dragEnd = change.position
+                            },
+                            onDragCancel = {
+                                dragStart = null
+                                dragEnd = null
+                            },
+                            onDragEnd = {
+                                val a = dragStart
+                                val b = dragEnd
+                                dragStart = null
+                                dragEnd = null
+                                if (a != null && b != null) {
+                                    val l = minOf(toDevX(a.x), toDevX(b.x))
+                                    val t = minOf(toDevY(a.y), toDevY(b.y))
+                                    val r = maxOf(toDevX(a.x), toDevX(b.x))
+                                    val bot = maxOf(toDevY(a.y), toDevY(b.y))
+                                    state.pickerDrill(l, t, r, bot)
+                                }
+                            }
+                        )
+                    }
             )
+
+            // Drag selection preview box
+            val ds = dragStart
+            val de = dragEnd
+            if (ds != null && de != null) {
+                val leftDp = with(density) { minOf(ds.x, de.x).toDp() }
+                val topDp = with(density) { minOf(ds.y, de.y).toDp() }
+                val wDp = with(density) { kotlin.math.abs(de.x - ds.x).toDp() }
+                val hDp = with(density) { kotlin.math.abs(de.y - ds.y).toDp() }
+                Box(
+                    Modifier.offset(x = leftDp, y = topDp)
+                        .size(width = wDp, height = hDp)
+                        .background(Palette.accent.copy(alpha = 0.14f))
+                        .border(1.5.dp, Palette.accent, RoundedCornerShape(2.dp))
+                )
+            }
 
             // Marks for the current selection / picked point / swipe points.
             s.coord?.let { c ->
@@ -395,7 +458,7 @@ private fun PickerDetail(state: StudioState) {
         if (a != null && b != null) {
             val dx = b.first - a.first
             val dy = b.second - a.second
-            KV("位移", "$dx, $dy · 距离 ${Math.sqrt((dx * dx + dy * dy).toDouble()).toInt()}px")
+            KV("位移", "$dx, $dy · 距离 ${kotlin.math.sqrt((dx * dx + dy * dy).toDouble()).toInt()}px")
         }
         Spacer(Modifier.height(8.dp))
         Text("在截图上点两下取起止点，也可以点两个控件用它们的中心；第三下会重新取起点。", fontSize = 10.sp, color = Palette.textDim)
@@ -408,7 +471,7 @@ private fun PickerDetail(state: StudioState) {
             }
         }
         Spacer(Modifier.height(4.dp))
-        SmallButton("重取") { state.pickerSwipePoint(0, 0) }
+        SmallButton("重取") { state.pickerClearSwipePoints() }
         return
     }
 

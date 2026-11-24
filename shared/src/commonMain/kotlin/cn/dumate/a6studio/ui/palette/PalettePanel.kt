@@ -171,7 +171,7 @@ fun PalettePanel(
                     // 简单模式只显示 10 个起步积木，列表到底会留下大片空白；
                     // 这里给出「剩下的在哪」，而不是让人以为积木只有这些。
                     Text(
-                        "想看全部 68 个积木？点这里切换到完整模式",
+                        "想看全部 ${Catalog.all().size} 个积木？点这里切换到完整模式",
                         fontSize = 11.sp,
                         color = P.accent,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 16.dp)

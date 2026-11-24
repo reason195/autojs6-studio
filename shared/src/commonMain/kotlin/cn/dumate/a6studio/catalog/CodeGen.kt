@@ -83,13 +83,10 @@ object CodeGen {
      * Module parameter list. `m.args` is free text, so `a b`, `x-y` or a multi-line value used
      * to land straight in the function signature — a SyntaxError, or worse a second statement.
      * Keep the valid identifiers, drop the rest (the module call still passes arguments by
-     * position, which is what the block editor shows).
+     * position, which is what the block editor shows). Reserved words (`class`, `if`) are
+     * dropped too: Rhino rejects the whole script on them.
      */
-    private fun moduleArgs(raw: String): String =
-        raw.split(',')
-            .map { it.trim() }
-            .filter { Js.isIdentifier(it) }
-            .joinToString(", ")
+    private fun moduleArgs(raw: String): String = Js.paramList(raw)
 
     private fun header(project: Project): String {
         val now = nowLocal()

@@ -162,7 +162,7 @@ fun CanvasPanel(
                 }
             }
         }
-        items(count = body.size) { i ->
+        items(count = body.size, key = { i -> body[i].id }) { i ->
             DropLine(drag, rootId, "body", i)
             BlockCard(
                 block = body[i],
@@ -248,16 +248,45 @@ private fun BlockCard(
                 )
             }
             Spacer(Modifier.weight(1f))
-            // Long-press anywhere on the card then drag up/down to reorder. Keyboard/buttons
-            // remain for precision; this is the touch-friendly path on phones.
+            // Long-press anywhere on the handle then drag up/down to reorder. Accumulate drag
+            // distance to a 40dp threshold so reordering does not flood undo snapshots or disk I/O.
+            val dragDensity = androidx.compose.ui.platform.LocalDensity.current
+            val stepPx = with(dragDensity) { 40.dp.toPx() }
             Box(
-                Modifier.size(16.dp).pointerInput(block.id) {
+                Modifier.size(20.dp).pointerInput(block.id, stepPx) {
+                    var accY = 0f
+                    var shifted = false
                     detectDragGesturesAfterLongPress(
-                        onDragEnd = { },
+                        onDragStart = {
+                            accY = 0f
+                            shifted = false
+                        },
+                        onDragEnd = {
+                            if (shifted) onCommit()
+                            accY = 0f
+                            shifted = false
+                        },
+                        onDragCancel = {
+                            if (shifted) onCommit()
+                            accY = 0f
+                            shifted = false
+                        },
                         onDrag = { change, dragAmount ->
                             change.consume()
-                            if (dragAmount.y > 8f) { repo.shiftBlock(block.id, 1); onCommit() }
-                            else if (dragAmount.y < -8f) { repo.shiftBlock(block.id, -1); onCommit() }
+                            accY += dragAmount.y
+                            if (accY >= stepPx) {
+                                if (!shifted) repo.snapshot("调整顺序")
+                                if (repo.shiftBlock(block.id, 1, snapshot = false, saveNow = false)) {
+                                    shifted = true
+                                }
+                                accY -= stepPx
+                            } else if (accY <= -stepPx) {
+                                if (!shifted) repo.snapshot("调整顺序")
+                                if (repo.shiftBlock(block.id, -1, snapshot = false, saveNow = false)) {
+                                    shifted = true
+                                }
+                                accY += stepPx
+                            }
                         }
                     )
                 },
@@ -511,8 +540,8 @@ private fun SelectField(block: Block, param: ParamDef, value: ParamValue, repo: 
                     text = { Text(opt.label, fontSize = 11.5.sp) },
                     onClick = {
                         expanded = false
-                        repo.snapshot("修改参数")
-                        repo.updateParam(block.id, param.key, ParamValue.Text(opt.value))
+                        repo.updateParam(block.id, param.key, ParamValue.Text(opt.value), snapshot = true)
+                        repo.endParamEdit()
                         onCommit()
                     }
                 )

@@ -302,6 +302,64 @@ class MergedFeaturesTest {
     }
 
     @Test
+    fun funcDefArgsCannotSmuggleStatements() {
+        val proj = Templates.byId("jdServiceKit")!!.build()
+        val evil = "a) {} files.removeDir(\"/sdcard/Download\"); function z(b"
+
+        // 补丁通道：新增和修改都要拒绝
+        val fn = newBlock("funcDef", mapOf("name" to ParamValue.Text("doTask"), "args" to ParamValue.Text(evil)))
+        val addRes = BlockPatch.guardAndApply(proj, listOf(BlockPatchOp.AddBlock(fn)))
+        assertFalse(addRes.accepted, "funcDef.args 注入必须被拒绝")
+        assertTrue(addRes.errors.any { it.contains("funcDef.args") }, addRes.errors.joinToString())
+
+        val okFn = newBlock("funcDef", mapOf("name" to ParamValue.Text("doTask"), "args" to ParamValue.Text("task, n")))
+        val okRes = BlockPatch.guardAndApply(proj, listOf(BlockPatchOp.AddBlock(okFn)))
+        assertTrue(okRes.accepted, okRes.errors.joinToString())
+        val updRes = BlockPatch.guardAndApply(
+            okRes.project, listOf(BlockPatchOp.UpdateParam(okFn.id, "args", ParamValue.Text(evil)))
+        )
+        assertFalse(updRes.accepted)
+
+        // 生成器兜底：即使工程文件里已经有这样的值，也不会拼出第二条语句；保留字参数同样丢弃
+        val withEvil = proj.copy(
+            root = proj.root.copy(children = proj.root.children + ("body" to proj.root.children["body"].orEmpty() + fn))
+        )
+        val code = CodeGen.code(withEvil)
+        assertFalse(code.contains("function z("), code)
+        assertFalse(code.contains("/sdcard/Download"), code)
+        assertTrue(code.contains("function doTask() {"), code)
+        assertEquals("a, b", cn.dumate.a6studio.catalog.Js.paramList("a, class, if, b, 1x"))
+    }
+
+    @Test
+    fun redactionCoversFormBodiesJsonFragmentsAndSessionCookies() {
+        val pw = "FAKEPW" + "123"
+        // 表单首参数（前面没有 ? 或 &）
+        val form = Redaction.redactTextPatterns("pass" + "word=$pw&user=bob").text
+        assertFalse(form.contains(pw), form)
+        assertTrue(form.contains("user=bob"), form)
+        // 会话 cookie
+        val cookie = Redaction.redactTextPatterns("PHPSESSID=abc123; JSESSIONID=XYZ789; theme=dark").text
+        assertFalse(cookie.contains("abc123") || cookie.contains("XYZ789"), cookie)
+        assertTrue(cookie.contains("theme=dark"), cookie)
+        // 超过 64 KB 的 JSON 字符串不会被解析，靠片段规则按键名兜住；计数字段保持原样
+        val big = buildString {
+            append("{\"pass" + "word\":\"$pw\",\"max_tokens\":1024,\"tokenType\":\"bearer\",\"pad\":\"")
+            append("x".repeat(70_000)).append("\"}")
+        }
+        val payload = buildJsonObject { put("responseBody", big) }
+        val out = Redaction.redactTrafficPayload(payload).redactedPayload.toString()
+        assertFalse(out.contains(pw), out.take(300))
+        assertTrue(out.contains("1024") && out.contains("bearer"), out.take(300))
+        // 未闭合的长转义串不能把正则引擎递归爆栈
+        Redaction.redactTextPatterns("\"access_token\":\"" + "\\\\".repeat(30_000))
+        for (k in listOf("JSESSIONID", "PHPSESSID", "X-Auth-Key", "accessKey", "ticket", "auth")) {
+            assertTrue(Redaction.isSensitiveKey(k), "应识别敏感键名: $k")
+        }
+        assertFalse(Redaction.isSensitiveKey("author"))
+    }
+
+    @Test
     fun blockPatchIgnoresPreexistingExprAndRawJsBlocks() {
         // R-1 回归：工程里已有用户手工搭的 if(cond=true) 与 rawJs，补丁只碰 kit 积木时必须被接受
         val base = Templates.byId("jdServiceKit")!!.build()

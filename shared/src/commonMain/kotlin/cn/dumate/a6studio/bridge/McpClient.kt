@@ -1,6 +1,7 @@
 package cn.dumate.a6studio.bridge
 
 import cn.dumate.a6studio.platform.nowMillis
+import kotlin.concurrent.Volatile
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
@@ -46,12 +47,15 @@ class McpClient(
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val mutex = Mutex()
+    private val seqMutex = Mutex()
 
-    private var url: String = ""
-    private var sessionId: String = ""
-    private var ready: Boolean = false
+    @Volatile private var url: String = ""
+    @Volatile private var sessionId: String = ""
+    @Volatile private var ready: Boolean = false
     private var seq = 0
-    private var authHeader: String? = null
+    @Volatile private var authHeader: String? = null
+
+    private suspend fun nextSeq(): Int = seqMutex.withLock { ++seq }
 
     private val authByUrl = mutableMapOf<String, String>()
 
@@ -144,6 +148,10 @@ class McpClient(
 
     private suspend fun post(payload: JsonObject, extraHeaders: Map<String, String> = emptyMap(), timeoutMs: Long = 15_000): JsonElement? {
         val target = url.ifBlank { throw BridgeException("未填写桥接地址", "NO_URL") }
+        // Devices live on the LAN, so local addresses stay allowed; cloud metadata endpoints and
+        // hostnames that resolve to them do not. IP literals skip DNS, so this is cheap per call.
+        val check = cn.dumate.a6studio.security.UrlSecurity.validateEndpointUrlResolved(target, allowLocal = true)
+        if (!check.valid) throw BridgeException(check.reason ?: "桥接地址无效", "INVALID_URL")
         val headers = buildMap {
             put("Accept", "application/json, text/event-stream")
             put("Content-Type", "application/json")
@@ -194,15 +202,51 @@ class McpClient(
         val (status, text) = raw
         if (text.isBlank()) {
             // Keep the raw SSE for diagnosis: "no response" hides whether the reply was malformed.
-            throw BridgeException(
-                "手机返回了空的响应体（HTTP $status）。若持续出现，请在手机上关闭再打开 MCP Server 插件。",
-                "EMPTY_BODY"
-            )
+            val msg = if (label == "手机 AutoJs6") {
+                "手机返回了空的响应体（HTTP $status）。若持续出现，请在手机上关闭再打开 MCP Server 插件。"
+            } else {
+                "$label 返回了空的响应体（HTTP $status）。若持续出现，请重启 $label 的 MCP Server。"
+            }
+            throw BridgeException(msg, "EMPTY_BODY")
         }
         return parseJsonOrThrow(text) ?: throw BridgeException(
             "无法解析 MCP 响应（原文前 160 字符：${text.take(160)}）",
             "BAD_RESPONSE"
         )
+    }
+
+    /**
+     * 发送 MCP 单向通知（如 `notifications/initialized`）。
+     * 服务端常返回 202/204 空响应体，因此不走 `post()` 的非空 JSON 校验，且保留 `CancellationException`。
+     */
+    private suspend fun postNotification(payload: JsonObject, timeoutMs: Long = 5_000) {
+        val target = url.ifBlank { return }
+        val check = cn.dumate.a6studio.security.UrlSecurity.validateEndpointUrlResolved(target, allowLocal = true)
+        if (!check.valid) return
+        val headers = buildMap {
+            put("Accept", "application/json, text/event-stream")
+            put("Content-Type", "application/json")
+            authHeader?.let { put("Authorization", it) }
+            if (sessionId.isNotEmpty()) put("mcp-session-id", sessionId)
+        }
+        try {
+            http.preparePost(target) {
+                contentType(ContentType.Application.Json)
+                headers.forEach { (k, v) -> header(k, v) }
+                setBody(payload.toString())
+                timeout {
+                    requestTimeoutMillis = timeoutMs
+                    connectTimeoutMillis = minOf(timeoutMs, 3_000)
+                    socketTimeoutMillis = timeoutMs
+                }
+            }.execute { response ->
+                response.headers["mcp-session-id"]?.let { sessionId = it }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // 部分服务端不响应或主动关闭 initialized 通知连接，容错忽略
+        }
     }
 
     /** Runs inside execute { }: checks the status, records the session and reads the body. */
@@ -222,29 +266,32 @@ class McpClient(
 
         // 401 is a token problem, not a network one: say so instead of "no response".
         if (response.status.value == 401) {
-            throw BridgeException(
+            val msg = if (label == "手机 AutoJs6") {
                 "手机拒绝了令牌（401）。请在手机的 AutoJs6 → 插件 → MCP Server → 设置里复制当前的" +
-                    "「令牌 / Token」，粘贴到这里的令牌框；令牌在重新配对后会变，旧的一定会被拒。",
-                "UNAUTHORIZED"
-            )
+                    "「令牌 / Token」，粘贴到这里的令牌框；令牌在重新配对后会变，旧的一定会被拒。"
+            } else {
+                "$label 拒绝了令牌（401）。请在 $label 的 MCP Server 设置中确认并重新复制当前的「令牌 / Token」。"
+            }
+            throw BridgeException(msg, "UNAUTHORIZED")
         }
 
         // L4: any other non-2xx is an HTTP error. Parsing its body as JSON used to produce a
         // misleading "返回内容不是 JSON" instead of the real status code.
         val code = response.status.value
         if (code !in 200..299) {
-            throw BridgeException("手机返回 HTTP $code（$target）。若持续出现，请重启手机上的 MCP Server 插件。", "HTTP_ERROR")
+            throw BridgeException("$label 返回 HTTP $code（${redactUrl(target)}）。若持续出现，请重启 $label 的 MCP Server。", "HTTP_ERROR")
         }
 
         val contentType = response.headers["content-type"] ?: ""
+        val isSse = contentType.contains("text/event-stream", ignoreCase = true)
         val body = try {
-            if (contentType.contains("text/event-stream")) {
+            if (isSse) {
                 // MCP answers over a *keep-alive* SSE stream, so reading until EOF blocks until the
                 // socket timeout (measured: raw socket got 200 in <1s while this timed out at 15s).
                 // Read event-by-event and stop as soon as one carries a JSON-RPC payload.
                 readFirstSsePayload(response, target, timeoutMs)
             } else {
-                response.bodyAsText()
+                readBodyCapped(response)
             }
         } catch (e: BridgeException) {
             throw e
@@ -254,7 +301,7 @@ class McpClient(
             throw BridgeException(timeoutMessage(target, timeoutMs), "TIMEOUT")
         }
         // The payload may arrive with a leading `:` comment frame; SseFrames handles framing.
-        val text = if (contentType.contains("text/event-stream") && body.isNotBlank()) {
+        val text = if (isSse && body.isNotBlank()) {
             SseFrames.extractPayload(body) ?: body
         } else body
         return response.status.value to text
@@ -293,6 +340,37 @@ class McpClient(
         return SseFrames.extractPayload(acc.text()) ?: ""
     }
 
+    /**
+     * Plain JSON body, read with the same cap as the SSE path. `bodyAsText()` buffered whatever
+     * the server sent, so a hostile or broken endpoint could stream until the app ran out of memory.
+     */
+    private suspend fun readBodyCapped(response: HttpResponse): String {
+        val limit = SseAccumulator.MAX_BYTES
+        response.headers["content-length"]?.toLongOrNull()?.let {
+            if (it > limit) throw tooLarge(limit)
+        }
+        val channel = response.bodyAsChannel()
+        var data = ByteArray(8 * 1024)
+        var size = 0
+        val buffer = ByteArray(4096)
+        try {
+            while (true) {
+                val n = channel.readAvailable(buffer, 0, buffer.size)
+                if (n <= 0) break
+                if (size + n > limit) throw tooLarge(limit)
+                if (size + n > data.size) data = data.copyOf(maxOf(data.size * 2, size + n))
+                buffer.copyInto(data, size, 0, n)
+                size += n
+            }
+        } finally {
+            runCatching { channel.cancel(null) }
+        }
+        return data.decodeToString(0, size)
+    }
+
+    private fun tooLarge(limit: Int) =
+        BridgeException("MCP 响应超过 ${limit / 1024 / 1024}MB 上限，已中止", "RESPONSE_TOO_LARGE")
+
     private fun parseJsonOrThrow(text: String): JsonElement? = try {
         json.parseToJsonElement(text)
     } catch (e: Exception) {
@@ -305,9 +383,13 @@ class McpClient(
 
     private fun timeoutMessage(target: String, ms: Long): String {
         val secs = (ms / 1000).toInt()
-        return "$label MCP 无响应：${secs}s 内没有回包（${redactUrl(target)}）。" +
-            "端口在听却不应答，通常是 $label 主线程被占满（正在跑的录制脚本、无障碍查询卡住）。" +
-            "处理：在手机上按音量下键停掉录制脚本，或从 AutoJs6 停止全部脚本，再重启 MCP Server 后重连。"
+        val base = "$label MCP 无响应：${secs}s 内没有回包（${redactUrl(target)}）。"
+        return if (label == "手机 AutoJs6") {
+            base + "端口在听却不应答，通常是 $label 主线程被占满（正在跑的录制脚本、无障碍查询卡住）。" +
+                "处理：在手机上按音量下键停掉录制脚本，或从 AutoJs6 停止全部脚本，再重启 MCP Server 后重连。"
+        } else {
+            base + "请检查 $label 是否正在运行、MCP 服务端口是否一致，或在 $label 中重启 MCP 服务后重试。"
+        }
     }
 
     private fun networkMessage(target: String, detail: String): String =
@@ -329,7 +411,7 @@ class McpClient(
     }
 
     private suspend fun rpcOnce(method: String, params: JsonObject?, timeoutMs: Long): JsonElement {
-        val id = ++seq
+        val id = nextSeq()
         val payload = buildJsonObject {
             put("jsonrpc", "2.0")
             put("id", id)
@@ -362,7 +444,7 @@ class McpClient(
     private suspend fun initializeLocked(): JsonElement {
         val payload = buildJsonObject {
             put("jsonrpc", "2.0")
-            put("id", ++seq)
+            put("id", nextSeq())
             put("method", "initialize")
             put("params", buildJsonObject {
                 put("protocolVersion", protocolVersion)
@@ -374,21 +456,19 @@ class McpClient(
             })
         }
         val res = post(payload) ?: throw BridgeException(
-            "initialize 无响应：手机没有返回可解析的内容（url=${redactUrl(url)}，session=${if (sessionId.isEmpty()) "-" else "***"}）。" +
-                "常见原因：MCP 插件的「允许局域网连接」被关掉，或插件刚重启还没就绪。",
+            "initialize 无响应：$label 没有返回可解析的内容（url=${redactUrl(url)}，session=${if (sessionId.isEmpty()) "-" else "***"}）。" +
+                "常见原因：MCP 服务的局域网访问未开启，或服务刚重启还没就绪。",
             "EMPTY_RESPONSE"
         )
         val obj = res.jsonObject
         (obj["error"] as? JsonObject)?.let {
             throw BridgeException(it["message"]?.jsonPrimitive?.content ?: "initialize 失败", "RPC_ERROR")
         }
-        runCatching {
-            post(buildJsonObject {
-                put("jsonrpc", "2.0")
-                put("method", "notifications/initialized")
-                put("params", buildJsonObject { })
-            })
-        }
+        postNotification(buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("method", "notifications/initialized")
+            put("params", buildJsonObject { })
+        })
         ready = true
         // `post` returns the whole JSON-RPC envelope ({"id":…,"result":…}), so unwrap `result`.
         return obj["result"] ?: JsonPrimitive("")
@@ -676,8 +756,8 @@ class SseAccumulator(initialCapacity: Int = 8 * 1024) {
         val oldSize = size
         chunk.copyInto(data, size, 0, length)
         size = need
-        // L2: only re-scan when a frame boundary may have appeared in the new bytes (with 1-byte overlap for a split frame). Avoids O(n^2) on screenshot-sized base64 streams.
-        val scanFrom = (oldSize - 1).coerceAtLeast(0)
+        // L2: only re-scan when a frame boundary may have appeared in the new bytes (with 2-byte overlap for split `\n\r` + `\n` frames). Avoids O(n^2) on screenshot-sized base64 streams.
+        val scanFrom = (oldSize - 2).coerceAtLeast(0)
         var boundary = false
         for (i in scanFrom until size - 1) {
             val b = data[i]
@@ -690,10 +770,10 @@ class SseAccumulator(initialCapacity: Int = 8 * 1024) {
 
     fun text(): String = data.decodeToString(0, size)
 
-    private companion object {
+    companion object {
         const val MAX_BYTES = 8 * 1024 * 1024
-        const val LF: Byte = 10
-        const val CR: Byte = 13
+        private const val LF: Byte = 10
+        private const val CR: Byte = 13
     }
 }
 

@@ -136,7 +136,9 @@ object McpConfigParser {
             // `Authorization: Bearer x` / `token: x` on its own line → belongs to the device above.
             val lower = line.lowercase()
             if (last >= 0 && (lower.startsWith("authorization") || lower.startsWith("token") || lower.startsWith("bearer "))) {
-                val tok = stripBearer(line.substringAfter(':', line.substringAfter('=', line)).trim())
+                val sepIdx = listOf(line.indexOf(':'), line.indexOf('=')).filter { it >= 0 }.minOrNull()
+                val rawVal = if (sepIdx != null && !lower.startsWith("bearer ")) line.substring(sepIdx + 1) else line
+                val tok = stripBearer(rawVal.trim())
                 if (tok.isNotEmpty() && out[last].token.isEmpty()) out[last] = out[last].copy(token = tok)
                 continue
             }
@@ -148,8 +150,12 @@ object McpConfigParser {
                 ?: continue
             val tokenFromKv = kv["token"] ?: kv["authorization"] ?: kv["bearer"]
             // Otherwise the token is the first word after the URL that is not another key=value.
+            // Base64 tokens often end with '=' or '==' padding, so only treat `word=<non-=>...` as key=value.
             val after = line.substringAfter(url, "").trim()
-            val bare = after.split(Regex("\\s+")).firstOrNull { it.isNotEmpty() && !it.contains('=') && !it.contains(':') && it.length >= 8 }
+            val kvWordRe = Regex("""^[A-Za-z_]\w*=[^=].*""")
+            val bare = after.split(Regex("\\s+")).firstOrNull {
+                it.isNotEmpty() && !kvWordRe.matches(it) && !it.contains(':') && it.length >= 8
+            }
             val token = stripBearer(tokenFromKv ?: bare.orEmpty())
             out += McpServerConfig(kv["name"].orEmpty(), normalizeUrl(url, defaultPort), token)
             last = out.lastIndex
@@ -158,7 +164,10 @@ object McpConfigParser {
 
     // ---- helpers ----------------------------------------------------------------------------
 
-    fun stripBearer(s: String): String = s.trim().removePrefix("Bearer ").removePrefix("bearer ").trim()
+    fun stripBearer(s: String): String {
+        val t = s.trim()
+        return if (t.startsWith("Bearer ", ignoreCase = true)) t.substring(7).trim() else t
+    }
 
     /** `192.168.1.6` → `http://192.168.1.6:9637/mcp`; full URLs only lose a trailing slash. */
     fun normalizeUrl(raw: String, defaultPort: Int = DEFAULT_PORT): String {

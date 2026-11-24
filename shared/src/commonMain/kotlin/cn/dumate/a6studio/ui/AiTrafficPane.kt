@@ -30,16 +30,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.dumate.a6studio.ai.LlmProviderId
 import cn.dumate.a6studio.bridge.McpTransport
 import cn.dumate.a6studio.ui.fields.InlineField
+import cn.dumate.a6studio.ui.fields.trackTextFocus
 import cn.dumate.a6studio.ui.panes.SmallButton
+import cn.dumate.a6studio.ui.panes.TinyToggle
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -133,7 +137,7 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                     visibleTransports.forEach { tr ->
                         FilterChip(
                             selected = state.mcpTransport == tr,
-                            onClick = { state.mcpTransport = tr },
+                            onClick = { state.updateMcpTransport(tr) },
                             label = { Text(tr.label, fontSize = 11.sp) }
                         )
                     }
@@ -147,19 +151,30 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                 if (state.mcpTransport == McpTransport.HTTP_JSONRPC) {
                     OutlinedTextField(
                         value = state.proxyPinUrl,
-                        onValueChange = { state.proxyPinUrl = it },
+                        onValueChange = { state.updateProxyPinUrl(it) },
                         label = { Text("ProxyPin MCP 地址（AutoJs6 地址复用「真机」页签配置）", fontSize = 11.sp) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().trackTextFocus()
                     )
-                    OutlinedTextField(
-                        value = state.proxyPinToken,
-                        onValueChange = { state.proxyPinToken = it },
-                        label = { Text("ProxyPin 鉴权 Token（仅内存持有）", fontSize = 11.sp) },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    var showProxyToken by remember { mutableStateOf(false) }
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = state.proxyPinToken,
+                            onValueChange = { state.updateProxyPinToken(it) },
+                            label = { Text("ProxyPin 鉴权 Token（不写入项目文件）", fontSize = 11.sp) },
+                            singleLine = true,
+                            visualTransformation = if (showProxyToken) VisualTransformation.None else PasswordVisualTransformation(),
+                            modifier = Modifier.weight(1f).trackTextFocus()
+                        )
+                        SmallButton(if (showProxyToken) "隐藏" else "显示") { showProxyToken = !showProxyToken }
+                    }
+                    TinyToggle("记住本机令牌与 API Key（写进本机私有存储，不进项目文件）", state.rememberToken) {
+                        state.changeRememberToken(it)
+                    }
                     // 导入：与「真机」页签同一套入口，但只挑 ProxyPin 那台（默认端口 9000）。
                     Text("导入 ProxyPin 配置（mcpServers JSON / URL / IP）", fontSize = 11.sp, color = Palette.textDim)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -184,10 +199,10 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
 
                 OutlinedTextField(
                     value = state.proxyPinDomainFilter,
-                    onValueChange = { state.proxyPinDomainFilter = it },
+                    onValueChange = { state.updateProxyPinDomainFilter(it) },
                     label = { Text("抓包域名过滤（可选，如 ms.jr.jd.com）", fontSize = 11.sp) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().trackTextFocus()
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -237,7 +252,7 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                     LlmProviderId.entries.forEach { pid ->
                         FilterChip(
                             selected = state.llmProvider == pid,
-                            onClick = { state.llmProvider = pid },
+                            onClick = { state.updateLlmProvider(pid) },
                             label = { Text(pid.label.substringBefore("（"), fontSize = 11.sp) }
                         )
                     }
@@ -246,29 +261,29 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                 if (state.llmProvider == LlmProviderId.GEMINI || state.llmProvider == LlmProviderId.AUTO) {
                     OutlinedTextField(
                         value = state.llmConfig.geminiApiKey,
-                        onValueChange = { state.llmConfig = state.llmConfig.copy(geminiApiKey = it) },
+                        onValueChange = { state.updateLlmConfig(state.llmConfig.copy(geminiApiKey = it)) },
                         label = { Text("Gemini API Key（可选，留空走本地/规则）", fontSize = 11.sp) },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().trackTextFocus()
                     )
                 }
 
                 if (state.llmProvider == LlmProviderId.OPENAI_COMPATIBLE) {
                     OutlinedTextField(
                         value = state.llmConfig.openAiBaseUrl,
-                        onValueChange = { state.llmConfig = state.llmConfig.copy(openAiBaseUrl = it) },
+                        onValueChange = { state.updateLlmConfig(state.llmConfig.copy(openAiBaseUrl = it)) },
                         label = { Text("OpenAI 兼容 Base URL（如 https://api.deepseek.com/v1）", fontSize = 11.sp) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().trackTextFocus()
                     )
                     OutlinedTextField(
                         value = state.llmConfig.openAiApiKey,
-                        onValueChange = { state.llmConfig = state.llmConfig.copy(openAiApiKey = it) },
-                        label = { Text("API Key（仅内存持有）", fontSize = 11.sp) },
+                        onValueChange = { state.updateLlmConfig(state.llmConfig.copy(openAiApiKey = it)) },
+                        label = { Text("API Key（不写入项目文件）", fontSize = 11.sp) },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().trackTextFocus()
                     )
                 }
 
@@ -276,15 +291,17 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                     OutlinedTextField(
                         value = if (state.llmProvider == LlmProviderId.OLLAMA) state.llmConfig.ollamaBaseUrl else state.llmConfig.lmStudioBaseUrl,
                         onValueChange = {
-                            state.llmConfig = if (state.llmProvider == LlmProviderId.OLLAMA) {
-                                state.llmConfig.copy(ollamaBaseUrl = it)
-                            } else {
-                                state.llmConfig.copy(lmStudioBaseUrl = it)
-                            }
+                            state.updateLlmConfig(
+                                if (state.llmProvider == LlmProviderId.OLLAMA) {
+                                    state.llmConfig.copy(ollamaBaseUrl = it)
+                                } else {
+                                    state.llmConfig.copy(lmStudioBaseUrl = it)
+                                }
+                            )
                         },
-                        label = { Text("${state.llmProvider.label.substringBefore("（")} Base URL（仅内存持有）", fontSize = 11.sp) },
+                        label = { Text("${state.llmProvider.label.substringBefore("（")} Base URL", fontSize = 11.sp) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth().trackTextFocus()
                     )
                 }
 
@@ -302,7 +319,7 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                     value = goal,
                     onValueChange = { goal = it },
                     label = { Text("提炼目标", fontSize = 11.sp) },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().trackTextFocus()
                 )
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -388,13 +405,15 @@ private fun LlmModelRow(state: StudioState, pid: LlmProviderId) {
         else -> return
     }
     val onModelChange: (String) -> Unit = { value ->
-        state.llmConfig = when (pid) {
-            LlmProviderId.GEMINI -> state.llmConfig.copy(geminiModel = value)
-            LlmProviderId.OPENAI_COMPATIBLE -> state.llmConfig.copy(openAiModel = value)
-            LlmProviderId.OLLAMA -> state.llmConfig.copy(ollamaModel = value)
-            LlmProviderId.LMSTUDIO -> state.llmConfig.copy(lmStudioModel = value)
-            else -> state.llmConfig
-        }
+        state.updateLlmConfig(
+            when (pid) {
+                LlmProviderId.GEMINI -> state.llmConfig.copy(geminiModel = value)
+                LlmProviderId.OPENAI_COMPATIBLE -> state.llmConfig.copy(openAiModel = value)
+                LlmProviderId.OLLAMA -> state.llmConfig.copy(ollamaModel = value)
+                LlmProviderId.LMSTUDIO -> state.llmConfig.copy(lmStudioModel = value)
+                else -> state.llmConfig
+            }
+        )
     }
     val loading = state.llmModelsLoading == pid
     val options = state.llmModelOptions[pid].orEmpty()
@@ -409,11 +428,11 @@ private fun LlmModelRow(state: StudioState, pid: LlmProviderId) {
             onValueChange = onModelChange,
             label = { Text("模型（手输或拉取后选择）", fontSize = 11.sp) },
             singleLine = true,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f).trackTextFocus()
         )
         OutlinedButton(
             onClick = { state.fetchLlmModels(pid) },
-            enabled = !loading && !state.aiBusy,
+            enabled = state.llmModelsLoading == null && !state.aiBusy,
             modifier = Modifier.padding(top = 6.dp)
         ) {
             Text(if (loading) "拉取中…" else "拉取模型", fontSize = 11.sp)

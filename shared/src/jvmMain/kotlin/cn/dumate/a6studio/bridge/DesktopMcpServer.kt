@@ -55,7 +55,9 @@ class DesktopMcpServer(
     val authToken: String = generateToken()
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val server: HttpServer = HttpServer.create(InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 0)
-    private val executor = Executors.newFixedThreadPool(2)
+    private val executor = Executors.newFixedThreadPool(2) { r ->
+        Thread(r, "a6-local-mcp").apply { isDaemon = true }
+    }
 
     val boundPort: Int get() = server.address.port
     val endpointUrl: String get() = "http://127.0.0.1:$boundPort/mcp"

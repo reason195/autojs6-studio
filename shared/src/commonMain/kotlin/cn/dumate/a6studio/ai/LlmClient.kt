@@ -14,6 +14,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.encodeURLPathPart
+import io.ktor.http.encodeURLQueryComponent
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -246,7 +247,7 @@ class LlmClient(private val http: HttpClient) {
             val endpoint = buildString {
                 append(geminiBaseUrl.trimEnd('/'))
                 append("/v1beta/models?pageSize=200")
-                pageToken?.let { append("&pageToken=").append(it) }
+                pageToken?.let { append("&pageToken=").append(it.encodeURLQueryComponent()) }
             }
             val resp = http.get(endpoint) {
                 timeout { requestTimeoutMillis = timeoutMs }
@@ -286,7 +287,11 @@ class LlmClient(private val http: HttpClient) {
         allowLocal: Boolean,
         timeoutMs: Long
     ): List<LlmModelInfo> {
-        val check = UrlSecurity.validateEndpointUrlResolved(rawBaseUrl, allowLocal = allowLocal)
+        val check = UrlSecurity.validateEndpointUrlResolved(
+            rawBaseUrl,
+            allowLocal = allowLocal,
+            requireHttpsForPublic = apiKey.isNotBlank()
+        )
         if (!check.valid || check.normalizedUrl == null) {
             throw IllegalStateException(check.reason ?: "URL 校验失败")
         }
@@ -405,7 +410,11 @@ class LlmClient(private val http: HttpClient) {
             require(apiKey.isNotBlank()) { "未配置 OpenAI 兼容 API Key" }
         }
         // N-M1：解析 DNS 后逐个地址校验，挡住指向元数据/内网的域名
-        val check = UrlSecurity.validateEndpointUrlResolved(rawBaseUrl, allowLocal = allowLocal)
+        val check = UrlSecurity.validateEndpointUrlResolved(
+            rawBaseUrl,
+            allowLocal = allowLocal,
+            requireHttpsForPublic = apiKey.isNotBlank()
+        )
         if (!check.valid || check.normalizedUrl == null) {
             error(check.reason ?: "URL 校验失败")
         }

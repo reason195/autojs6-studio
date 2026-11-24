@@ -223,10 +223,22 @@ object UrlSecurity {
     }
 
     /** 同步校验（不做 DNS）。可以在任意线程调用。 */
-    fun validateEndpointUrl(rawUrl: String, allowLocal: Boolean = true): UrlValidationResult {
+    fun validateEndpointUrl(
+        rawUrl: String,
+        allowLocal: Boolean = true,
+        requireHttpsForPublic: Boolean = false
+    ): UrlValidationResult {
         val (p, err) = parse(rawUrl)
         if (p == null) return UrlValidationResult(false, err)
         checkHost(p.host, allowLocal)?.let { return UrlValidationResult(false, it) }
+        if (requireHttpsForPublic && p.scheme == "http") {
+            val lit = literalAddress(p.host)
+            val isLocalName = p.host == "localhost" || p.host.endsWith(".localhost")
+            val definitelyPublic = (lit != null && !isLocalOrPrivateAddress(lit)) || (!allowLocal && !isLocalName)
+            if (definitelyPublic) {
+                return UrlValidationResult(false, "安全策略拦截：携带 API Key 访问公网地址时必须使用 https:// (${p.host})")
+            }
+        }
         val normalized = "${p.scheme}://${p.authority}${p.rest}".trimEnd('/')
         return UrlValidationResult(true, normalizedUrl = normalized)
     }
@@ -235,17 +247,28 @@ object UrlSecurity {
      * 同步校验 + DNS 解析后逐个地址校验。真正发请求前调用。
      * 域名解析失败时不拦截（交给 HTTP 层报「无法连接」），只拦截解析到危险地址的情况。
      */
-    suspend fun validateEndpointUrlResolved(rawUrl: String, allowLocal: Boolean = true): UrlValidationResult {
-        val base = validateEndpointUrl(rawUrl, allowLocal)
+    suspend fun validateEndpointUrlResolved(
+        rawUrl: String,
+        allowLocal: Boolean = true,
+        requireHttpsForPublic: Boolean = false
+    ): UrlValidationResult {
+        val base = validateEndpointUrl(rawUrl, allowLocal, requireHttpsForPublic)
         if (!base.valid) return base
-        val host = parse(rawUrl).first?.host ?: return base
+        val parsed = parse(rawUrl).first ?: return base
+        val host = parsed.host
         if (literalAddress(host) != null) return base
-        for (addr in resolveHostAddresses(host)) {
+        val addrs = resolveHostAddresses(host)
+        for (addr in addrs) {
             if (isMetadataAddress(addr)) {
                 return UrlValidationResult(false, "安全策略拦截：$host 解析到云元数据地址")
             }
             if (!allowLocal && isLocalOrPrivateAddress(addr)) {
                 return UrlValidationResult(false, "安全策略拦截：$host 解析到本地/内网地址，未启用本地访问")
+            }
+        }
+        if (requireHttpsForPublic && parsed.scheme == "http" && host != "localhost" && !host.endsWith(".localhost")) {
+            if (addrs.isEmpty() || addrs.any { !isLocalOrPrivateAddress(it) }) {
+                return UrlValidationResult(false, "安全策略拦截：携带 API Key 访问公网域名时必须使用 https:// ($host)")
             }
         }
         return base

@@ -231,6 +231,15 @@ class ProjectRepo(private val storage: ProjectStorage) {
         return null
     }
 
+    /** 查找积木所属作用域（主程序或某个模块），供诊断面板一键跳转使用。 */
+    fun scopeOfBlock(id: String): Scope? {
+        if (TreeOps.find(current.root.children["body"].orEmpty(), id) != null) return Scope.Root
+        for (m in current.modules) {
+            if (TreeOps.find(m.children["body"].orEmpty(), id) != null) return Scope.Module(m.id)
+        }
+        return null
+    }
+
     /**
      * Like [locate] but only inside the scope being edited. Move / shift / duplicate rewrite
      * just that scope's body, so locating a block in another module (M15) used to remove
@@ -245,15 +254,10 @@ class ProjectRepo(private val storage: ProjectStorage) {
 
     /** Finds the list + index containing [id], so callers can move or delete it. */
     fun locate(id: String): cn.dumate.a6studio.model.LocatedBlock? {
-        // `list` is always a live child list from the model (MutableList), but the parameter is
-        // typed List<Block>; the old `as MutableList` would have thrown ClassCastException on an
-        // immutable input instead of just finding nothing.
         fun search(list: List<Block>, parentId: String, slot: String): cn.dumate.a6studio.model.LocatedBlock? {
-            val mutable = list as? MutableList<Block>
             list.forEachIndexed { i, b ->
                 if (b.id == id) {
-                    if (mutable == null) return null
-                    return cn.dumate.a6studio.model.LocatedBlock(b, mutable, i, parentId, slot)
+                    return cn.dumate.a6studio.model.LocatedBlock(b, list, i, parentId, slot)
                 }
                 b.children.forEach { (k, kids) -> search(kids, b.id, k)?.let { return it } }
             }
@@ -319,18 +323,17 @@ class ProjectRepo(private val storage: ProjectStorage) {
             targetSlot = slot
             targetIndex = index ?: containerList(parentId, slot)?.size ?: 0
         } else {
-            val selId = _selectedState
-            val selBlock = selId?.let { blockById(it) }
+            val selLoc = _selectedState?.let { locateInScope(it) }
+            val selBlock = selLoc?.block
             val selDef = selBlock?.type?.let { cn.dumate.a6studio.catalog.Catalog.byType(it) }
             if (selBlock != null && selDef != null && selDef.slots.isNotEmpty()) {
                 targetParent = selBlock.id
                 targetSlot = selDef.slots.first().key
                 targetIndex = selBlock.children[targetSlot].orEmpty().size
-            } else if (selBlock != null) {
-                val loc = locate(selBlock.id)
-                targetParent = loc?.parentId ?: scopeRootId()
-                targetSlot = loc?.slot ?: "body"
-                targetIndex = (loc?.index ?: -1) + 1
+            } else if (selLoc != null) {
+                targetParent = selLoc.parentId
+                targetSlot = selLoc.slot
+                targetIndex = selLoc.index + 1
             } else {
                 targetParent = scopeRootId()
                 targetSlot = "body"
@@ -357,8 +360,8 @@ class ProjectRepo(private val storage: ProjectStorage) {
             toast("不能把积木放进它自己里面")
             return false
         }
-        snapshot("移动积木")
         val loc = locateInScope(id) ?: return false
+        snapshot("移动积木")
         val moved = loc.block
         val without = TreeOps.remove(scopeBodyInternal(), id).first
         val inserted = TreeOps.insert(without, parentId, slot, index, moved, scopeRootId())
@@ -368,11 +371,11 @@ class ProjectRepo(private val storage: ProjectStorage) {
         return true
     }
 
-    fun shiftBlock(id: String, delta: Int) {
-        val loc = locateInScope(id) ?: return
+    fun shiftBlock(id: String, delta: Int, snapshot: Boolean = true, saveNow: Boolean = true): Boolean {
+        val loc = locateInScope(id) ?: return false
         val j = loc.index + delta
-        if (j < 0 || j >= loc.list.size) return
-        snapshot("调整顺序")
+        if (j < 0 || j >= loc.list.size) return false
+        if (snapshot) snapshot("调整顺序")
         val body = scopeBodyInternal().toMutableList()
         // Reordering a nested block is a re-insert into the same parent.
         if (loc.parentId == scopeRootId() && loc.slot == "body") {
@@ -385,7 +388,8 @@ class ProjectRepo(private val storage: ProjectStorage) {
             updateScopeBody(TreeOps.insert(removed, loc.parentId, loc.slot, j, loc.block, scopeRootId()))
         }
         _selectedState = id
-        save()
+        if (saveNow) save()
+        return true
     }
 
     fun duplicateBlock(id: String) {
@@ -516,6 +520,14 @@ class ProjectRepo(private val storage: ProjectStorage) {
     }
 
     fun updateTest(id: String, name: String? = null, code: String? = null) {
+        val fieldKey = when {
+            name != null && code != null -> "both"
+            name != null -> "name"
+            else -> "code"
+        }
+        val field = "test:$id" to fieldKey
+        if (field != lastEditedField) snapshot("编辑测试用例")
+        lastEditedField = field
         _projectState = current.copy(
             tests = current.tests.map { if (it.id == id) it.copy(name = name ?: it.name, code = code ?: it.code) else it }
         )

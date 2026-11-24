@@ -1,8 +1,5 @@
 package cn.dumate.a6studio.android
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -22,6 +19,10 @@ import cn.dumate.a6studio.ui.StudioApp
 import cn.dumate.a6studio.ui.StudioColors
 import cn.dumate.a6studio.ui.StudioStyle
 import cn.dumate.a6studio.ui.StudioTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
 /**
  * Android host. The same Compose UI as desktop; only storage, clipboard and the file pickers
@@ -42,21 +43,47 @@ class MainActivity : ComponentActivity() {
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri == null) { SafBridge.onOpenResult(null); return@registerForActivityResult }
-        val text = runCatching {
-            contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-        }.getOrNull()
-        val name = SafBridge.displayName(this, uri) ?: "project.json"
-        SafBridge.onOpenResult(if (text != null) name to text else null)
+        val appCtx = applicationContext
+        vm.state.scope.launch(Dispatchers.IO) {
+            val text = runCatching {
+                appCtx.contentResolver.openInputStream(uri)?.use { input ->
+                    val out = ByteArrayOutputStream()
+                    val buf = ByteArray(8192)
+                    var total = 0
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        total += n
+                        if (total > MAX_OPEN_BYTES) throw java.io.IOException("文件超过 10MB 上限")
+                        out.write(buf, 0, n)
+                    }
+                    out.toString(Charsets.UTF_8.name())
+                }
+            }.getOrNull()
+            val name = SafBridge.displayName(appCtx, uri) ?: "project.json"
+            withContext(Dispatchers.Main) {
+                SafBridge.onOpenResult(if (text != null) name to text else null)
+            }
+        }
     }
 
     private val saveLauncher = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/plain")
     ) { uri ->
         if (uri == null) { SafBridge.onSaveResult(null); return@registerForActivityResult }
-        // Writing happens here (only the Activity has the resolver), but the content itself is
-        // kept in SafBridge so a recreated Activity can still finish the save.
-        val wrote = SafBridge.writePendingTo(this, uri)
-        SafBridge.onSaveResult(if (wrote) SafBridge.displayName(this, uri) else null)
+        // Writing happens off the main thread using applicationContext so rotation cannot drop it.
+        val appCtx = applicationContext
+        vm.state.scope.launch(Dispatchers.IO) {
+            val wrote = SafBridge.writePendingTo(appCtx, uri)
+            val displayName = if (wrote) SafBridge.displayName(appCtx, uri) else null
+            withContext(Dispatchers.Main) {
+                SafBridge.onSaveResult(displayName)
+            }
+        }
+    }
+
+    private companion object {
+        const val MAX_OPEN_BYTES = 10 * 1024 * 1024
     }
 
     override fun onDestroy() {

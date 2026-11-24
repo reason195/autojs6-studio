@@ -29,15 +29,10 @@ object BeginnerCopy {
         "任务循环体为空" to "「遍历任务」积木里面还没放东西",
         "缺少「收工判定」" to "京东示例少了「确认做完」那一步",
         "模块名为空" to "有一个模块没起名字",
-        "模块「" to "有一个模块是空的，调用它什么也不会发生",
         "还没有测试用例" to "还没有「自检」用例（可以不管）",
         "运行抛出异常" to "脚本跑到一半停下来了",
         "运行超时被自动停止" to "脚本一直跑个不停，被自动叫停了",
-        "有" to "有几次没等到要找的东西",
-        "循环保护触发" to "重复太多次被自动叫停了",
-        "断言失败" to "自检没通过",
-        "疑似「0 任务」误判收工" to "可能漏做了任务就提前结束",
-        "模拟耗时" to "这次模拟跑得比较久"
+        "疑似「0 任务」误判收工" to "可能漏做了任务就提前结束"
     )
 
     private val hints: Map<String, String> = mapOf(
@@ -56,11 +51,15 @@ object BeginnerCopy {
 
     /** Falls back to the original title when there is no friendlier wording. */
     fun issueTitle(technical: String): String {
-        titles.entries
-            .filter { technical.startsWith(it.key) }
-            .maxByOrNull { it.key.length }
-            ?.let { return technical.replace(it.key, it.value) }
-        return technical
+        titles[technical]?.let { return it }
+        return when {
+            technical.startsWith("模块「") -> "有一个模块是空的，调用它什么也不会发生"
+            technical.startsWith("有 ") && technical.contains("等待超时") -> "有几次没等到要找的东西"
+            technical.startsWith("循环保护触发") -> "重复太多次被自动叫停了"
+            technical.startsWith("断言失败") -> "自检没通过"
+            technical.startsWith("模拟耗时") -> "这次模拟跑得比较久"
+            else -> technical
+        }
     }
 
     fun issueHint(technical: String, original: String): String {

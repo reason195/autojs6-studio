@@ -13,6 +13,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -20,9 +23,32 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.dumate.a6studio.ui.Palette as P
+
+/** 追踪当前是否有文本输入框获得焦点，供全局快捷键避让 Delete / Ctrl+Z。 */
+class TextFocusTracker {
+    private val active = mutableSetOf<Any>()
+    val hasFocus: Boolean get() = active.isNotEmpty()
+    fun setFocused(token: Any, focused: Boolean) {
+        if (focused) active += token else active -= token
+    }
+}
+
+val LocalTextFocusTracker = staticCompositionLocalOf<TextFocusTracker?> { null }
+
+/** 将文本输入框的聚焦生命周期注册到 [LocalTextFocusTracker]，组件销毁时自动清理。 */
+@Composable
+fun Modifier.trackTextFocus(): Modifier {
+    val tracker = LocalTextFocusTracker.current ?: return this
+    val token = remember { Any() }
+    DisposableEffect(tracker, token) {
+        onDispose { tracker.setFocused(token, false) }
+    }
+    return this.onFocusChanged { tracker.setFocused(token, it.isFocused) }
+}
 
 /**
  * Compact text field used everywhere in the studio (block params, names, filters).
@@ -38,6 +64,7 @@ fun InlineField(
     singleLine: Boolean = true,
     minLines: Int = 1,
     maxLines: Int = Int.MAX_VALUE,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
     /**
      * Called once when the field loses focus. Parameter edits coalesce into one undo point per
      * field, so this is what ends a run of keystrokes when the user taps somewhere else.
@@ -65,13 +92,14 @@ fun InlineField(
             // A long imported script must not turn one card into a full screen: cap the height
             // and let the field scroll internally (BasicTextField scrolls when maxLines is hit).
             maxLines = maxLines,
+            visualTransformation = visualTransformation,
             textStyle = TextStyle(
                 fontSize = 11.5.sp,
                 color = P.text,
                 fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default
             ),
             cursorBrush = SolidColor(P.accent),
-            modifier = Modifier.fillMaxWidth().then(
+            modifier = Modifier.fillMaxWidth().trackTextFocus().then(
                 if (onEditingFinished == null) Modifier
                 else Modifier.onFocusChanged { if (!it.isFocused) onEditingFinished() }
             )
@@ -107,7 +135,7 @@ fun SearchField(
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 11.5.sp, color = P.text),
                 cursorBrush = SolidColor(P.accent),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().trackTextFocus()
             )
         }
     }

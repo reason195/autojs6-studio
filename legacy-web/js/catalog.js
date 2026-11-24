@@ -40,7 +40,7 @@ const BY = [
   /* ===================== 流程与控制 ===================== */
   def({
     type: 'comment', cat: 'flow', name: '注释', params: [P.text('text', '内容', '说明')],
-    gen: (b, c) => '// ' + (c.v(b, 'text') || '').replace(/\n/g, ' ')
+    gen: (b, c) => '// ' + c.commentSafe(c.v(b, 'text') || '')
   });
   def({
     type: 'autoWait', cat: 'flow', name: '等待无障碍服务就绪',
@@ -125,7 +125,7 @@ const BY = [
     type: 'funcDef', cat: 'flow', name: '定义函数 {name}({args})',
     params: [P.text('name', '函数名', 'doTask'), P.text('args', '参数列表', 'task'), P.chk('isAsync', '生成 async 函数', false)],
     slots: [{ key: 'body', label: '函数体' }],
-    gen: (b, c) => 'function ' + (b.params.name || 'fn') + '(' + (b.params.args || '') + ') {\n' + c.body(b, 'body', true) + '\n}'
+    gen: (b, c) => 'function ' + (String(c.v(b, 'name') || '').trim() || 'fn') + '(' + c.paramList(b.params.args) + ') {\n' + c.body(b, 'body', true) + '\n}'
   });
   def({
     type: 'funcCall', cat: 'flow', name: '调用函数 {name}({args})',
@@ -152,7 +152,11 @@ return 'for (let attempt = 1; attempt <= ' + n + '; attempt++) {\n  try {\n' + c
   def({
     type: 'launchPackage', cat: 'app', name: '启动应用 {pkg}',
     params: [P.text('pkg', '包名', 'com.jingdong.app.mall'), P.num('wait', '等待毫秒', 1500)],
-    gen: (b, c) => 'app.launchPackage(' + c.q(c.v(b, 'pkg')) + ');\nsleep(' + (Number(c.v(b, 'wait')) || 0) + ');'
+    gen: (b, c) => {
+      const wait = Number(c.v(b, 'wait')) || 0;
+      const launch = 'app.launchPackage(' + c.q(c.v(b, 'pkg')) + ');';
+      return wait > 0 ? launch + '\nsleep(' + wait + ');' : launch;
+    }
   });
   def({
     type: 'openUrl', cat: 'app', name: '打开链接 / 深链', params: [P.text('url', 'URL', 'https://pro.m.jd.com/')],
@@ -276,12 +280,18 @@ return [
   });
   def({
     type: 'edgeBackGesture', cat: 'gesture', name: '左边缘右滑（切回上个应用）',
-    gen: () => 'gesture(2, device.height * 0.5, device.width * 0.65, device.height * 0.5, 320);'
+    gen: () => 'gesture(320, [2, device.height * 0.5], [device.width * 0.65, device.height * 0.5]);'
   });
   def({
     type: 'pressKey', cat: 'gesture', name: '按键 {key}',
     params: [P.sel('key', '按键', 'back', [{ v: 'back', t: '返回' }, { v: 'home', t: 'Home' }, { v: 'recents', t: '任务键' }, { v: 'menu', t: '菜单' }])],
-    gen: (b, c) => 'press(' + c.q(b.params.key || 'back') + ');'
+    gen: (b) => {
+      const key = (b.params && b.params.key) || 'back';
+      if (key === 'home') return 'home();';
+      if (key === 'recents') return 'recents();';
+      if (key === 'menu') return 'KeyCode("KEYCODE_MENU");';
+      return 'back();';
+    }
   });
 
   /* ===================== 图像 / OCR ===================== */
@@ -473,7 +483,7 @@ return [
     gen: () => [
       '// 跳到京东金融后不要在其中等待：手势条右滑切回京东',
       'sleep(800);',
-      'gesture(2, device.height * 0.5, device.width * 0.65, device.height * 0.5, 320);',
+      'gesture(320, [2, device.height * 0.5], [device.width * 0.65, device.height * 0.5]);',
       'sleep(1500);',
       'log("已切回京东");'
     ].join('\n')

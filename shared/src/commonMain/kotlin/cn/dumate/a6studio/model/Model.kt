@@ -64,7 +64,9 @@ object ParamValueSerializer : kotlinx.serialization.KSerializer<ParamValue> {
     override fun serialize(encoder: kotlinx.serialization.encoding.Encoder, value: ParamValue) {
         val prim = when (value) {
             is ParamValue.Text -> JsonPrimitive(value.value)
-            is ParamValue.Num -> JsonPrimitive(value.value)
+            // JSON has no Infinity/NaN, and encoding one throws — which made the whole project
+            // unsavable. Write it as text so the save goes through and codegen still sees it.
+            is ParamValue.Num -> if (value.value.isFinite()) JsonPrimitive(value.value) else JsonPrimitive(value.asText())
             is ParamValue.Bool -> JsonPrimitive(value.value)
         }
         delegate.serialize(encoder, prim)

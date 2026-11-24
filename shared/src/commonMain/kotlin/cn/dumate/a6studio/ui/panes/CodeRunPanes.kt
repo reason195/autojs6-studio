@@ -106,6 +106,10 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
             }
             widestCols
         }
+        val lineNumbers = remember(lines) {
+            var n = 0
+            IntArray(lines.size) { idx -> if (lines[idx].isEmptyMarker) 0 else ++n }
+        }
         LazyColumn(
             Modifier.weight(1f).background(P.codeBg).horizontalScroll(hScroll),
             state = listState
@@ -123,7 +127,7 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
                             .padding(horizontal = 8.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            (i + 1).toString().padStart(3, ' '),
+                            lineNumbers[i].toString().padStart(3, ' '),
                             fontSize = 10.sp,
                             color = P.textDim.copy(alpha = 0.45f),
                             fontFamily = FontFamily.Monospace,
@@ -171,10 +175,10 @@ fun RunPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolean
                 "清空",
                 fontSize = 10.5.sp,
                 color = P.textDim,
-                modifier = Modifier.clickable { state.clearRunLogs() }.padding(4.dp)
+                modifier = Modifier.clickable { state.clearActiveRunLogs() }.padding(4.dp)
             )
         }
-        LogList(state.runLogs, if (state.sendToDevice) state.deviceLog else state.runLogs, Modifier.weight(1f), beginner = beginner)
+        LogList(if (state.sendToDevice) state.deviceLog else state.runLogs, Modifier.weight(1f), beginner = beginner)
     }
 }
 
@@ -253,7 +257,6 @@ private fun SimPhone(state: StudioState) {
 @Composable
 fun LogList(
     logs: List<cn.dumate.a6studio.runtime.LogEntry>,
-    alt: List<cn.dumate.a6studio.runtime.LogEntry>,
     modifier: Modifier = Modifier,
     beginner: Boolean = false
 ) {

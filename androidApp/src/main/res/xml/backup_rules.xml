@@ -6,4 +6,6 @@
 -->
 <full-backup-content>
     <exclude domain="file" path="a6studio.tokens.v1" />
+    <exclude domain="file" path="a6studio.tokens.ai.v1" />
+    <exclude domain="file" path="a6studio.ai.v1" />
 </full-backup-content>

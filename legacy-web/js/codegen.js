@@ -27,6 +27,8 @@
       },
       q(s) { return JSON.stringify(String(s == null ? '' : s)); },
       nv(prefix) { return '_' + (prefix || 'v') + (++n); },
+      paramList(raw) { return paramList(raw); },
+      commentSafe(s, block) { return commentSafe(s, block); },
       has(b, slot) { return ((b.children || {})[slot] || []).length > 0; },
       body(b, slot, level) {
         const lv = level === undefined || level === true ? 1 : (level === false ? 0 : Number(level));
@@ -61,12 +63,55 @@
     return 'mod_' + String(m.name).replace(/[^\w\u4e00-\u9fa5]/g, '_');
   }
 
+  /* 形参列表是自由文本：只保留普通的非保留字标识符。
+   * 否则 `a) {} evil(); function z(b` 会原样拼进 `function name(...)`，在脚本顶层执行。
+   * 与 Kotlin 版 Js.paramList 保持一致。 */
+  const JS_RESERVED = new Set([
+    'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do',
+    'else', 'export', 'extends', 'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof',
+    'new', 'return', 'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void', 'while',
+    'with', 'yield', 'let', 'static', 'enum', 'await', 'null', 'true', 'false'
+  ]);
+  function paramList(raw) {
+    return String(raw == null ? '' : raw).split(',')
+      .map(s => s.trim())
+      .filter(s => /^[A-Za-z_$][\w$]*$/.test(s) && !JS_RESERVED.has(s))
+      .join(', ');
+  }
+
+  /* 写进注释的文本：任何行终止符都会让行注释的后半句变成代码；块注释里还要拆掉 `*／`，
+   * 否则工程名 / 模块说明能提前结束注释。与 Kotlin 版 Js.commentSafe 一致。 */
+  function commentSafe(text, block) {
+    let out = String(text == null ? '' : text).replace(/\r\n|[\r\n\u2028\u2029]/g, ' ');
+    if (block) out = out.split('*/').join('* /');
+    return out;
+  }
+
+  /* 直接拼进代码的名字（函数名、变量名、循环变量…）必须是普通标识符，
+   * 否则 `f() {} evil(); function g` 这样的函数名会在顶层执行。与 Kotlin 版 Diagnose.identifierParams 一致。 */
+  const IDENT_PARAMS = {
+    varSet: ['name'], varAssign: ['name'], funcDef: ['name'], funcCall: ['name'],
+    forRange: ['i'], forOf: ['item'], tryCatch: ['err'],
+    currentPkgVar: ['name'], clipGet: ['name'],
+    shellCmd: ['var'], nodeTextVar: ['var'], existsVar: ['var'],
+    findImage: ['var'], ocrText: ['var'], filesRead: ['var'],
+    filesExistsVar: ['var'], storageGet: ['var'],
+    httpGet: ['var'], httpPostJson: ['var'],
+    timerStart: ['var'], timerLap: ['var'],
+    jdTaskLoop: ['taskVar'], jdDoTask: ['taskVar']
+  };
+  function isIdentifier(s) { return /^[A-Za-z_$][\w$]*$/.test(s) && !JS_RESERVED.has(s); }
+
   function genBlock(b, project, ctx) {
     const d = A6.catalog.byType(b.type);
     if (!d || !d.gen) return '';
     const c = ctx || makeCtx(project);
+    for (const key of IDENT_PARAMS[b.type] || []) {
+      const raw = String(c.v(b, key) == null ? '' : c.v(b, key)).trim();
+      if (raw && !isIdentifier(raw)) return '// 非法标识符已跳过: ' + commentSafe(b.type + '.' + key + ' = ' + raw);
+    }
     let out = '';
-    try { out = d.gen(b, c) || ''; } catch (e) { out = '// 生成失败: ' + b.type + ' (' + e.message + ')'; }
+    try { out = d.gen(b, c) || ''; } catch (e) { out = '// 生成失败: ' + commentSafe(b.type + ' (' + e.message + ')'); }
     return out;
   }
 
@@ -83,7 +128,7 @@
     const d = new Date();
     return [
       '/**',
-      ' * ' + (p.name || 'AutoJs6 脚本'),
+      ' * ' + commentSafe(p.name || 'AutoJs6 脚本', true),
       ' * 由 AutoJs6 Studio 可视化积木生成 · ' + d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()),
       ' * 目标运行时：AutoJs6 6.x（Rhino）· 语法遵循 AutoJs6 全局 API',
       ' */',
@@ -94,7 +139,7 @@
   function modulesCode(p, ctx) {
     return (p.modules || []).map(m => {
       const body = genList(m.children.body, p, ctx);
-      return '/** 模块：' + (m.desc || m.name) + ' */\nfunction ' + moduleName(m) + '(' + (m.args || '') + ') {\n'
+      return '/** 模块：' + commentSafe(m.desc || m.name, true) + ' */\nfunction ' + moduleName(m) + '(' + paramList(m.args) + ') {\n'
         + indentLines(body || '// 空模块', 1) + '\n}';
     }).join('\n\n');
   }

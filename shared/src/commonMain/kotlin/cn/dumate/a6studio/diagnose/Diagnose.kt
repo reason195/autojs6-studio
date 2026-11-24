@@ -39,6 +39,9 @@ object Diagnose {
         "jdTaskLoop" to listOf("taskVar"), "jdDoTask" to listOf("taskVar")
     )
 
+    /** Params pasted into a function signature as a comma-separated identifier list. */
+    val identifierListParams: Map<String, List<String>> = mapOf("funcDef" to listOf("args"))
+
     private data class Item(val b: Block, val scope: String, val index: Int, val ancestors: List<Block>)
 
     private fun collect(project: Project): List<Item> {
@@ -90,6 +93,13 @@ object Diagnose {
                         "只能用字母、数字、_ 和 $，且不能以数字开头，也不能是 JS 关键字（如 let、if）", it)
                 }
             }
+            identifierListParams[it.b.type]?.forEach { key ->
+                val v = it.b.params[key]?.asText().orEmpty()
+                if (!isJsIdentifierList(v)) {
+                    add(Level.ERROR, "参数列表不合法：$v",
+                        "用英文逗号分隔的变量名，如 a, b；不合法的项生成代码时会被丢弃", it)
+                }
+            }
         }
 
         items.forEach { it ->
@@ -133,14 +143,6 @@ object Diagnose {
                     }
                     if (b.children["body"].isNullOrEmpty()) {
                         add(Level.WARN, "任务循环体为空", "循环体里至少放「执行任务」或「跨 app 切回」", it)
-                    }
-                }
-                "kitWaitFor", "kitClick" -> {
-                    if (s("value").isBlank()) {
-                        add(Level.ERROR, "护栏控件定位值为空", "空值无法定位目标节点；请填写要匹配的文本 / desc / id", it)
-                    }
-                    if (b.type == "kitWaitFor" && n("timeoutMs") <= 0) {
-                        add(Level.WARN, "护栏等待超时未设置", "建议设置为 5000~15000 毫秒", it)
                     }
                 }
                 "kitOpenDeepLink" -> {
@@ -273,6 +275,12 @@ object Diagnose {
 
     /** ASCII-only on purpose: Rhino's ES6 mode rejects some Unicode identifiers other engines accept. */
     fun isJsIdentifier(text: String): Boolean = jsIdentifier.matches(text) && text !in jsReserved
+
+    fun isJsReserved(text: String): Boolean = text in jsReserved
+
+    /** Blank, or every comma-separated item is a valid identifier (`a, b`). */
+    fun isJsIdentifierList(text: String): Boolean =
+        text.isBlank() || text.split(',').all { isJsIdentifier(it.trim()) }
 
     fun blockLabel(block: Block): String {
         val def = Catalog.byType(block.type) ?: return block.type

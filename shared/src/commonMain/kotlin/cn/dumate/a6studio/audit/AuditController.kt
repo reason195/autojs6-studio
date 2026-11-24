@@ -131,12 +131,16 @@ class AuditController(
             when (f.count) {
                 0 -> {
                     var note = "这条选择器在当前页面找不到节点"
-                    runCatching {
+                    try {
                         val explain = bridge.explainSelector(selector)
                         val o = PickerLogic.json.parseToJsonElement(explain).let { it as? JsonObject }
                         val fail = o?.get("firstFail")?.let { (it as? JsonPrimitive)?.content }
                             ?: o?.get("firstFailingCondition")?.let { (it as? JsonPrimitive)?.content }
                         if (!fail.isNullOrBlank()) note += "；卡在「$fail」"
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // explainSelector 仅补充排查信息，失败时保留基础提示
                     }
                     row.copy(status = AuditStatus.MISSING, count = 0, note = note)
                 }
@@ -153,7 +157,13 @@ class AuditController(
                         val alternatives = PickerLogic.buildCandidates(first)
                             .filterNot { it.by == row.by && it.value == row.value }
                         for (c in alternatives) {
-                            val cf = runCatching { bridge.uiFind(PickerLogic.selectorJson(c), 20) }.getOrNull()
+                            val cf = try {
+                                bridge.uiFind(PickerLogic.selectorJson(c), 20)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                null
+                            }
                             if (cf?.count == 1) {
                                 fix = c.by to c.value
                                 note += "；可用 " + selText(c.by, c.value) + " 收窄到唯一"

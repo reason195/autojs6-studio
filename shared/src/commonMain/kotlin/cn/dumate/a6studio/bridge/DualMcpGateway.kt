@@ -203,7 +203,8 @@ class DualMcpGateway(
          */
         internal fun mapBridgeErrorCode(code: String): McpErrorKind = when (code) {
             "TIMEOUT" -> McpErrorKind.TIMEOUT_ERROR
-            "INVALID_URL" -> McpErrorKind.SSRF_BLOCKED
+            "INVALID_URL",
+            "BLOCKED_URL" -> McpErrorKind.SSRF_BLOCKED
             "BAD_RESPONSE",
             "EMPTY_BODY",
             "EMPTY_RESPONSE",

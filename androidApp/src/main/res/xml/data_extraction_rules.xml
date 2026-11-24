@@ -7,8 +7,12 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="a6studio.tokens.v1" />
+        <exclude domain="file" path="a6studio.tokens.ai.v1" />
+        <exclude domain="file" path="a6studio.ai.v1" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="a6studio.tokens.v1" />
+        <exclude domain="file" path="a6studio.tokens.ai.v1" />
+        <exclude domain="file" path="a6studio.ai.v1" />
     </device-transfer>
 </data-extraction-rules>

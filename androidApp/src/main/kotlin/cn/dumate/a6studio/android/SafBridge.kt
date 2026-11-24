@@ -33,6 +33,7 @@ object SafBridge {
 
     fun openText(mimes: Array<String>, onResult: (Pair<String, String>?) -> Unit): Boolean {
         val h = host ?: return false
+        pendingOpen?.invoke(null)
         pendingOpen = onResult
         h.launchOpen(mimes)
         return true
@@ -40,10 +41,22 @@ object SafBridge {
 
     fun saveText(suggestedName: String, content: String, onResult: (String?) -> Unit): Boolean {
         val h = host ?: return false
+        pendingSave?.invoke(null)
         pendingSave = onResult
         pendingContent = content
         h.launchSave(suggestedName)
         return true
+    }
+
+    fun cancelOpen(cb: (Pair<String, String>?) -> Unit) {
+        if (pendingOpen === cb) pendingOpen = null
+    }
+
+    fun cancelSave(cb: (String?) -> Unit) {
+        if (pendingSave === cb) {
+            pendingSave = null
+            pendingContent = null
+        }
     }
 
     fun onOpenResult(result: Pair<String, String>?) {
@@ -65,7 +78,9 @@ object SafBridge {
         return runCatching {
             // "wt" truncates: the default "w" leaves the previous document's tail on some
             // providers, which produced a corrupt file after overwriting a longer export.
-            ctx.contentResolver.openOutputStream(uri, "wt")?.use { it.write(content.toByteArray()) }
+            val out = ctx.contentResolver.openOutputStream(uri, "wt")
+                ?: throw java.io.IOException("无法打开目标文件输出流")
+            out.use { it.write(content.toByteArray()) }
         }.isSuccess
     }
 
