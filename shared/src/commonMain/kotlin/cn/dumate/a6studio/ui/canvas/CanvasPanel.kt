@@ -52,6 +52,7 @@ import cn.dumate.a6studio.picker.PickKind
 import cn.dumate.a6studio.store.ProjectRepo
 import cn.dumate.a6studio.ui.EmptyCanvasGuide
 import cn.dumate.a6studio.ui.Palette as P
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.fields.InlineField
 import cn.dumate.a6studio.ui.currentStudioStyle
@@ -365,21 +366,30 @@ private fun BlockCard(
 @Composable
 private fun BlockMenu(block: Block, repo: ProjectRepo, onCommit: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        CardAction("↑") { repo.shiftBlock(block.id, -1); onCommit() }
-        CardAction("↓") { repo.shiftBlock(block.id, 1); onCommit() }
-        CardAction("⧉") { repo.duplicateBlock(block.id); onCommit() }
-        CardAction("✕", danger = true) { repo.removeBlock(block.id); onCommit() }
+        CardAction("↑", description = "上移") { repo.shiftBlock(block.id, -1); onCommit() }
+        CardAction("↓", description = "下移") { repo.shiftBlock(block.id, 1); onCommit() }
+        CardAction("⧉", description = "复制积木") { repo.duplicateBlock(block.id); onCommit() }
+        CardAction("✕", danger = true, description = "删除积木") { repo.removeBlock(block.id); onCommit() }
     }
 }
 
 /** One small borderless action on a block card (about 28dp, enough to tap on a phone). */
 @Composable
-private fun CardAction(glyph: String, danger: Boolean = false, onClick: () -> Unit) {
+private fun CardAction(glyph: String, danger: Boolean = false, description: String, onClick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Box(
         Modifier
             .size(28.dp)
             .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick),
+            .then(hoverMod)
+            .background(
+                if (hovered) {
+                    if (danger) P.err.copy(alpha = 0.12f) else P.hover
+                } else androidx.compose.ui.graphics.Color.Transparent
+            )
+            // onClickLabel gives screen readers a real verb ("double tap to 上移") instead of
+            // the glyph's bare name.
+            .clickable(onClickLabel = description, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(glyph, fontSize = 13.sp, color = if (danger) P.err.copy(alpha = 0.85f) else P.textDim)

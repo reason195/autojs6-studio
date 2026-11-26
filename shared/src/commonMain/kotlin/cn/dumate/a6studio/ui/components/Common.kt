@@ -111,12 +111,18 @@ fun KV(key: String, value: String, modifier: Modifier = Modifier) {
 
 @Composable
 fun ClickableRow(onClick: () -> Unit, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Column(modifier.fillMaxWidth().clickable(onClick = onClick)) { content() }
+    val (hoverMod, hovered) = rememberHovered()
+    Column(
+        modifier.fillMaxWidth()
+            .then(hoverMod)
+            .background(if (hovered) Palette.hover else androidx.compose.ui.graphics.Color.Transparent)
+            .clickable(onClick = onClick)
+    ) { content() }
 }
 
 /**
  * 分段标签条：把一页内容按逻辑拆成几个标签页（连接 / 工具 / 输出 之类）。
- * 与主界面顶部的 PhoneyTabs 同一套外观：等宽分段、选中底色加亮。
+ * 与主界面顶部的 PhoneTabs 同一套外观：等宽分段、选中底色加亮。
  */
 @Composable
 fun SectionTabs(

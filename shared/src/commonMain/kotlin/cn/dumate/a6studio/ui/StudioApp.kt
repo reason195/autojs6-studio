@@ -107,7 +107,7 @@ private fun StudioAppContent(state: StudioState) {
                 // Phone layout: the canvas is the primary view; palette and panes become
                 // switchable sheets so nothing gets squeezed off-screen.
                 Column(Modifier.fillMaxSize()) {
-                    PhoneyTabs(state)
+                    PhoneTabs(state)
                     if (state.mobileSheet == MobileSheet.PANE) {
                         Box(Modifier.weight(1f)) {
                             PaneColumn(state, Modifier.fillMaxSize())
@@ -514,10 +514,17 @@ private fun ScopeTabs(state: StudioState) {
 
 @Composable
 private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit, onDelete: (() -> Unit)? = null) {
+    val (hoverMod, hovered) = rememberHovered()
+    val background = when {
+        active -> if (hovered) Palette.accent.copy(alpha = 0.88f) else Palette.accent
+        hovered -> Palette.hover
+        else -> Palette.panelAlt
+    }
     Row(
         Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(if (active) Palette.accent else Palette.panelAlt)
+            .then(hoverMod)
+            .background(background)
             .clickable(onClick = onClick)
             .padding(start = 8.dp, end = if (onDelete != null && active) 3.dp else 8.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -578,6 +585,7 @@ fun ToastHost(state: StudioState) {
                 .clip(RoundedCornerShape(8.dp))
                 .background(Palette.panelAlt)
                 .border(1.dp, Palette.border, RoundedCornerShape(8.dp))
+                .clickable(onClickLabel = "关闭提示") { state.toastText.value = null }
                 .padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -687,7 +695,7 @@ private fun PaneColumn(state: StudioState, modifier: Modifier) {
 }
 
 @Composable
-private fun PhoneyTabs(state: StudioState) {
+private fun PhoneTabs(state: StudioState) {
     // 分段控件：三段等宽、共用一块底色，读起来是「切换视图」，而不是三个独立按钮。
     Row(
         Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = 10.dp, vertical = 6.dp)

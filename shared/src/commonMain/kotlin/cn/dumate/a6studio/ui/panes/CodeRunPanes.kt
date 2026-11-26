@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -41,6 +42,7 @@ import cn.dumate.a6studio.ui.components.BadgeKind
 import cn.dumate.a6studio.ui.components.Chip
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.components.SectionTitle
+import cn.dumate.a6studio.ui.components.rememberHovered
 
 @Composable
 fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
@@ -199,11 +201,17 @@ fun RunPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolean
         ) {
             Text("运行日志", fontSize = 11.sp, color = P.textDim)
             Spacer(Modifier.weight(1f))
+            val (clearHoverMod, clearHovered) = rememberHovered()
             Text(
                 "清空",
                 fontSize = 10.5.sp,
-                color = P.textDim,
-                modifier = Modifier.clickable { state.clearActiveRunLogs() }.padding(4.dp)
+                color = if (clearHovered) P.text else P.textDim,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .then(clearHoverMod)
+                    .background(if (clearHovered) P.hover else androidx.compose.ui.graphics.Color.Transparent)
+                    .clickable { state.clearActiveRunLogs() }
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
             )
         }
         LogList(if (state.sendToDevice) state.deviceLog else state.runLogs, Modifier.weight(1f), beginner = beginner)
@@ -300,8 +308,18 @@ fun LogList(
     beginner: Boolean = false
 ) {
     val listState = rememberLazyListState()
+    // Only follow the tail while the user is at/near the bottom. Scanning logs from an
+    // earlier run must not be interrupted by the log of the current one.
+    var followTail by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            info.totalItemsCount - 1 - lastVisible
+        }.collect { distance -> followTail = distance <= 1 }
+    }
     LaunchedEffect(logs.size) {
-        if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
+        if (logs.isNotEmpty() && followTail) listState.animateScrollToItem(logs.size - 1)
     }
     // LazyColumn 不写 fillMaxWidth 时会按内容宽度收缩，空日志时「暂无日志」就变成一块
     // 贴着左边的窄方块，右边露出面板底色。
@@ -335,8 +353,11 @@ fun LogList(
 
 @Composable
 fun TinyToggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Row(
         Modifier.clip(RoundedCornerShape(4.dp))
+            .then(hoverMod)
+            .background(if (hovered) P.hover else androidx.compose.ui.graphics.Color.Transparent)
             .clickable { onChange(!checked) }
             .padding(horizontal = 4.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically

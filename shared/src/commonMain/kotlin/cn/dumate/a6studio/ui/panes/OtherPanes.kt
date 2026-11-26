@@ -39,8 +39,8 @@ import cn.dumate.a6studio.ui.BeginnerCopy
 import cn.dumate.a6studio.ui.Palette as P
 import cn.dumate.a6studio.ui.StudioState
 import cn.dumate.a6studio.ui.components.Badge
-import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.components.BadgeKind
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.components.Chip
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.components.KV
@@ -205,10 +205,12 @@ fun DiagPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolea
                     Level.WARN -> P.warn
                     Level.INFO -> P.info
                 }
+                val (hoverMod, hovered) = rememberHovered()
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 4.dp)
                         .clip(RoundedCornerShape(6.dp))
-                        .background(color.copy(alpha = 0.07f))
+                        .then(hoverMod)
+                        .background(color.copy(alpha = if (hovered) 0.14f else 0.07f))
                         .clickable {
                             issue.blockId?.let { id ->
                                 state.repo.scopeOfBlock(id)?.let { targetScope ->

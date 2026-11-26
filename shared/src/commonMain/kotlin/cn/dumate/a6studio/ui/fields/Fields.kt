@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.dumate.a6studio.ui.Palette as P
+import cn.dumate.a6studio.ui.components.rememberHovered
 
 /** 追踪当前是否有文本输入框获得焦点，供全局快捷键避让 Delete / Ctrl+Z。 */
 class TextFocusTracker {
@@ -153,6 +154,21 @@ fun SearchField(
                 modifier = Modifier.fillMaxWidth().trackTextFocus().let { m ->
                     if (focusRequester != null) m.focusRequester(focusRequester) else m
                 }
+            )
+        }
+        // One-tap clear: backspacing a CJK query character by character was the only way out.
+        if (value.isNotEmpty()) {
+            val (clearHoverMod, clearHovered) = rememberHovered()
+            Text(
+                "✕",
+                fontSize = 11.sp,
+                color = if (clearHovered) P.text else P.textDim,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(5.dp))
+                    .then(clearHoverMod)
+                    .background(if (clearHovered) P.hover else androidx.compose.ui.graphics.Color.Transparent)
+                    .clickable(onClickLabel = "清空搜索") { onValueChange("") }
+                    .padding(4.dp)
             )
         }
     }
