@@ -242,22 +242,17 @@ class DualMcpGateway(
             return isToolNotFoundText(message)
         }
 
+        // AutoJs6 MCP 插件对未知工具的真实回包是 `Tool xxx not found`，故单独匹配该词序
+        private val TOOL_NOT_FOUND = Regex(
+            "-32601|method not found|tool not found|unknown tool|unknown method|未知工具|工具不存在|no such tool|tool\\s+[a-z0-9_]+\\s+not\\s+found"
+        )
+
         private fun isToolNotFoundText(raw: String?): Boolean {
             val msg = raw.orEmpty().lowercase()
             if (msg.isEmpty()) return false
             // 只认「方法/工具不存在」。不能用裸的 "not found"：TOOL_ERROR 里的
             // "node not found" / "flow not found" / "element not found" 是业务失败，不该触发降级重试。
-            return msg.contains("-32601") ||
-                msg.contains("method not found") ||
-                msg.contains("tool not found") ||
-                msg.contains("unknown tool") ||
-                msg.contains("unknown method") ||
-                msg.contains("未知工具") ||
-                msg.contains("工具不存在") ||
-                msg.contains("no such tool") ||
-                // AutoJs6 MCP 插件对未知工具的真实回包：`Tool get_device_state not found`
-                // 没有 "tool not found" 的相邻词序，必须用正则单独匹配，否则永远降级不了。
-                Regex("tool\\s+[a-z0-9_]+\\s+not\\s+found").containsMatchIn(msg)
+            return TOOL_NOT_FOUND.containsMatchIn(msg)
         }
 
         fun finalizeMcpRpcResponse(
@@ -272,7 +267,12 @@ class DualMcpGateway(
             // files_list / ui_dump 这类数组结果也会被腰斩。这里放宽数组/深度，只保留键名与正则脱敏。
             val report = Redaction.redactTrafficPayload(
                 rawPayload,
-                RedactionOptions(maxStringLength = 4000, maxArrayLength = 500, maxDepth = 16)
+                RedactionOptions(
+                    // ProxyPin 流量里可能带 Cookie/Token 长串，保持默认字符串上限；其余服务放宽
+                    maxStringLength = if (serverId == McpServerId.PROXYPIN) RedactionOptions().maxStringLength else 4000,
+                    maxArrayLength = 500,
+                    maxDepth = 16
+                )
             )
             return McpGatewayResponse(
                 ok = true,

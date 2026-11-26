@@ -912,7 +912,7 @@ class StudioState(
                     autoStatus = "没读到目标 App：请确认已切到目标 App 且无障碍正常，再点一次"
                     return@launch
                 }
-                val label = runCatching { bridge.listApps() }.getOrDefault(emptyList())
+                val label = try { bridge.listApps() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { emptyList() }
                     .firstOrNull { it.first == pkg }?.second.orEmpty()
                 autoPkg = pkg
                 autoPkgLabel = label.ifBlank { pkg }
@@ -1131,6 +1131,7 @@ class StudioState(
                     else -> buildString {
                         append("可用工具 ${all.size} 个（$pages 页）：")
                         append(all.keys.joinToString("、"))
+                        if (!cursor.isNullOrBlank()) append("\n已达 10 页上限，工具清单可能没取全。")
                         if (all.size < 40) {
                             append("\n只看到 ${all.size} 个通常是 AutoJs6 默认关掉了一些工具组。")
                             append("到 AutoJs6 → 插件 → MCP Server → 设置 → 工具组，把「脚本 / 文件 / Shell / 手势 / 应用」等打开，再点一次工具清单。")

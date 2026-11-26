@@ -119,20 +119,23 @@ class ProxyPinBridge(
         flowId: String,
         transport: McpTransport = McpTransport.HTTP_JSONRPC,
         devMode: Boolean = false
-    ): McpGatewayResponse = gateway.call(
-        CallMcpGatewayOptions(
+    ): McpGatewayResponse {
+        fun opts(idKey: String) = CallMcpGatewayOptions(
             serverId = McpServerId.PROXYPIN,
             transport = transport,
             endpointUrl = configuredUrl,
             method = "tools/call",
             toolName = "get_flow_detail",
             // ProxyPin 1.4 用 id；preview_bytes 要够大才能拿到请求体做参数提取
-            args = buildJsonObject { put("id", flowId); put("preview_bytes", 20_000) },
+            args = buildJsonObject { put(idKey, flowId); put("preview_bytes", 20_000) },
             allowLocal = configuredAllowLocal,
             authToken = configuredToken,
             devMode = devMode
         )
-    )
+        val first = gateway.call(opts("id"))
+        // 旧版 ProxyPin 只认 flowId：新参数失败时回退一次，与列表接口的兼容策略保持一致
+        return if (first.ok) first else gateway.call(opts("flowId")).let { if (it.ok) it else first }
+    }
 
     suspend fun analyzeEndpoints(
         domain: String = "",

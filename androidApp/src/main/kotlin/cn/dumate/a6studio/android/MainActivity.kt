@@ -8,6 +8,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.runtime.snapshotFlow
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -93,18 +96,6 @@ class MainActivity : ComponentActivity() {
         const val MAX_OPEN_BYTES = 10 * 1024 * 1024
     }
 
-    override fun onStart() {
-        super.onStart()
-        // 回到前台后不需要保活，交给 StudioState 自己按采集状态再启停
-        KeepAliveService.stop(this)
-    }
-
-    override fun onStop() {
-        // 正在采集/授权倒计时时离开 Studio（切去目标 App），立刻挂前台服务，避免进程被系统回收
-        if (vm.state.autoBusy) KeepAliveService.start(this)
-        super.onStop()
-    }
-
     override fun onDestroy() {
         SafBridge.detach(safHost)
         super.onDestroy()
@@ -112,7 +103,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= 33 &&
+        // 必须在 snapshotFlow 之外先创建 ViewModel：其 init 会写 Compose 状态，
+        // 若首次访问发生在 snapshotFlow 的只读快照内会抛 IllegalStateException 导致闪退。
+        val studioState = vm.state
+        // 保活只在一处管：随 autoBusy 统一启停。忙碌总由前台操作触发，此时启动前台服务不受后台限制。
+        lifecycleScope.launch {
+            snapshotFlow { studioState.autoBusy }.distinctUntilChanged().collect { busy ->
+                if (busy) KeepAliveService.start(this@MainActivity) else KeepAliveService.stop(this@MainActivity)
+            }
+        }
+        // 只在首次创建时申请通知权限，避免转屏等重建时反复弹窗
+        if (savedInstanceState == null && Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)

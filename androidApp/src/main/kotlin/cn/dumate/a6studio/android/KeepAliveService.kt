@@ -7,6 +7,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.util.Log
 
 /**
  * 采集目标 App 期间的轻量前台保活。
@@ -34,7 +35,7 @@ class KeepAliveService : Service() {
         startForeground(NOTIFICATION_ID, n)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -46,11 +47,12 @@ class KeepAliveService : Service() {
             runCatching {
                 val i = Intent(ctx, KeepAliveService::class.java)
                 ctx.startForegroundService(i)
-            }
+            }.onFailure { Log.w("KeepAliveService", "前台保活启动失败", it) }
         }
 
         fun stop(ctx: Context) {
             runCatching { ctx.stopService(Intent(ctx, KeepAliveService::class.java)) }
+                .onFailure { Log.w("KeepAliveService", "前台保活停止失败", it) }
         }
     }
 }
