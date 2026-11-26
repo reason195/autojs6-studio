@@ -3,6 +3,8 @@ package cn.dumate.a6studio.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,6 +39,7 @@ import cn.dumate.a6studio.model.Template
 import cn.dumate.a6studio.model.Templates
 import cn.dumate.a6studio.ui.components.Badge
 import cn.dumate.a6studio.ui.components.BadgeKind
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.panes.SmallButton
 
 /**
@@ -107,7 +110,8 @@ fun GuideOverlay(state: StudioState) {
     val current = steps[step.coerceIn(0, steps.size - 1)]
 
     Box(
-        Modifier.fillMaxSize().background(Color(0x661F2328)).clickable(enabled = false) { },
+        // No-op consuming scrim: taps on the backdrop must not leak through to the app below.
+        Modifier.fillMaxSize().background(Color(0x661F2328)).pointerInput(Unit) { detectTapGestures { } },
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -178,7 +182,8 @@ fun GuideOverlay(state: StudioState) {
 @Composable
 fun TemplateOverlay(state: StudioState) {
     Box(
-        Modifier.fillMaxSize().background(Color(0x551F2328)).clickable { state.closeTemplates() },
+        // Backdrop taps are swallowed on purpose; use the ✕ (or Esc) to close.
+        Modifier.fillMaxSize().background(Color(0x551F2328)).pointerInput(Unit) { detectTapGestures { } },
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -186,7 +191,6 @@ fun TemplateOverlay(state: StudioState) {
                 .clip(RoundedCornerShape(12.dp))
                 .background(Palette.panel)
                 .border(1.dp, Palette.border, RoundedCornerShape(12.dp))
-                .clickable(enabled = false) { }
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(16.dp),
@@ -196,7 +200,14 @@ fun TemplateOverlay(state: StudioState) {
                     Text("选一个现成的脚本", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
                     Text("选好后可以直接运行；想改成自己的，改积木上的文字就行", fontSize = 11.sp, color = Palette.textDim)
                 }
-                Text("✕", fontSize = 13.sp, color = Palette.textDim, modifier = Modifier.clickable { state.closeTemplates() }.padding(6.dp))
+                val (closeHoverMod, closeHovered) = rememberHovered()
+                Text("✕", fontSize = 13.sp, color = if (closeHovered) Palette.text else Palette.textDim,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .then(closeHoverMod)
+                        .background(if (closeHovered) Palette.hover else Color.Transparent)
+                        .clickable { state.closeTemplates() }
+                        .padding(6.dp))
             }
             androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.border))
             LazyColumn(Modifier.weight(1f).padding(horizontal = 16.dp, vertical = 10.dp)) {
@@ -217,11 +228,13 @@ fun TemplateOverlay(state: StudioState) {
 
 @Composable
 private fun TemplateCard(template: Template, onPick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Column(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(Palette.panelAlt)
-            .border(1.dp, Palette.borderSoft, RoundedCornerShape(8.dp))
+            .then(hoverMod)
+            .background(if (hovered) Palette.hover else Palette.panelAlt)
+            .border(1.dp, if (hovered) Palette.accent.copy(alpha = 0.45f) else Palette.borderSoft, RoundedCornerShape(8.dp))
             .clickable(onClick = onPick)
             .padding(12.dp)
     ) {
@@ -278,11 +291,13 @@ fun EmptyCanvasGuide(
 
 @Composable
 private fun NextStepCard(title: String, hint: String, onClick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Row(
         Modifier.widthIn(max = 460.dp).fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(Palette.panelAlt)
-            .border(1.dp, Palette.borderSoft, RoundedCornerShape(8.dp))
+            .then(hoverMod)
+            .background(if (hovered) Palette.hover else Palette.panelAlt)
+            .border(1.dp, if (hovered) Palette.accent.copy(alpha = 0.45f) else Palette.borderSoft, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically

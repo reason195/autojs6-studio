@@ -181,7 +181,7 @@ legacy-web/                 旧 Web 版（HTML/CSS/JS + Electron 壳 + MCP 转�
 ## 快捷键
 
 `F5` 运行 · `Shift+F5` 停止 · `F6` 测试 · `F7` 诊断 · `F8` 体检 · `F9` 录制
-`Ctrl+S` 保存 · `Ctrl+Z` 撤销 · `Ctrl+E` 导出 JS · `Esc` 关闭面板/取消选中
+`Ctrl+S` 保存 · `Ctrl+Z` 撤销 · `Ctrl+E` 导出 JS · `Esc` 关闭面板/取消选中 · `Ctrl+K` 聚焦积木搜索
 `Delete` 删除选中积木
 
 ## 积木覆盖的 AutoJs6 能力

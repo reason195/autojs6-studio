@@ -18,11 +18,13 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +52,7 @@ import cn.dumate.a6studio.picker.PickKind
 import cn.dumate.a6studio.store.ProjectRepo
 import cn.dumate.a6studio.ui.EmptyCanvasGuide
 import cn.dumate.a6studio.ui.Palette as P
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.fields.InlineField
 import cn.dumate.a6studio.ui.currentStudioStyle
@@ -109,8 +112,18 @@ fun CanvasPanel(
         DisposableEffect(drag, rootId) { onDispose { drag.unregisterContainer(rootId, "body") } }
     }
     val target = drag?.target
+    // Reverse sync: selecting a block from the code pane scrolls it into view. +1 skips the
+    // always-present scope header item; the empty-state item only exists when body is empty
+    // (in which case there is no selection to scroll to). Nested blocks can't be targeted
+    // precisely, so only top-level matches scroll.
+    val listState = rememberLazyListState()
+    LaunchedEffect(selectedId) {
+        val idx = selectedId?.let { id -> body.indexOfFirst { it.id == id } } ?: -1
+        if (idx >= 0) runCatching { listState.animateScrollToItem(idx + 1) }
+    }
     LazyColumn(
-        modifier
+        state = listState,
+        modifier = modifier
             .then(if (drag != null) Modifier.onGloballyPositioned {
                 drag.registerContainer(DropContainer(rootId, "body", body.size, it.boundsInRoot()))
             } else Modifier)
@@ -353,21 +366,30 @@ private fun BlockCard(
 @Composable
 private fun BlockMenu(block: Block, repo: ProjectRepo, onCommit: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        CardAction("↑") { repo.shiftBlock(block.id, -1); onCommit() }
-        CardAction("↓") { repo.shiftBlock(block.id, 1); onCommit() }
-        CardAction("⧉") { repo.duplicateBlock(block.id); onCommit() }
-        CardAction("✕", danger = true) { repo.removeBlock(block.id); onCommit() }
+        CardAction("↑", description = "上移") { repo.shiftBlock(block.id, -1); onCommit() }
+        CardAction("↓", description = "下移") { repo.shiftBlock(block.id, 1); onCommit() }
+        CardAction("⧉", description = "复制积木") { repo.duplicateBlock(block.id); onCommit() }
+        CardAction("✕", danger = true, description = "删除积木") { repo.removeBlock(block.id); onCommit() }
     }
 }
 
 /** One small borderless action on a block card (about 28dp, enough to tap on a phone). */
 @Composable
-private fun CardAction(glyph: String, danger: Boolean = false, onClick: () -> Unit) {
+private fun CardAction(glyph: String, danger: Boolean = false, description: String, onClick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Box(
         Modifier
             .size(28.dp)
             .clip(RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick),
+            .then(hoverMod)
+            .background(
+                if (hovered) {
+                    if (danger) P.err.copy(alpha = 0.12f) else P.hover
+                } else androidx.compose.ui.graphics.Color.Transparent
+            )
+            // onClickLabel gives screen readers a real verb ("double tap to 上移") instead of
+            // the glyph's bare name.
+            .clickable(onClickLabel = description, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(glyph, fontSize = 13.sp, color = if (danger) P.err.copy(alpha = 0.85f) else P.textDim)

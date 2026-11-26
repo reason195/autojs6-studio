@@ -33,12 +33,15 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.dumate.a6studio.ui.Palette as P
+import cn.dumate.a6studio.ui.components.rememberHovered
 
 /** 追踪当前是否有文本输入框获得焦点，供全局快捷键避让 Delete / Ctrl+Z。 */
 class TextFocusTracker {
@@ -119,13 +122,14 @@ fun InlineField(
     }
 }
 
-/** Search box with a leading icon. */
+/** Search box with a leading icon. Pass [focusRequester] to let keyboard shortcuts focus it. */
 @Composable
 fun SearchField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    focusRequester: FocusRequester? = null
 ) {
     Row(
         modifier
@@ -147,7 +151,24 @@ fun SearchField(
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 11.5.sp, color = P.text),
                 cursorBrush = SolidColor(P.accent),
-                modifier = Modifier.fillMaxWidth().trackTextFocus()
+                modifier = Modifier.fillMaxWidth().trackTextFocus().let { m ->
+                    if (focusRequester != null) m.focusRequester(focusRequester) else m
+                }
+            )
+        }
+        // One-tap clear: backspacing a CJK query character by character was the only way out.
+        if (value.isNotEmpty()) {
+            val (clearHoverMod, clearHovered) = rememberHovered()
+            Text(
+                "✕",
+                fontSize = 11.sp,
+                color = if (clearHovered) P.text else P.textDim,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(5.dp))
+                    .then(clearHoverMod)
+                    .background(if (clearHovered) P.hover else androidx.compose.ui.graphics.Color.Transparent)
+                    .clickable(onClickLabel = "清空搜索") { onValueChange("") }
+                    .padding(4.dp)
             )
         }
     }

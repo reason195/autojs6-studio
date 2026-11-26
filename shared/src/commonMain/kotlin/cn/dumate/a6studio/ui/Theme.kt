@@ -40,6 +40,8 @@ data class StudioColors(
     val info: Color,
     val codeBg: Color,
     val codeHl: Color,
+    /** Hover fill for clickable rows/buttons (desktop mouse); a shade between panelAlt and border. */
+    val hover: Color,
 )
 
 /** Desktop C – bright workbench (Figma / Notion vibe), slightly deeper for contrast. */
@@ -59,6 +61,7 @@ val DesktopColors = StudioColors(
     info       = Color(0xFF0E7490),
     codeBg     = Color(0xFFEFF2F5),
     codeHl     = Color(0xFFC7DBFB),
+    hover      = Color(0xFFDCE2EA),
 )
 
 /** Android D – Material You fixed palette (Android < 12 fallback; 12+ uses dynamic colours). */
@@ -78,6 +81,7 @@ val AndroidColors = StudioColors(
     info       = Color(0xFF006874),
     codeBg     = Color(0xFFF3EDF7),
     codeHl     = Color(0xFFEADDFF),
+    hover      = Color(0xFFE4DDE9),
 )
 
 // ─────────────────────────────────────────────────────────────────
@@ -150,6 +154,7 @@ object Palette {
     val info       get() = _colors.info
     val codeBg     get() = _colors.codeBg
     val codeHl     get() = _colors.codeHl
+    val hover      get() = _colors.hover
 }
 
 // ─────────────────────────────────────────────────────────────────

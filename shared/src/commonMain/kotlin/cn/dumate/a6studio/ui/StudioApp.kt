@@ -53,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -62,6 +63,7 @@ import cn.dumate.a6studio.platform.systemBarPadding
 import cn.dumate.a6studio.ui.canvas.CanvasPanel
 import cn.dumate.a6studio.ui.components.Badge
 import cn.dumate.a6studio.ui.components.badgeKindOf
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.fields.InlineField
 import cn.dumate.a6studio.ui.fields.LocalTextFocusTracker
 import cn.dumate.a6studio.ui.fields.trackTextFocus
@@ -105,7 +107,7 @@ private fun StudioAppContent(state: StudioState) {
                 // Phone layout: the canvas is the primary view; palette and panes become
                 // switchable sheets so nothing gets squeezed off-screen.
                 Column(Modifier.fillMaxSize()) {
-                    PhoneyTabs(state)
+                    PhoneTabs(state)
                     if (state.mobileSheet == MobileSheet.PANE) {
                         Box(Modifier.weight(1f)) {
                             PaneColumn(state, Modifier.fillMaxSize())
@@ -260,8 +262,11 @@ private fun TopBar(state: StudioState) {
 
 @Composable
 private fun BrandMark() {
+    val brush = androidx.compose.ui.graphics.Brush.linearGradient(
+        listOf(Palette.accent, androidx.compose.ui.graphics.Color(0xFF4F46E5))
+    )
     Box(
-        Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)).background(Palette.accent),
+        Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(brush),
         contentAlignment = Alignment.Center
     ) { Text("A6", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Palette.onAccent) }
 }
@@ -294,6 +299,7 @@ private fun RunButton(state: StudioState, modifier: Modifier = Modifier) {
  */
 @Composable
 fun OutlinedChip(label: String, active: Boolean = false, large: Boolean = false, onClick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Text(
         label,
         fontSize = if (large) 13.sp else 11.sp,
@@ -302,7 +308,8 @@ fun OutlinedChip(label: String, active: Boolean = false, large: Boolean = false,
         fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
         modifier = Modifier
             .clip(RoundedCornerShape(if (large) 7.dp else 5.dp))
-            .background(if (active) Palette.panelAlt else Palette.panel)
+            .then(hoverMod)
+            .background(if (active) Palette.panelAlt else if (hovered) Palette.hover else Palette.panel)
             .border(1.dp, Palette.border, RoundedCornerShape(if (large) 7.dp else 5.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = if (large) 13.dp else 9.dp, vertical = if (large) 7.dp else 4.dp)
@@ -325,10 +332,13 @@ private fun ToolbarDivider() {
 /** 顶栏的轻量文字按钮（撤销等）：不用图标，直接写中文，小白也认得出。 */
 @Composable
 private fun QuietTextAction(label: String, onClick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Box(
         Modifier
             .height(36.dp)
             .clip(RoundedCornerShape(10.dp))
+            .then(hoverMod)
+            .background(if (hovered) Palette.hover else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp),
         contentAlignment = Alignment.Center
@@ -340,10 +350,13 @@ private fun QuietTextAction(label: String, onClick: () -> Unit) {
 /** Borderless round icon button, same 36dp height as the run button. */
 @Composable
 private fun QuietAction(glyph: String, hint: String, onClick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Box(
         Modifier
             .size(36.dp)
             .clip(RoundedCornerShape(18.dp))
+            .then(hoverMod)
+            .background(if (hovered) Palette.hover else androidx.compose.ui.graphics.Color.Transparent)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -501,10 +514,17 @@ private fun ScopeTabs(state: StudioState) {
 
 @Composable
 private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit, onDelete: (() -> Unit)? = null) {
+    val (hoverMod, hovered) = rememberHovered()
+    val background = when {
+        active -> if (hovered) Palette.accent.copy(alpha = 0.88f) else Palette.accent
+        hovered -> Palette.hover
+        else -> Palette.panelAlt
+    }
     Row(
         Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(if (active) Palette.accent else Palette.panelAlt)
+            .then(hoverMod)
+            .background(background)
             .clickable(onClick = onClick)
             .padding(start = 8.dp, end = if (onDelete != null && active) 3.dp else 8.dp, top = 4.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -559,16 +579,20 @@ private fun PaneTabs(state: StudioState) {
 fun ToastHost(state: StudioState) {
     val msg = state.toastText.value ?: return
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-        Text(
-            msg,
-            fontSize = 11.5.sp,
-            color = Palette.text,
-            modifier = Modifier.padding(bottom = 40.dp)
-                .clip(RoundedCornerShape(6.dp))
+        Row(
+            Modifier.padding(bottom = 44.dp)
+                .shadow(elevation = 12.dp, shape = RoundedCornerShape(8.dp), clip = false)
+                .clip(RoundedCornerShape(8.dp))
                 .background(Palette.panelAlt)
-                .border(1.dp, Palette.border, RoundedCornerShape(6.dp))
-                .padding(horizontal = 12.dp, vertical = 7.dp)
-        )
+                .border(1.dp, Palette.border, RoundedCornerShape(8.dp))
+                .clickable(onClickLabel = "关闭提示") { state.toastText.value = null }
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(7.dp).clip(RoundedCornerShape(4.dp)).background(Palette.accent))
+            Spacer(Modifier.width(8.dp))
+            Text(msg, fontSize = 11.5.sp, color = Palette.text)
+        }
     }
 }
 
@@ -585,7 +609,8 @@ private fun PaletteColumn(state: StudioState, modifier: Modifier, wideLayout: Bo
             // phone layout they are separate sheets, so there is nothing to drop onto.
             drag = if (wideLayout) state.paletteDrag else null,
             longPressDrag = state.platformRef.name == "android",
-            onDrop = { type, target -> state.dropBlock(type, target) }
+            onDrop = { type, target -> state.dropBlock(type, target) },
+            focusRequest = state.paletteSearchFocusRequest
         )
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
@@ -670,7 +695,7 @@ private fun PaneColumn(state: StudioState, modifier: Modifier) {
 }
 
 @Composable
-private fun PhoneyTabs(state: StudioState) {
+private fun PhoneTabs(state: StudioState) {
     // 分段控件：三段等宽、共用一块底色，读起来是「切换视图」，而不是三个独立按钮。
     Row(
         Modifier.fillMaxWidth().background(Palette.panel).padding(horizontal = 10.dp, vertical = 6.dp)
