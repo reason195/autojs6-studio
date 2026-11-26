@@ -1,6 +1,7 @@
 package cn.dumate.a6studio.ui.panes
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -44,7 +45,7 @@ import cn.dumate.a6studio.ui.components.SectionTitle
 @Composable
 fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
     val lines = state.codeMarkers
-    val selected = state.repo.selected.value
+    val selected = state.repo.selectedId
     val project = state.repo.current
 
     // Which lines belong to the selected block (its own code plus every descendant's).
@@ -73,24 +74,12 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
         if (first != null) listState.animateScrollToItem(first)
     }
 
-    // Which block owns each code line (nearest preceding marker) — enables “click code line
-    // to select the block”, the reverse of the existing block→code highlighting.
-    val lineOwner = remember(lines) {
-        var owner: String? = null
-        Array(lines.size) { i ->
-            val line = lines[i]
-            if (line.isEmptyMarker) { owner = line.blockId; null } else owner
-        }.toList()
-    }
-
     Column(modifier) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(state.cleanCodeInfo.ifEmpty { "生成的 AutoJs6 脚本" }, fontSize = 11.sp, color = P.textDim)
-            Spacer(Modifier.width(8.dp))
-            Text("点代码行可定位积木", fontSize = 9.sp, color = P.textDim.copy(alpha = 0.6f))
             Spacer(Modifier.weight(1f))
             Text(
                 "复制",
@@ -106,7 +95,20 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
         // numbers line up with the wrong text.
         val hScroll = rememberScrollState()
         val widest = remember(lines) {
-            lines.maxOfOrNull { it.text.length } ?: 0
+            // Row width is estimated from the text, so the estimate decides whether long lines
+            // are cut off (`device.heigh…`). Count CJK/full-width chars as two columns, and
+            // leave room for the desktop fontScale (1.08) plus the line-number gutter.
+            var widestCols = 0
+            for (l in lines) {
+                var cols = 0
+                for (ch in l.text) cols += if (ch.code >= 0x2E80) 2 else 1
+                if (cols > widestCols) widestCols = cols
+            }
+            widestCols
+        }
+        val lineNumbers = remember(lines) {
+            var n = 0
+            IntArray(lines.size) { idx -> if (lines[idx].isEmptyMarker) 0 else ++n }
         }
         LazyColumn(
             Modifier.weight(1f).background(P.codeBg).horizontalScroll(hScroll),
@@ -118,16 +120,14 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
                     Box(Modifier.height(0.dp))
                 } else {
                     val isHl = i in highlighted
-                    val owner = lineOwner.getOrNull(i)
                     Row(
                         Modifier.widthIn(min = 420.dp)
-                            .width((widest * 6.6f + 44).dp.coerceAtLeast(420.dp))
+                            .width((widest * 7.8f + 64).dp.coerceAtLeast(420.dp))
                             .background(if (isHl) P.codeHl else androidx.compose.ui.graphics.Color.Transparent)
-                            .then(if (owner != null) Modifier.clickable { state.repo.select(owner) } else Modifier)
                             .padding(horizontal = 8.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            (i + 1).toString().padStart(3, ' '),
+                            lineNumbers[i].toString().padStart(3, ' '),
                             fontSize = 10.sp,
                             color = P.textDim.copy(alpha = 0.45f),
                             fontFamily = FontFamily.Monospace,
@@ -151,6 +151,20 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
 @Composable
 fun RunPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolean = false) {
     Column(modifier) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)
+                .clip(RoundedCornerShape(8.dp)).background(P.panelAlt).padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("不想写代码？", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = P.text)
+            Text("先打开要自动化的 App，回来点下面两步，剩下自动完成。", fontSize = 9.5.sp, color = P.textDim)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallButton("① 识别当前 App") { state.autoDetectForeground() }
+                SmallButton("② 生成并试跑", primary = true) { state.autoGenerateFlow(runAfter = true) }
+            }
+            if (state.autoStatus.isNotBlank()) Text(state.autoStatus, fontSize = 9.5.sp, color = P.info)
+        }
+
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -175,10 +189,10 @@ fun RunPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolean
                 "清空",
                 fontSize = 10.5.sp,
                 color = P.textDim,
-                modifier = Modifier.clickable { state.clearRunLogs() }.padding(4.dp)
+                modifier = Modifier.clickable { state.clearActiveRunLogs() }.padding(4.dp)
             )
         }
-        LogList(state.runLogs, if (state.sendToDevice) state.deviceLog else state.runLogs, Modifier.weight(1f), beginner = beginner)
+        LogList(if (state.sendToDevice) state.deviceLog else state.runLogs, Modifier.weight(1f), beginner = beginner)
     }
 }
 
@@ -188,20 +202,10 @@ private fun SimPhone(state: StudioState) {
         Column(
             Modifier.widthIn(max = 300.dp).fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
-                .background(androidx.compose.ui.graphics.Color(0xFF0A0C10))
+                .background(P.panelAlt)
+                .border(1.dp, P.border, RoundedCornerShape(16.dp))
                 .padding(6.dp)
         ) {
-            Box(
-                Modifier.fillMaxWidth().padding(top = 3.dp, bottom = 3.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                // Speaker slot: cheap realism cue that this is a phone, not a dialog.
-                Box(
-                    Modifier.width(56.dp).height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(androidx.compose.ui.graphics.Color(0xFF232B3C))
-                )
-            }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -216,7 +220,8 @@ private fun SimPhone(state: StudioState) {
             Column(
                 Modifier.fillMaxWidth().height(300.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(androidx.compose.ui.graphics.Color(0xFF12151B))
+                    .background(P.panel)
+                    .border(1.dp, P.borderSoft, RoundedCornerShape(10.dp))
                     .padding(6.dp)
             ) {
                 if (state.simNodes.isEmpty()) {
@@ -266,7 +271,6 @@ private fun SimPhone(state: StudioState) {
 @Composable
 fun LogList(
     logs: List<cn.dumate.a6studio.runtime.LogEntry>,
-    alt: List<cn.dumate.a6studio.runtime.LogEntry>,
     modifier: Modifier = Modifier,
     beginner: Boolean = false
 ) {
@@ -274,7 +278,9 @@ fun LogList(
     LaunchedEffect(logs.size) {
         if (logs.isNotEmpty()) listState.animateScrollToItem(logs.size - 1)
     }
-    LazyColumn(modifier.background(P.codeBg).padding(horizontal = 8.dp), state = listState) {
+    // LazyColumn 不写 fillMaxWidth 时会按内容宽度收缩，空日志时「暂无日志」就变成一块
+    // 贴着左边的窄方块，右边露出面板底色。
+    LazyColumn(modifier.fillMaxWidth().background(P.codeBg).padding(horizontal = 8.dp), state = listState) {
         if (logs.isEmpty()) {
             item { EmptyHint("暂无日志") }
         }

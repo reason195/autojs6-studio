@@ -15,14 +15,22 @@ Windows / macOS / Linux 桌面端用 Compose Desktop，Android 用 Jetpack Compo
 # 桌面端（Windows / macOS / Linux）
 ./gradlew :desktop:run
 
-# 桌面可分发包（Windows 出 msi，macOS 出 dmg，Linux 出 deb）
-./gradlew :desktop:packageReleaseDistributionForCurrentOS
+# 桌面可分发包（免安装目录）
+./gradlew :desktop:createDistributable
+
+# Windows 安装包（MSI，需管理员权限安装）
+./gradlew :desktop:packageMsi
+# 产物：desktop/build/compose/binaries/main/msi/AutoJs6 Studio-<版本>.msi
+# 版本号只有一个来源：gradle.properties 的 a6studio.version（桌面 packageVersion 与
+# Android versionName 都读它，Android 的 versionCode 记得同步 +1）
+# 注意：nativeDistributions.description 必须是纯 ASCII —— jpackage 会把它写进 MSI
+# 摘要信息，WiX 3.x 遇到中文只报一个 `light.exe ... exited with 311 code`（无更多信息）。
 
 # Android APK
 ./gradlew :androidApp:assembleDebug
 # 产物：androidApp/build/outputs/apk/debug/androidApp-debug.apk
 
-# 核心逻辑单测（38 项）
+# 核心逻辑单测（130 项）
 ./gradlew :shared:jvmTest
 ```
 
@@ -34,7 +42,50 @@ node tools/legacy-gen.mjs     # 写出 build/crosscheck/legacy*.js
 ./gradlew :shared:jvmTest
 ```
 
-没有夹具时该用例会打印 SKIP 并跳过，其余 33 项照常执行。
+没有夹具时该用例会打印 `SKIP` 并直接返回，其余用例照常执行。
+
+真机链路（握手 / device_info / ui_dump / script_run / console_tail）只能在本机跑：GitHub 的
+runner 在局域网外，连不到 `192.168.x.x`，令牌也不该进仓库。把 AutoJs6 插件页导出的 MCP 配置
+存成仓库根目录的 `mcp.txt`（支持多段 JSON，已在 `.gitignore` 里），然后：
+
+```bash
+python tools/live-check.py                 # 默认读 ./mcp.txt
+python tools/live-check.py --config ~/mcp.json
+```
+
+脚本会逐台设置 `A6_MCP_URL` / `A6_MCP_TOKEN` 跑 `LiveMcpTest`，打印每台的 ping 延迟、设备型号、
+`ui_dump` 与 `script_run` 结果，令牌在输出里打码。`shared/build.gradle.kts` 把这两个变量声明成了
+测试任务的输入，换设备不会再用上一次的缓存结果。
+
+2026-11-22 实测：一加 CPH2581（Android 16 / API 36）ping 341–455ms，魅族 17 Pro（Android 13 /
+API 33）ping 455–771ms，两台 `script_run` 都是 `finished` 且控制台回读到标记。
+
+想让它也跑在 CI 里，需要一台和手机同网段的自托管 runner（托管 runner 出不去局域网）：
+
+1. 在一台常开的机器上装 self-hosted runner，打上标签 `a6studio-lan`
+2. 把 `mcp.txt` 的内容存成仓库 secret `A6_MCP_CONFIG`
+3. 把仓库变量 `LIVE_DEVICES` 设为 `true`（不设就跳过该 job，避免任务在队列里干等）
+
+然后手动触发 workflow（Actions → build → Run workflow）。`live-devices` job 会写临时 `mcp.txt`、
+跑 `tools/live-check.py`、结束时删掉它；令牌只在 secret 与 runner 的临时工作目录里出现。
+
+CI（`.github/workflows/ci.yml`）在 Windows runner 上跑同一套命令：单测 → Android APK →
+MSI → 免安装包，产物以 `windows-x64` 附件上传；jpackage 失败时会把 `desktop/build/compose/logs`
+一并存下来（它只会报一个 `exit 311`，日志才是线索）。
+
+**发版就一个动作**：把 `gradle.properties` 的版本号改好、在 `docs/release-notes.md` 里加一节
+`## v<版本>`、提交后推 tag（`git tag v1.0.1 && git push origin v1.0.1`）。CI 会构建三件产物、
+算 SHA-256、创建或更新同名 Release，并把该版本小节的说明写进正文——发布说明里的哈希永远等于
+上传的文件。本地复现同一套产物：
+
+```bash
+./gradlew :shared:jvmTest :androidApp:assembleDebug :desktop:packageMsi :desktop:createDistributable
+python tools/make-zip.py --out build/release/AutoJs6Studio-<版本>-windows-x64.zip
+python tools/release-notes.py <版本> --dist build/release   # 打印 Release 正文（含哈希）
+```
+
+免安装 zip 必须用 `tools/make-zip.py` 打：`Compress-Archive` 会把条目分隔符写成反斜杠，
+在 Linux/macOS 上解压得到的是一个名字带 `\` 的文件，而不是目录树。
 
 Android 首次构建需要在仓库根目录放 `local.properties` 指向 SDK：
 
@@ -102,28 +153,36 @@ legacy-web/                 旧 Web 版（HTML/CSS/JS + Electron 壳 + MCP 转�
 三栏：左侧积木库、中间画布、右侧六个页签（代码 / 运行 / 测试 / 诊断 / 真机 / 帮助）。
 窄屏（手机）自动切换成「画布 / 积木 / 面板」三个可切换视图。
 
+顶栏只有三个控件：**蓝色「▶ 运行」**（运行中变成「■ 停止」）、**↶ 撤销**、**⋯ 更多**。
+模板库、新手引导、模式切换、测试、诊断、体检、录制、保存、导入导出、示例/新建全部在「⋯」里按
+视图 / 检查 / 文件 / 项目分组——以前这里是 15 个同等权重的按钮，宽屏要横向滚动、窄屏挤成两行。
+键盘快捷键不受影响（F5 运行、F8 体检、Ctrl+K 搜索等）。
+
 1. **画布**：点左侧积木追加到选中位置（选中容器就进容器，选中普通积木就插到它后面），
    卡片上的参数就地编辑，右侧代码实时刷新并高亮该积木生成的代码行（含子积木）。
-   长按卡片左侧 `⠿` 上下拖动可排序，`↑ ↓ ⧉ ✕` 分别是上移/下移/复制/删除。
-2. **运行**：默认在内置模拟设备上执行生成的脚本，手机屏幕跟着动、日志逐行输出；
+   长按卡片左侧 `⠿` 上下拖动排序；上移/下移/复制/删除收在每张卡右上角的 `⋯` 里
+   （以前是四个并排的图标，一屏十张卡就是四十个点击目标）。
+2. **积木库**：顶部搜索，下面 8 个「常用」积木一点即加，再往下是分类列表——分类默认收起，
+   点一下才展开。简单模式只列 10 个起步积木，底部给一条「想看全部 68 个」的入口。
+3. **运行**：默认在内置模拟设备上执行生成的脚本，手机屏幕跟着动、日志逐行输出；
    勾选「发送到真机」则通过 MCP 把脚本发给 AutoJs6。
-3. **测试**：每个用例是一段可执行断言，可用 `$setScreen` / `$state` / `$run` / `$log` / `assert`。
-4. **诊断**：静态规则（空定位、无 `auto.waitFor()`、无收工判定、缺弹窗重读、网络无异常保护等）
+4. **测试**：每个用例是一段可执行断言，可用 `$setScreen` / `$state` / `$run` / `$log` / `assert`。
+5. **诊断**：静态规则（空定位、无 `auto.waitFor()`、无收工判定、缺弹窗重读、网络无异常保护等）
    + 运行日志回放。
-5. **拾取**：参数旁 `⌖` 连真机取控件，按 `id → id 正则 → text → desc → textContains` 合成候选，
+6. **拾取**：参数旁 `⌖` 连真机取控件，按 `id → id 正则 → text → desc → textContains` 合成候选，
    逐个 `ui_find` 验唯一并评分；可写 `by/value`、单表达式、或 `A.exists() ? A : B` 兜底链。
    截图视图按控件 bounds 叠热区，点空白取坐标，点两下取滑动起止点，拖拽框选区域下钻。
-6. **体检（F8）**：把项目里所有 `by/value` 选择器逐个校验：唯一 / 命中多个 / 未找到（附
+7. **体检（F8）**：把项目里所有 `by/value` 选择器逐个校验：唯一 / 命中多个 / 未找到（附
    `ui_explain_selector` 的首个失败条件）；命中多个时从命中节点反推候选并给一键修好。
-7. **录制（F9）**：把监听脚本推到手机，在手机上操作，回 IDE「读取并生成」把点击/滑动/按键转成积木。
+8. **录制（F9）**：把监听脚本推到手机，在手机上操作，回 IDE「读取并生成」把点击/滑动/按键转成积木。
    也支持「导出脚本」离线录制 + 「导入文件」。
-8. **多设备**：常用设备地址写进项目，下拉直接切换；令牌默认只在内存，可勾选记住（写本机存储）。
+9. **多设备**：常用设备地址写进项目，下拉直接切换；令牌默认只在内存，可勾选记住（写本机存储）。
 
 ## 快捷键
 
-`F5` 运行 · `F6` 测试 · `F7` 诊断 · `F8` 体检 · `F9` 录制
-`Ctrl+S` 保存 · `Ctrl+Z` 撤销 · `Ctrl+E` 导出 JS · `Ctrl+K` 聚焦积木搜索
-`Esc` 关闭面板/取消选中 · `Delete` 删除选中积木
+`F5` 运行 · `Shift+F5` 停止 · `F6` 测试 · `F7` 诊断 · `F8` 体检 · `F9` 录制
+`Ctrl+S` 保存 · `Ctrl+Z` 撤销 · `Ctrl+E` 导出 JS · `Esc` 关闭面板/取消选中
+`Delete` 删除选中积木
 
 ## 积木覆盖的 AutoJs6 能力
 
@@ -181,7 +240,13 @@ legacy-web/                 旧 Web 版（HTML/CSS/JS + Electron 壳 + MCP 转�
 2. 同页「**设置**」→ 打开「**允许局域网连接**」（默认关闭！关着时手机本地能应答、电脑连不上）。
 3. 在同一个设置页复制「**令牌 / Token**」，粘贴到 Studio 真机页的令牌框。
 
-地址填 `http://<手机IP>:9637/mcp`（手机 IP 在设置页「当前局域网地址」里直接看得到）。
+地址可填：
+- 真机直连：`http://<手机IP>:9637/mcp`（手机 IP 在设置页「当前局域网地址」里直接看得到）
+- 本机中转：先跑 `legacy-web/bridge/mcp-bridge.mjs`（带 CORS 的透明转发），再填 `http://127.0.0.1:8765/mcp`
+
+底层调用链为 `initialize` → `notifications/initialized` → `tools/call`，同时兼容普通 JSON 与 `text/event-stream`（SSE）响应；令牌走 `Authorization: Bearer`，默认只存内存。
+
+没有真机也能试拾取器：`node legacy-web/tests/mock-mcp.mjs` 可起一个假设备（内置 9 个节点，故意放两个同名「立即领取」用于验证「不唯一不允许直接填入」）。
 
 ### 实测记录（魅族 17 Pro / Android 13 / AutoJs6 6.8.0 / MCP 插件 1.3.1）
 
@@ -218,43 +283,30 @@ A6_MCP_URL=http://<手机IP>:9637/mcp A6_MCP_TOKEN=<令牌>   ./gradlew :shared:
 
 没设环境变量时该用例自动跳过，不会影响常规测试。
 
-## 真机桥接
-
-AutoJs6 插件中心启用「MCP Server」，在「真机」页填地址：
-
-- 真机直连：`http://<手机IP>:9637/mcp`
-- 或经本机中转：先跑 `legacy-web/bridge/mcp-bridge.mjs`（带 CORS 的透明转发），再填
-  `http://127.0.0.1:8765/mcp`
-
-调用链是 `initialize` → `notifications/initialized` → `tools/call`，同时兼容 JSON 与
-`text/event-stream` 响应。令牌走 `Authorization: Bearer`，默认只存内存。
-
-没真机也能试拾取器：`node legacy-web/tests/mock-mcp.mjs` 起一个假设备（内置 9 个节点，
-故意放两个同名「立即领取」验证「不唯一不允许直接填入」）。
-
 ## 已验证与未验证
 
 **已在本次改版中实测：**
 
-- `./gradlew :shared:jvmTest` 49 项通过（代码生成、树操作/撤销、模块作用域、Rhino 运行完整示例、
-  三个内置测试用例、拾取器候选/评分/兜底链/区域层级、录制解析与坐标归一化）。
+- `./gradlew :shared:jvmTest` 130 项通过（代码生成、语法守卫、旧版逐行对齐、id 唯一性、树操作/撤销、模块作用域、
+  Rhino 后台运行完整示例、死循环超时与手动停止控制、三个内置测试用例、SSE 分帧与分块 UTF-8 解码、导入脚本的
+  语句顺序与嵌套、模拟器 Java 互操作拦截、拾取器候选/评分/兜底链/区域层级、录制解析与坐标归一化、坏项目文件
+  备份与保存失败上报、转义一致性）。
 - `./gradlew :androidApp:assembleDebug` 产出 11.8 MB debug APK。
+- **Linux 也能构建**：CI 的 `linux` job（ubuntu-latest）跑通编译、单测与 `:desktop:createDistributable`，
+  产物里的 `bin/AutoJs6 Studio` 是 22 KB 的可执行启动器。macOS 仍未验证、也未出安装包。
 - `./gradlew :desktop:run` 启动成功，逐页截图核对过：代码页（含语法高亮般的基础着色与选中行高亮）、
   运行页（模拟手机跑完整流程，日志显示 3 个任务完成、空弹窗、收工）、测试页（3 个用例可见可编辑）、
   诊断页、真机页、帮助页、体检弹层、录制弹层、以及 760px 窄屏的手机布局。
-
 - 简单模式（首次向导 5 步、模板库 5 个模板、积木人话说明、报错翻译）已在桌面端与
   一加 CPH2581 / 魅族 17 Pro 上截图核对；模板「选完直接运行」的闭环在两端都跑通，
   手机端显示「跑完了（模拟用了 40s）」。
+- 真机 MCP 核心链路已在魅族 17 Pro（Android 13 / AutoJs6 6.8.0）实测跑通：Ping 366–540ms、
+  `device_info`、`ui_dump`、`current_window`、`script_run`、`console_tail` 全部连通；界面右上角显示「真机: meizu meizu 17 Pro」。
 
-**真机 MCP 已验证（2026-11-22，魅族 17 Pro）**：Ping 366–540ms、device_info、ui_dump、
-script_run 全部跑通；界面右上角显示「真机: meizu meizu 17 Pro」。
+**尚未在真机/多平台上完整验证：**
 
-**尚未在真机上验证：**
-
-- MCP 连接、拾取器取控件、体检、录制的真机链路——本机没有挂 Android 设备，只做了协议实现与
-  纯逻辑单测（用 `legacy-web/tests/mock-mcp.mjs` 的夹具数据）。上真机后的行为以 AutoJs6 为准。
-- macOS 打包（需要 Mac 环境）、Android release 签名。
+- 拾取器（截图叠热区与框选下钻）、体检一键修好、录制「读取并生成」的端到端真机交互，目前主要通过 `legacy-web/tests/mock-mcp.mjs` 夹具与纯逻辑单测覆盖。
+- macOS / Linux 安装包构建（需对应系统环境）、Android release 签名。
 
 **已知差异（相比 legacy-web）：**
 
@@ -263,6 +315,14 @@ script_run 全部跑通；界面右上角显示「真机: meizu meizu 17 Pro」�
   厂商弹窗）只能在真机上验证。
 - 示例项目全部用表达式定位京东页面，因此「体检」对示例项目显示 0 个可体检项——这是预期行为，
   自己拖入 `clickNode` 这类用 `by/value` 的积木后才有体检对象。
+
+## 模拟器的边界（安全设计，不是缺陷）
+
+模拟运行在电脑上执行脚本，所以它**不提供 Java 互操作**：`java.*` / `javax.*` / `jdk.*` /
+`com.sun.*` 等包名一律被 Rhino 的 ClassShutter 拦下，`importClass` / `importPackage` 会记录一条
+「模拟器不执行 Java 互操作，需要在真机验证」的日志后继续执行。否则任何一个导入的 `.js`——你不知道
+它里面写了什么——点一下运行就能以你的身份在电脑上 `Runtime.exec`、删文件。用到 Java 类的脚本请在
+真机上跑（勾选「发送到真机」）。
 
 ## 边界（沿用旧版实测结论）
 

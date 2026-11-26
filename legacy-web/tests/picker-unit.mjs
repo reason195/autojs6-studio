@@ -60,5 +60,35 @@ eq('无 expr 走 by/value', A6.gen.block(cbd).indexOf('text("立即领奖").find
 const cbe = A6.store.mkBlock('existsVar', { expr: 'id("a:b")' });
 eq('existsVar 用表达式', A6.gen.block(cbe).indexOf('(id("a:b")).exists()') >= 0, true);
 
+// 形参列表只保留普通标识符：自由文本不能拼出顶层可执行代码
+const fd = A6.store.mkBlock('funcDef', { name: 'f', args: 'a) {} evil(); function z(b' });
+eq('funcDef 形参过滤注入', A6.gen.block(fd).split('\n')[0], 'function f() {');
+const fd2 = A6.store.mkBlock('funcDef', { name: 'f', args: ' a , b-c, $d, if, 9x ' });
+eq('funcDef 形参过滤非法项', A6.gen.block(fd2).split('\n')[0], 'function f(a, $d) {');
+const modCode = A6.gen.code({ name: 't', modules: [{ id: 'm1', name: 'm', args: 'x) {} evil(); (', children: { body: [] } }], root: { children: { body: [] } } });
+eq('模块形参过滤注入', modCode.indexOf('evil') < 0 && modCode.indexOf('function mod_m() {') >= 0, true);
+
+// 直接拼进代码的名字必须是标识符；注释里的文本不能逃出注释
+const fn = A6.gen.block(A6.store.mkBlock('funcDef', { name: 'f() {} evil(); function g', args: '' }));
+eq('funcDef 非法函数名跳过', fn.indexOf('function f()') < 0 && fn.indexOf('// 非法标识符已跳过') === 0 && fn.indexOf('\n') < 0, true);
+const vs = A6.gen.block(A6.store.mkBlock('varSet', { name: 'x = 1; evil(); var y', expr: '2' }));
+eq('varSet 非法变量名跳过', vs.indexOf('// 非法标识符已跳过') === 0, true);
+eq('varSet 合法变量名照常', A6.gen.block(A6.store.mkBlock('varSet', { name: 'x', expr: '2' })).indexOf('x') >= 0, true);
+const cm = A6.gen.block(A6.store.mkBlock('comment', { text: '说明\r下一行 evil()\u2028x' }));
+eq('注释吞掉所有行终止符', /[\r\n\u2028\u2029]/.test(cm), false);
+const hc = A6.gen.code({ name: 'p */ evil(); /*', modules: [{ id: 'm1', name: 'm', desc: 'd */ evil2(); /*', args: '', children: { body: [] } }], root: { children: { body: [] } } });
+eq('工程名/模块说明不能闭合块注释', hc.indexOf('*/ evil') < 0 && hc.indexOf('* / evil();') >= 0 && hc.indexOf('* / evil2();') >= 0, true);
+
+// AutoJs6 手势与按键正确签名 + launchPackage(wait=0) + 纯空格函数名兜底
+eq('edgeBackGesture 正确手势签名', A6.gen.block(A6.store.mkBlock('edgeBackGesture', {})), 'gesture(320, [2, device.height * 0.5], [device.width * 0.65, device.height * 0.5]);');
+eq('jdCrossApp 正确手势签名', A6.gen.block(A6.store.mkBlock('jdCrossApp', {})).indexOf('gesture(320, [2, device.height * 0.5], [device.width * 0.65, device.height * 0.5]);') >= 0, true);
+eq('pressKey back', A6.gen.block(A6.store.mkBlock('pressKey', { key: 'back' })), 'back();');
+eq('pressKey home', A6.gen.block(A6.store.mkBlock('pressKey', { key: 'home' })), 'home();');
+eq('pressKey recents', A6.gen.block(A6.store.mkBlock('pressKey', { key: 'recents' })), 'recents();');
+eq('pressKey menu', A6.gen.block(A6.store.mkBlock('pressKey', { key: 'menu' })), 'KeyCode("KEYCODE_MENU");');
+eq('launchPackage wait=0 不生成 sleep', A6.gen.block(A6.store.mkBlock('launchPackage', { pkg: 'com.jd.jrapp', wait: 0 })), 'app.launchPackage("com.jd.jrapp");');
+eq('launchPackage 默认等待', A6.gen.block(A6.store.mkBlock('launchPackage', { pkg: 'com.jd.jrapp' })), 'app.launchPackage("com.jd.jrapp");\nsleep(1500);');
+eq('funcDef 纯空格函数名回退 fn', A6.gen.block(A6.store.mkBlock('funcDef', { name: '   ', args: '' })).split('\n')[0], 'function fn() {');
+
 console.log(fail ? '\n' + fail + ' 项失败' : '\n全部通过');
 process.exit(fail ? 1 : 0);

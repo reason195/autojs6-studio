@@ -3,6 +3,7 @@ package cn.dumate.a6studio.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.offset
@@ -32,8 +33,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,7 +55,6 @@ import cn.dumate.a6studio.ui.components.BadgeKind
 import cn.dumate.a6studio.ui.components.Chip
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.components.KV
-import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.fields.InlineField
 import cn.dumate.a6studio.ui.fields.SearchField
 import cn.dumate.a6studio.ui.panes.SmallButton
@@ -67,11 +69,8 @@ private fun OverlayFrame(
     headerActions: @Composable (() -> Unit)? = null,
     body: @Composable (Modifier) -> Unit
 ) {
-    // Scrim does NOT dismiss: an accidental click outside the dialog would otherwise throw
-    // away in-flight state (e.g. a running recorder or audit results). Close via ✕ or Esc.
-    val (closeHoverMod, closeHovered) = rememberHovered()
     Box(
-        Modifier.fillMaxSize().background(Color(0xCC05070A)),
+        Modifier.fillMaxSize().background(Color(0x661F2328)).clickable(onClick = onClose),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -79,6 +78,7 @@ private fun OverlayFrame(
                 .clip(RoundedCornerShape(10.dp))
                 .background(Palette.panel)
                 .border(1.dp, Palette.border, RoundedCornerShape(10.dp))
+                .clickable(enabled = false) { }
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
@@ -91,13 +91,8 @@ private fun OverlayFrame(
                 headerActions?.invoke()
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "✕", fontSize = 12.sp, color = if (closeHovered) Palette.text else Palette.textDim,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(5.dp))
-                        .then(closeHoverMod)
-                        .background(if (closeHovered) Palette.hover else Color.Transparent)
-                        .clickable(onClick = onClose)
-                        .padding(5.dp)
+                    "✕", fontSize = 12.sp, color = Palette.textDim,
+                    modifier = Modifier.clickable(onClick = onClose).padding(4.dp)
                 )
             }
             androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.border))
@@ -193,13 +188,11 @@ fun PickerOverlay(state: StudioState) {
 
 @Composable
 private fun ViewTab(label: String, active: Boolean, onClick: () -> Unit) {
-    val (hoverMod, hovered) = rememberHovered()
     Text(
         label, fontSize = 10.5.sp,
-        color = if (active) Color.White else Palette.textDim,
+        color = if (active) Palette.onAccent else Palette.textDim,
         modifier = Modifier.clip(RoundedCornerShape(4.dp))
-            .then(hoverMod)
-            .background(if (active) Palette.accent.copy(alpha = 0.7f) else if (hovered) Palette.hover else Palette.panelAlt)
+            .background(if (active) Palette.accent else Palette.panelAlt)
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 4.dp)
     )
@@ -258,18 +251,26 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
     val dh = s.deviceHeight
 
     Column(modifier.verticalScroll(rememberScrollState()).padding(8.dp)) {
-        if (s.shotBase64 == null) {
+        val shotBase64 = s.shotBase64
+        if (shotBase64 == null) {
             EmptyHint("切到「截图」会自动抓一张当前屏幕；拖拽可框选一块区域下钻", Modifier.padding(8.dp))
+            SmallButton("重新截图") { state.pickerCapture() }
+            return@Column
+        }
+        val bitmap = remember(shotBase64) { runCatching { decodeBase64ToImage(shotBase64) }.getOrNull() }
+        if (bitmap == null) {
+            EmptyHint("截图解码失败（图片数据无效或格式不受支持）", Modifier.padding(8.dp))
             SmallButton("重新截图") { state.pickerCapture() }
             return@Column
         }
         BoxWithConstraints(
             Modifier.fillMaxWidth().height(520.dp)
                 .clip(RoundedCornerShape(6.dp))
-                .background(Color(0xFF0A0C10))
+                .background(Palette.panelAlt)
         ) {
             // The image is letterboxed inside this box; map device coords onto the drawn area
             // so hot zones and taps line up with the screenshot.
+            val density = LocalDensity.current
             val boxW = maxWidth
             val boxH = maxHeight
             val scale = minOf(boxW / dw.dp, boxH / dh.dp)
@@ -277,11 +278,21 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
             val drawnH = dh.dp * scale
             val offsetX = (boxW - drawnW) / 2
             val offsetY = (boxH - drawnH) / 2
+            val offsetXPx = with(density) { offsetX.toPx() }
+            val offsetYPx = with(density) { offsetY.toPx() }
+            val drawnWPx = with(density) { drawnW.toPx() }.coerceAtLeast(1f)
+            val drawnHPx = with(density) { drawnH.toPx() }.coerceAtLeast(1f)
+            var dragStart by remember(shotBase64) { mutableStateOf<Offset?>(null) }
+            var dragEnd by remember(shotBase64) { mutableStateOf<Offset?>(null) }
+
+            fun toDevX(pxVal: Float) = ((pxVal - offsetXPx) / drawnWPx * dw).toInt().coerceIn(0, dw)
+            fun toDevY(pyVal: Float) = ((pyVal - offsetYPx) / drawnHPx * dh).toInt().coerceIn(0, dh)
 
             androidx.compose.foundation.Image(
-                bitmap = remember(s.shotBase64) { decodeBase64ToImage(s.shotBase64!!) },
+                bitmap = bitmap,
                 contentDescription = "device screen",
                 contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.High,
                 modifier = Modifier.fillMaxSize()
             )
 
@@ -301,22 +312,20 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
                         .offset(x = px(n.left), y = py(n.top))
                         .size(width = drawnW * (w / dw), height = drawnH * (h / dh))
                         .border(
-                            1.dp,
-                            if (isSel) Color.White else if (n.clickable) Palette.ok.copy(alpha = 0.75f) else Palette.info.copy(alpha = 0.45f),
+                            if (isSel) 2.dp else 1.dp,
+                            if (isSel) Palette.accent else if (n.clickable) Palette.ok.copy(alpha = 0.75f) else Palette.info.copy(alpha = 0.45f),
                             RoundedCornerShape(1.dp)
                         )
-                        .clickable { state.pickerSelect(n) }
                 )
             }
 
-            // Tap anywhere on the screenshot: coord mode stores the point, swipe mode takes
-            // successive points, selector mode selects the topmost node under the tap.
+            // Tap anywhere on the screenshot or drag to drill into a sub-region.
             Box(
                 Modifier.fillMaxSize()
-                    .pointerInput(s.shotBase64, s.target?.kind) {
+                    .pointerInput(shotBase64, s.target?.kind, s.visibleNodes, offsetXPx, offsetYPx, drawnWPx, drawnHPx, dw, dh) {
                         detectTapGestures { pos ->
-                            val dx = ((pos.x - offsetX.value) / (drawnW.value.coerceAtLeast(1f)) * dw).toInt().coerceIn(0, dw)
-                            val dy = ((pos.y - offsetY.value) / (drawnH.value.coerceAtLeast(1f)) * dh).toInt().coerceIn(0, dh)
+                            val dx = toDevX(pos.x)
+                            val dy = toDevY(pos.y)
                             when (s.target?.kind) {
                                 PickKind.COORD -> state.pickerCoord(dx, dy)
                                 PickKind.SWIPE -> {
@@ -332,7 +341,52 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
                             }
                         }
                     }
+                    .pointerInput(shotBase64, offsetXPx, offsetYPx, drawnWPx, drawnHPx, dw, dh) {
+                        detectDragGestures(
+                            onDragStart = { start ->
+                                dragStart = start
+                                dragEnd = start
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                dragEnd = change.position
+                            },
+                            onDragCancel = {
+                                dragStart = null
+                                dragEnd = null
+                            },
+                            onDragEnd = {
+                                val a = dragStart
+                                val b = dragEnd
+                                dragStart = null
+                                dragEnd = null
+                                if (a != null && b != null) {
+                                    val l = minOf(toDevX(a.x), toDevX(b.x))
+                                    val t = minOf(toDevY(a.y), toDevY(b.y))
+                                    val r = maxOf(toDevX(a.x), toDevX(b.x))
+                                    val bot = maxOf(toDevY(a.y), toDevY(b.y))
+                                    state.pickerDrill(l, t, r, bot)
+                                }
+                            }
+                        )
+                    }
             )
+
+            // Drag selection preview box
+            val ds = dragStart
+            val de = dragEnd
+            if (ds != null && de != null) {
+                val leftDp = with(density) { minOf(ds.x, de.x).toDp() }
+                val topDp = with(density) { minOf(ds.y, de.y).toDp() }
+                val wDp = with(density) { kotlin.math.abs(de.x - ds.x).toDp() }
+                val hDp = with(density) { kotlin.math.abs(de.y - ds.y).toDp() }
+                Box(
+                    Modifier.offset(x = leftDp, y = topDp)
+                        .size(width = wDp, height = hDp)
+                        .background(Palette.accent.copy(alpha = 0.14f))
+                        .border(1.5.dp, Palette.accent, RoundedCornerShape(2.dp))
+                )
+            }
 
             // Marks for the current selection / picked point / swipe points.
             s.coord?.let { c ->
@@ -353,7 +407,7 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
                             .background(if (i == 0) Palette.warn else Palette.ok),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(if (i == 0) "①" else "②", fontSize = 8.sp, color = Color.Black)
+                        Text(if (i == 0) "①" else "②", fontSize = 8.sp, color = Color.White)
                     }
                 }
             }
@@ -368,14 +422,21 @@ private fun PickerShot(state: StudioState, modifier: Modifier) {
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text("在截图上传坐标：输入或点选设备坐标后填入", fontSize = 10.sp, color = Palette.textDim)
+        // 大部分人是「在图上点一下」，手动输入坐标是少数场景：默认收起，点开才出现。
+        var manual by remember { mutableStateOf(false) }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            var x by remember { mutableStateOf("0") }
-            var y by remember { mutableStateOf("0") }
-            InlineField(x, { x = it }, placeholder = "x", mono = true, modifier = Modifier.width(70.dp))
-            InlineField(y, { y = it }, placeholder = "y", mono = true, modifier = Modifier.width(70.dp))
-            SmallButton("取坐标") { state.pickerCoord(x.toIntOrNull() ?: 0, y.toIntOrNull() ?: 0) }
             SmallButton("重新截图") { state.pickerCapture() }
+            SmallButton(if (manual) "收起手动输入" else "手动输入坐标") { manual = !manual }
+        }
+        if (manual) {
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                var x by remember { mutableStateOf("0") }
+                var y by remember { mutableStateOf("0") }
+                InlineField(x, { x = it }, placeholder = "x", mono = true, modifier = Modifier.width(70.dp))
+                InlineField(y, { y = it }, placeholder = "y", mono = true, modifier = Modifier.width(70.dp))
+                SmallButton("取坐标") { state.pickerCoord(x.toIntOrNull() ?: 0, y.toIntOrNull() ?: 0) }
+            }
         }
         if (s.coord != null) {
             Text("已取点 ${s.coord.first}, ${s.coord.second}", fontSize = 10.5.sp, color = Palette.accent)
@@ -397,7 +458,7 @@ private fun PickerDetail(state: StudioState) {
         if (a != null && b != null) {
             val dx = b.first - a.first
             val dy = b.second - a.second
-            KV("位移", "$dx, $dy · 距离 ${Math.sqrt((dx * dx + dy * dy).toDouble()).toInt()}px")
+            KV("位移", "$dx, $dy · 距离 ${kotlin.math.sqrt((dx * dx + dy * dy).toDouble()).toInt()}px")
         }
         Spacer(Modifier.height(8.dp))
         Text("在截图上点两下取起止点，也可以点两个控件用它们的中心；第三下会重新取起点。", fontSize = 10.sp, color = Palette.textDim)
@@ -410,7 +471,7 @@ private fun PickerDetail(state: StudioState) {
             }
         }
         Spacer(Modifier.height(4.dp))
-        SmallButton("重取") { state.pickerSwipePoint(0, 0) }
+        SmallButton("重取") { state.pickerClearSwipePoints() }
         return
     }
 
@@ -433,17 +494,23 @@ private fun PickerDetail(state: StudioState) {
 
     // selector mode
     val sel = s.selected
+    // Every branch below writes into the picked parameter; without a target there is nowhere to
+    // write, and `target!!` would have crashed the whole overlay instead of just doing nothing.
+    val t = target ?: return
     if (sel == null) {
         EmptyHint("点一个控件查看候选选择器；或切到「截图」取坐标")
         return
     }
     Text(PickerLogic.shortClass(sel.className), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
     Text(sel.text.ifEmpty { sel.desc }, fontSize = 10.5.sp, color = Palette.textDim)
-    Spacer(Modifier.height(6.dp))
-    KV("id", sel.id.ifEmpty { "—" })
-    KV("desc", sel.desc.ifEmpty { "—" })
-    KV("bounds", "${sel.left}, ${sel.top}, ${sel.right}, ${sel.bottom}")
-    KV("center", "${sel.centerX}, ${sel.centerY}")
+    Spacer(Modifier.height(4.dp))
+    // 原来 id / desc / bounds / center 各占一行（四行都是短值），压成两行：
+    // 判重主要看哪个控件，位置只要够判断「是不是它」。
+    Text("id ${sel.id.ifEmpty { "—" }}", fontSize = 10.sp, color = Palette.textDim, fontFamily = FontFamily.Monospace)
+    Text(
+        "desc ${sel.desc.ifEmpty { "—" }} · ${sel.left},${sel.top} → ${sel.right},${sel.bottom} · 中心 ${sel.centerX},${sel.centerY}",
+        fontSize = 10.sp, color = Palette.textDim, fontFamily = FontFamily.Monospace
+    )
     Spacer(Modifier.height(8.dp))
 
     if (s.candidates.isEmpty()) {
@@ -452,7 +519,7 @@ private fun PickerDetail(state: StudioState) {
     s.candidates.forEach { c ->
         CandidateRow(c, chosen = c === s.chosen) {
             state.applyPick(
-                PickResult(target!!.blockId, PickKind.SELECTOR, by = c.by, value = c.value)
+                PickResult(t.blockId, PickKind.SELECTOR, by = c.by, value = c.value)
             )
         }
     }
@@ -470,36 +537,45 @@ private fun PickerDetail(state: StudioState) {
     }
 
     Spacer(Modifier.height(10.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    // 四个同等权重的按钮（填入积木 / 填入为表达式 / 填入兜底表达式 / 强制写入最稳候选）
+    // 让「我到底该点哪个」变成一道选择题。默认动作只留一个，其余是备选。
+    var more by remember { mutableStateOf(false) }
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         SmallButton("填入积木", primary = chosen != null) {
-            if (chosen != null) state.applyPick(PickResult(target!!.blockId, PickKind.SELECTOR, by = chosen.by, value = chosen.value))
+            if (chosen != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, by = chosen.by, value = chosen.value))
         }
-        SmallButton("填入为表达式", primary = false) {
-            val expr = chosen?.let { PickerLogic.toExpr(it) } ?: PickerLogic.bestOf(s.candidates)?.let { PickerLogic.toExpr(it) }
-            if (expr != null) state.applyPick(PickResult(target!!.blockId, PickKind.SELECTOR, expr = expr))
-        }
+        // 备选填法不用弹出菜单：面板只有 320-400dp 宽，内联展开既不会被裁掉，
+        // 也能一眼看见三种写法分别是什么。
+        SmallButton(if (more) "收起备选" else "其他填法…") { more = !more }
     }
-    Spacer(Modifier.height(4.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        SmallButton("填入兜底表达式") {
-            val expr = PickerLogic.chainExpr(s.candidates)
-            if (expr != null) state.applyPick(PickResult(target!!.blockId, PickKind.SELECTOR, expr = expr))
+    if (more) {
+        Spacer(Modifier.height(6.dp))
+        Text("备选填法", fontSize = 10.sp, color = Palette.textDim)
+        Spacer(Modifier.height(4.dp))
+        SmallButton("填入为表达式") {
+            val expr = chosen?.let { PickerLogic.toExpr(it) }
+                ?: PickerLogic.bestOf(s.candidates)?.let { PickerLogic.toExpr(it) }
+            if (expr != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, expr = expr))
         }
-        SmallButton("强制写入最稳候选") {
+        Spacer(Modifier.height(4.dp))
+        SmallButton("填入兜底表达式（多个条件依次试）") {
+            val expr = PickerLogic.chainExpr(s.candidates)
+            if (expr != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, expr = expr))
+        }
+        Spacer(Modifier.height(4.dp))
+        SmallButton("强制写入分数最高的候选") {
             val best = PickerLogic.bestOf(s.candidates)
-            if (best != null) state.applyPick(PickResult(target!!.blockId, PickKind.SELECTOR, by = best.by, value = best.value))
+            if (best != null) state.applyPick(PickResult(t.blockId, PickKind.SELECTOR, by = best.by, value = best.value))
         }
     }
 }
 
 @Composable
 private fun CandidateRow(c: Candidate, chosen: Boolean, onApply: () -> Unit) {
-    val (hoverMod, hovered) = rememberHovered()
     Row(
         Modifier.fillMaxWidth().padding(vertical = 2.dp)
             .clip(RoundedCornerShape(4.dp))
-            .then(hoverMod)
-            .background(if (chosen) Palette.ok.copy(alpha = 0.12f) else if (hovered) Palette.hover else Palette.panelAlt)
+            .background(if (chosen) Palette.ok.copy(alpha = 0.12f) else Palette.panelAlt)
             .clickable(onClick = onApply)
             .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically

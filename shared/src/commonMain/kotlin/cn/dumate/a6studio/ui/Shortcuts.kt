@@ -6,6 +6,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
@@ -14,8 +15,7 @@ import androidx.compose.foundation.focusable
 
 /**
  * Keyboard shortcuts matching the web build: F5 run, F6 tests, F7 diagnose, F8 audit,
- * F9 recorder, Ctrl+S save, Ctrl+Z undo, Ctrl+E export, Ctrl+K focus block search,
- * Delete removes the selected block.
+ * F9 recorder, Ctrl+S save, Ctrl+Z undo, Ctrl+E export, Delete removes the selected block.
  */
 @Composable
 fun Modifier.studioShortcuts(state: StudioState): Modifier {
@@ -24,19 +24,35 @@ fun Modifier.studioShortcuts(state: StudioState): Modifier {
         .onKeyEvent { ev ->
             if (ev.type != KeyEventType.KeyDown) return@onKeyEvent false
             val ctrl = ev.isCtrlPressed || ev.isMetaPressed
+            val editingText = state.textFocusTracker.hasFocus
+            val hasModal = state.overlay != Overlay.NONE || state.showTemplatePicker || state.showGuide
             when {
+                ev.key == Key.F5 && ev.isShiftPressed -> { state.stopRun(); true }
                 ev.key == Key.F5 -> { state.run(); true }
                 ev.key == Key.F6 -> { state.runTests(); true }
                 ev.key == Key.F7 -> { state.showPane(Pane.DIAG); true }
                 ev.key == Key.F8 -> { state.openAudit(); true }
                 ev.key == Key.F9 -> { state.openRecorder(); true }
                 ctrl && ev.key == Key.S -> { state.saveNow(); true }
-                ctrl && ev.key == Key.Z -> { state.undo(); true }
+                ctrl && ev.key == Key.Z -> {
+                    if (editingText || hasModal) false else { state.undo(); true }
+                }
                 ctrl && ev.key == Key.E -> { state.exportJs(); true }
-                ctrl && ev.key == Key.K -> { state.requestPaletteSearchFocus(); true }
-                ev.key == Key.Escape -> { state.closeOverlay(); true }
+                ev.key == Key.Escape -> {
+                    if (hasModal) {
+                        state.closeOverlay()
+                        state.showTemplatePicker = false
+                        state.showGuide = false
+                        true
+                    } else if (state.repo.selectedId != null) {
+                        state.repo.select(null)
+                        true
+                    } else false
+                }
                 ev.key == Key.Delete -> {
-                    if (state.repo.selected.value != null) { state.removeSelected(); true } else false
+                    if (!editingText && !hasModal && state.repo.selectedId != null) {
+                        state.removeSelected(); true
+                    } else false
                 }
                 else -> false
             }

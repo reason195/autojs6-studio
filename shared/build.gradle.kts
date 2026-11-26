@@ -50,6 +50,13 @@ kotlin {
     }
 }
 
+// LiveMcpTest 靠环境变量连真机。Gradle 默认不把环境变量当输入，换一台手机（或换令牌）后
+// 任务仍是 UP-TO-DATE，跑的还是上一台的日志——实测踩过。声明成输入后每次都会真的重跑。
+tasks.withType<Test>().configureEach {
+    inputs.property("A6_MCP_URL", providers.environmentVariable("A6_MCP_URL").orElse(""))
+    inputs.property("A6_MCP_TOKEN", providers.environmentVariable("A6_MCP_TOKEN").orElse(""))
+}
+
 android {
     namespace = "cn.dumate.a6studio.shared"
     compileSdk = 35

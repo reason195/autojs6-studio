@@ -29,14 +29,10 @@ object BeginnerCopy {
         "任务循环体为空" to "「遍历任务」积木里面还没放东西",
         "缺少「收工判定」" to "京东示例少了「确认做完」那一步",
         "模块名为空" to "有一个模块没起名字",
-        "模块「" to "有一个模块是空的，调用它什么也不会发生",
         "还没有测试用例" to "还没有「自检」用例（可以不管）",
         "运行抛出异常" to "脚本跑到一半停下来了",
-        "有" to "有几次没等到要找的东西",
-        "循环保护触发" to "重复太多次被自动叫停了",
-        "断言失败" to "自检没通过",
-        "疑似「0 任务」误判收工" to "可能漏做了任务就提前结束",
-        "模拟耗时" to "这次模拟跑得比较久"
+        "运行超时被自动停止" to "脚本一直跑个不停，被自动叫停了",
+        "疑似「0 任务」误判收工" to "可能漏做了任务就提前结束"
     )
 
     private val hints: Map<String, String> = mapOf(
@@ -49,16 +45,21 @@ object BeginnerCopy {
         "容器积木是空的" to "把要做的动作拖到它下面；没有内容的话，删掉也可以。",
         "任务循环体为空" to "把「完成一个任务」这块放进「遍历任务」里面。",
         "运行抛出异常" to "看下面日志最后一行，那里写着停在了哪一步。",
+        "运行超时被自动停止" to "检查「重复」积木或代码里的循环结束条件，是不是永远停不下来。",
         "疑似「0 任务」误判收工" to "在「确认做完」之前，先放一块「关掉弹窗再重新数一遍」。"
     )
 
     /** Falls back to the original title when there is no friendlier wording. */
     fun issueTitle(technical: String): String {
-        titles.entries
-            .filter { technical.startsWith(it.key) }
-            .maxByOrNull { it.key.length }
-            ?.let { return technical.replace(it.key, it.value) }
-        return technical
+        titles[technical]?.let { return it }
+        return when {
+            technical.startsWith("模块「") -> "有一个模块是空的，调用它什么也不会发生"
+            technical.startsWith("有 ") && technical.contains("等待超时") -> "有几次没等到要找的东西"
+            technical.startsWith("循环保护触发") -> "重复太多次被自动叫停了"
+            technical.startsWith("断言失败") -> "自检没通过"
+            technical.startsWith("模拟耗时") -> "这次模拟跑得比较久"
+            else -> technical
+        }
     }
 
     fun issueHint(technical: String, original: String): String {
@@ -78,6 +79,8 @@ object BeginnerCopy {
         status == "运行中" -> "正在跑…"
         status == "异常" -> "跑到一半出错了"
         status == "已退出" -> "脚本自己结束了"
+        status == "已停止" -> "你让它停下了"
+        status == "超时" -> "跑太久被自动停下了"
         status == "未运行" -> "还没开始"
         status.startsWith("真机") -> "在真机上跑完了"
         else -> status
@@ -87,6 +90,7 @@ object BeginnerCopy {
     fun logLine(msg: String): String = when {
         msg.contains("未找到控件") -> msg + "　← 屏幕上看不到这个文字，可能已经变了"
         msg.contains("等待控件超时") -> msg + "　← 等了很久也没出现，检查字是不是写错了"
+        msg.contains("被自动停止") -> msg + "　← 多半是某个循环永远停不下来，检查循环的结束条件"
         msg.contains("循环保护触发") -> msg + "　← 重复太多次被自动停下，避免卡死"
         msg.contains("断言失败") -> msg + "　← 自检没通过"
         msg.contains("收工") -> msg + "　← 确认没有更多任务了"

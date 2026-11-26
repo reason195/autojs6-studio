@@ -13,8 +13,6 @@ import cn.dumate.a6studio.model.newBlock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.Json
 
 /**
@@ -29,48 +27,145 @@ class ProjectRepo(private val storage: ProjectStorage) {
         prettyPrint = false
     }
 
-    // Compose `mutableStateOf` rather than StateFlow: the UI reads these directly
-    // (`repo.current`, `repo.scope.value`), and a StateFlow would need a collectAsState() in
-    // every call site — measured bug: clicking 「+ 模块」 changed the Flow but never recomposed,
-    // so new modules only appeared after some unrelated state change.
+    // Compose `mutableStateOf`: the UI reads these directly, so a write recomposes immediately.
+    //
+    // (An earlier version exposed `val project: StateFlow<X> get() = MutableStateFlow(...)`, which
+    // built a NEW flow on every property access — reads always "worked" by accident while the
+    // observable was thrown away, so nothing ever collected it. Plain Compose state is both
+    // cheaper and honest about what it is.)
     private var _projectState by mutableStateOf(Project())
     private var _selectedState by mutableStateOf<String?>(null)
     private var _scopeState by mutableStateOf<Scope>(Scope.Root)
     private var _toastState by mutableStateOf<String?>(null)
 
-    val project: StateFlow<Project> get() = MutableStateFlow(_projectState)
-    val selected: StateFlow<String?> get() = MutableStateFlow(_selectedState)
-    val scope: StateFlow<Scope> get() = MutableStateFlow(_scopeState)
-    val toast: StateFlow<String?> get() = MutableStateFlow(_toastState)
+    /** Current selection id; [null] means nothing selected. */
+    val selectedId: String? get() = _selectedState
+
+    /** Active editing scope (main program or one module). */
+    val currentScope: Scope get() = _scopeState
+
+    /** Transient message for the host UI, if any. */
+    val toastMessage: String? get() = _toastState
 
     private val undoStack = ArrayDeque<Pair<String, String>>()
     private val maxUndo = 60
 
     val current: Project get() = _projectState
 
-    fun load() {
-        val raw = try { storage.loadRaw() } catch (e: Exception) { null }
-        _projectState = if (raw.isNullOrBlank()) Samples.exampleProject() else {
-            try {
-                val parsed = json.decodeFromString(Project.serializer(), raw)
-                if (parsed.root.type.isEmpty()) Samples.exampleProject() else normalizeProject(parsed)
-            } catch (e: Exception) {
-                Samples.exampleProject()
+    /** Last write failure, surfaced by the UI instead of being swallowed. */
+    var lastSaveError: String? = null
+        private set
+
+    /**
+     * Set when the stored project exists but could not be read. Saving is then refused, so the
+     * sample project shown in its place can never overwrite the user's file.
+     */
+    var saveBlockedReason: String? = null
+        private set
+
+    private var lastSavedJson: String? = null
+
+    /**
+     * Loads the stored project. Returns a message for the user when the stored file could not be
+     * used, or null when everything was fine.
+     *
+     * A parse failure used to fall back to the sample project silently; the next edit then wrote
+     * the sample over the user's file, turning a bad read into permanent data loss. Now the
+     * unreadable content is backed up first and the user is told where it went.
+     */
+    fun load(): String? {
+        val raw = try {
+            storage.loadRaw()
+        } catch (e: Exception) {
+            // The file is there but unreadable (locked, permission, I/O error). Treating that as
+            // "no project" used to load the sample and overwrite the user's work on the next edit.
+            _projectState = Samples.exampleProject()
+            saveBlockedReason = "项目文件读取失败（${e.message ?: e}），为防止覆盖，本次不会自动保存。请检查文件后重启。"
+            return saveBlockedReason
+        }
+        saveBlockedReason = null
+        if (raw.isNullOrBlank()) {
+            _projectState = Samples.exampleProject()
+            return null
+        }
+        val parsed = try {
+            json.decodeFromString(Project.serializer(), raw)
+        } catch (e: Exception) {
+            _projectState = Samples.exampleProject()
+            val backup = runCatching { storage.backupBroken(raw) }.getOrNull()
+            return if (backup != null) {
+                "上次的项目文件读不出来，已载入示例项目；原内容备份在 $backup"
+            } else {
+                "上次的项目文件读不出来，已载入示例项目（原内容无法备份）"
             }
         }
+        if (parsed.root.type.isEmpty()) {
+            _projectState = Samples.exampleProject()
+            return null
+        }
+        _projectState = normalizeProject(parsed)
+        lastSavedJson = runCatching {
+            json.encodeToString(Project.serializer(), _projectState)
+        }.getOrNull()
+        return null
     }
 
-    private fun normalizeProject(p: Project): Project = p.copy(
-        root = normalizeBlock(p.root),
-        modules = p.modules.map { m -> m.copy(children = m.children.mapValues { (_, v) -> v.map(::normalizeBlock) }) }
-    )
+    /**
+     * M15: a hand-edited or imported file could carry empty or repeated block ids. Every
+     * edit addresses blocks by id, so a duplicate made one change hit two blocks. One shared
+     * [seen] set across root and all modules gives each block a unique id.
+     */
+    private fun normalizeProject(p: Project): Project {
+        val seen = mutableSetOf<String>()
+        // L10: old projects stored the module *name* in moduleCall.module. Codegen now matches
+        // by id only, so rewrite a name to that module's id once here, when it is unambiguous.
+        val moduleIds = p.modules.map { it.id }.toSet()
+        val idByName = p.modules.groupBy { it.name }.filterValues { it.size == 1 }.mapValues { it.value.single().id }
+        fun fix(b: Block): Block {
+            val id = if (b.id.isEmpty() || !seen.add(b.id)) {
+                var fresh = Ids.next()
+                while (!seen.add(fresh)) fresh = Ids.next()
+                fresh
+            } else b.id
+            var params = b.params
+            if (b.type == "moduleCall") {
+                val key = params["module"]?.asText().orEmpty()
+                if (key.isNotEmpty() && key !in moduleIds) {
+                    idByName[key]?.let { params = params + ("module" to cn.dumate.a6studio.model.ParamValue.Text(it)) }
+                }
+            }
+            return b.copy(id = id, params = params, children = b.children.mapValues { (_, kids) -> kids.map(::fix) })
+        }
+        return p.copy(
+            root = p.root.copy(children = p.root.children.mapValues { (_, kids) -> kids.map(::fix) }),
+            modules = p.modules.map { m -> m.copy(children = m.children.mapValues { (_, v) -> v.map(::fix) }) }
+        )
+    }
 
-    private fun normalizeBlock(b: Block): Block = b.copy(
-        children = b.children.mapValues { (_, kids) -> kids.map(::normalizeBlock) }
-    )
-
-    fun save() {
-        try { storage.saveRaw(json.encodeToString(Project.serializer(), current)) } catch (e: Exception) { /* ignore */ }
+    /**
+     * Persists the project. Returns false on failure and records why in [lastSaveError].
+     *
+     * Silently swallowing this meant "已保存" was shown while the file on disk was stale (full
+     * disk, revoked SAF permission, locked file) — the user's work was gone on next launch.
+     */
+    fun save(): Boolean {
+        saveBlockedReason?.let {
+            lastSaveError = it
+            return false
+        }
+        return try {
+            val encoded = json.encodeToString(Project.serializer(), current)
+            // Edits call save() and StudioState.commit() saves again: skip identical writes.
+            if (encoded != lastSavedJson) {
+                storage.saveRaw(encoded)
+                lastSavedJson = encoded
+            }
+            lastSaveError = null
+            true
+        } catch (e: Exception) {
+            lastSaveError = e.message ?: e.toString()
+            false
+        }
     }
 
     fun toast(msg: String) { _toastState = msg }
@@ -78,8 +173,20 @@ class ProjectRepo(private val storage: ProjectStorage) {
     fun clearToast() { _toastState = null }
 
     // ---- undo ---------------------------------------------------------------
+    /**
+     * Records an undo point. A serialisation failure must never abort the edit the user asked
+     * for, so it is caught: losing one undo step is far better than losing the action.
+     */
     fun snapshot(label: String) {
-        undoStack.addLast(label to json.encodeToString(Project.serializer(), current))
+        // Any other kind of edit ends a run of keystrokes in one field, so the next keystroke
+        // there gets its own undo point (updateParam sets lastEditedField again right after).
+        lastEditedField = null
+        val encoded = try {
+            json.encodeToString(Project.serializer(), current)
+        } catch (e: Exception) {
+            return
+        }
+        undoStack.addLast(label to encoded)
         while (undoStack.size > maxUndo) undoStack.removeFirst()
     }
 
@@ -87,6 +194,11 @@ class ProjectRepo(private val storage: ProjectStorage) {
         val (label, raw) = undoStack.removeLastOrNull() ?: return null
         _projectState = try { json.decodeFromString(Project.serializer(), raw) } catch (e: Exception) { current }
         _selectedState = null
+        // M15: undoing "新建模块" left the scope pointing at a module that no longer exists;
+        // later adds then updated nothing while still reporting success.
+        if (_scopeState is Scope.Module && currentModule() == null) _scopeState = Scope.Root
+        // 撤销之后再输入同一字段必须能被单独撤销：不清掉这个标记就会被当成「同一次连续输入」。
+        lastEditedField = null
         save()
         return label
     }
@@ -119,11 +231,34 @@ class ProjectRepo(private val storage: ProjectStorage) {
         return null
     }
 
+    /** 查找积木所属作用域（主程序或某个模块），供诊断面板一键跳转使用。 */
+    fun scopeOfBlock(id: String): Scope? {
+        if (TreeOps.find(current.root.children["body"].orEmpty(), id) != null) return Scope.Root
+        for (m in current.modules) {
+            if (TreeOps.find(m.children["body"].orEmpty(), id) != null) return Scope.Module(m.id)
+        }
+        return null
+    }
+
+    /**
+     * Like [locate] but only inside the scope being edited. Move / shift / duplicate rewrite
+     * just that scope's body, so locating a block in another module (M15) used to remove
+     * nothing there and insert a second copy with the same id here.
+     */
+    private fun locateInScope(id: String): cn.dumate.a6studio.model.LocatedBlock? {
+        val loc = locate(id) ?: return null
+        val rootId = scopeRootId()
+        val inScope = loc.parentId == rootId || TreeOps.find(scopeBodyInternal(), id) != null
+        return if (inScope) loc else null
+    }
+
     /** Finds the list + index containing [id], so callers can move or delete it. */
     fun locate(id: String): cn.dumate.a6studio.model.LocatedBlock? {
         fun search(list: List<Block>, parentId: String, slot: String): cn.dumate.a6studio.model.LocatedBlock? {
             list.forEachIndexed { i, b ->
-                if (b.id == id) return cn.dumate.a6studio.model.LocatedBlock(b, list as MutableList<Block>, i, parentId, slot)
+                if (b.id == id) {
+                    return cn.dumate.a6studio.model.LocatedBlock(b, list, i, parentId, slot)
+                }
                 b.children.forEach { (k, kids) -> search(kids, b.id, k)?.let { return it } }
             }
             return null
@@ -188,18 +323,17 @@ class ProjectRepo(private val storage: ProjectStorage) {
             targetSlot = slot
             targetIndex = index ?: containerList(parentId, slot)?.size ?: 0
         } else {
-            val selId = _selectedState
-            val selBlock = selId?.let { blockById(it) }
+            val selLoc = _selectedState?.let { locateInScope(it) }
+            val selBlock = selLoc?.block
             val selDef = selBlock?.type?.let { cn.dumate.a6studio.catalog.Catalog.byType(it) }
             if (selBlock != null && selDef != null && selDef.slots.isNotEmpty()) {
                 targetParent = selBlock.id
                 targetSlot = selDef.slots.first().key
                 targetIndex = selBlock.children[targetSlot].orEmpty().size
-            } else if (selBlock != null) {
-                val loc = locate(selBlock.id)
-                targetParent = loc?.parentId ?: scopeRootId()
-                targetSlot = loc?.slot ?: "body"
-                targetIndex = (loc?.index ?: -1) + 1
+            } else if (selLoc != null) {
+                targetParent = selLoc.parentId
+                targetSlot = selLoc.slot
+                targetIndex = selLoc.index + 1
             } else {
                 targetParent = scopeRootId()
                 targetSlot = "body"
@@ -226,8 +360,8 @@ class ProjectRepo(private val storage: ProjectStorage) {
             toast("不能把积木放进它自己里面")
             return false
         }
+        val loc = locateInScope(id) ?: return false
         snapshot("移动积木")
-        val loc = locate(id) ?: return false
         val moved = loc.block
         val without = TreeOps.remove(scopeBodyInternal(), id).first
         val inserted = TreeOps.insert(without, parentId, slot, index, moved, scopeRootId())
@@ -237,11 +371,11 @@ class ProjectRepo(private val storage: ProjectStorage) {
         return true
     }
 
-    fun shiftBlock(id: String, delta: Int) {
-        val loc = locate(id) ?: return
+    fun shiftBlock(id: String, delta: Int, snapshot: Boolean = true, saveNow: Boolean = true): Boolean {
+        val loc = locateInScope(id) ?: return false
         val j = loc.index + delta
-        if (j < 0 || j >= loc.list.size) return
-        snapshot("调整顺序")
+        if (j < 0 || j >= loc.list.size) return false
+        if (snapshot) snapshot("调整顺序")
         val body = scopeBodyInternal().toMutableList()
         // Reordering a nested block is a re-insert into the same parent.
         if (loc.parentId == scopeRootId() && loc.slot == "body") {
@@ -254,11 +388,12 @@ class ProjectRepo(private val storage: ProjectStorage) {
             updateScopeBody(TreeOps.insert(removed, loc.parentId, loc.slot, j, loc.block, scopeRootId()))
         }
         _selectedState = id
-        save()
+        if (saveNow) save()
+        return true
     }
 
     fun duplicateBlock(id: String) {
-        val loc = locate(id) ?: return
+        val loc = locateInScope(id) ?: return
         snapshot("复制积木")
         val copy = TreeOps.cloneBlock(loc.block)
         val body = TreeOps.insert(scopeBodyInternal(), loc.parentId, loc.slot, loc.index + 1, copy, scopeRootId())
@@ -276,7 +411,12 @@ class ProjectRepo(private val storage: ProjectStorage) {
     }
 
     fun updateParam(blockId: String, key: String, value: cn.dumate.a6studio.model.ParamValue, snapshot: Boolean = false) {
-        if (snapshot) snapshot("修改参数")
+        // Typing in a field calls this on every keystroke. One undo point per field being
+        // edited (not per keystroke, and not none at all) makes 撤销 revert just that edit
+        // instead of rolling back every earlier parameter change.
+        val field = blockId to key
+        if (snapshot || field != lastEditedField) snapshot("修改参数")
+        lastEditedField = field
         val body = TreeOps.replace(scopeBodyInternal(), blockId) { b ->
             b.copy(params = b.params + (key to value))
         }
@@ -284,10 +424,26 @@ class ProjectRepo(private val storage: ProjectStorage) {
         save()
     }
 
+    /** The field the last parameter edit went to; any other edit ends the coalescing run. */
+    private var lastEditedField: Pair<String, String>? = null
+
+    /** Call when focus leaves a field so the next edit to it starts a new undo step. */
+    fun endParamEdit() { lastEditedField = null }
+
     /** Applies a param change that may target a block in any scope (picker / audit / recorder). */
     fun patchParams(blockId: String, patch: Map<String, cn.dumate.a6studio.model.ParamValue>, label: String) {
         snapshot(label)
         _projectState = patchInProject(current, blockId, patch)
+        save()
+    }
+
+    /** Applies several patches as one undo step (batch fix / audit). */
+    fun patchParamsBatch(patches: List<Pair<String, Map<String, cn.dumate.a6studio.model.ParamValue>>>, label: String) {
+        if (patches.isEmpty()) return
+        snapshot(label)
+        var p = current
+        for ((id, patch) in patches) p = patchInProject(p, id, patch)
+        _projectState = p
         save()
     }
 
@@ -364,6 +520,14 @@ class ProjectRepo(private val storage: ProjectStorage) {
     }
 
     fun updateTest(id: String, name: String? = null, code: String? = null) {
+        val fieldKey = when {
+            name != null && code != null -> "both"
+            name != null -> "name"
+            else -> "code"
+        }
+        val field = "test:$id" to fieldKey
+        if (field != lastEditedField) snapshot("编辑测试用例")
+        lastEditedField = field
         _projectState = current.copy(
             tests = current.tests.map { if (it.id == id) it.copy(name = name ?: it.name, code = code ?: it.code) else it }
         )
@@ -392,10 +556,46 @@ class ProjectRepo(private val storage: ProjectStorage) {
         save()
     }
 
+    fun removeDevice(url: String) {
+        if (url.isBlank()) return
+        val next = current.bridge.devices.filterNot { it.url == url }
+        if (next.size == current.bridge.devices.size) return
+        _projectState = current.copy(bridge = current.bridge.copy(devices = next))
+        save()
+    }
+
+    fun saveProxyPinDevice(url: String, name: String) {
+        if (url.isBlank()) return
+        val list = current.bridge.proxyPinDevices.toMutableList()
+        val hit = list.indexOfFirst { it.url == url }
+        val entry = cn.dumate.a6studio.model.DeviceEntry(url, name.ifBlank { url.removePrefix("http://").removePrefix("https://") })
+        if (hit >= 0) list[hit] = entry else list += entry
+        _projectState = current.copy(bridge = current.bridge.copy(proxyPinDevices = list))
+        save()
+    }
+
+    fun removeProxyPinDevice(url: String) {
+        if (url.isBlank()) return
+        val next = current.bridge.proxyPinDevices.filterNot { it.url == url }
+        if (next.size == current.bridge.proxyPinDevices.size) return
+        _projectState = current.copy(bridge = current.bridge.copy(proxyPinDevices = next))
+        save()
+    }
+
     fun setProjectDirect(p: Project) {
-        _projectState = p
+        // Imported files and templates get the same repair as a loaded file (unique ids,
+        // moduleCall name → id); otherwise an imported project could carry duplicate ids
+        // or calls that no longer resolve now that modules are matched by id only.
+        _projectState = normalizeProject(p)
         _scopeState = Scope.Root
         _selectedState = null
+        save()
+    }
+
+    /** R-2：用户已确认外部 MCP 修改。只清标记，不动作用域/选中，不记撤销点。 */
+    fun markExternalPatchConfirmed() {
+        if (!current.externalPatchPending) return
+        _projectState = current.copy(externalPatchPending = false)
         save()
     }
 }

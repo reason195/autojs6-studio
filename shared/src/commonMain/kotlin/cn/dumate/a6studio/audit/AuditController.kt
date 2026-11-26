@@ -7,6 +7,8 @@ import cn.dumate.a6studio.model.Block
 import cn.dumate.a6studio.model.Project
 import cn.dumate.a6studio.picker.Candidate
 import cn.dumate.a6studio.picker.PickerLogic
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -37,16 +39,24 @@ class AuditController(
     private val bridge: McpClient,
     private val onRows: (List<AuditRow>, String) -> Unit
 ) {
-    private val bySet = setOf("id", "idMatches", "text", "textContains", "desc", "descContains")
-    private val fn = mapOf(
-        "id" to "id", "idMatches" to "idMatches", "text" to "text",
-        "textContains" to "textContains", "desc" to "desc", "descContains" to "descContains"
+    private val bySet = setOf(
+        "id", "idMatches", "idContains",
+        "text", "textContains", "textMatches",
+        "desc", "descContains", "descMatches",
+        "className", "classNameContains", "classNameMatches"
     )
+    private val fn = bySet.associateWith { it }
 
     var rows: List<AuditRow> = emptyList()
         private set
-    var busy = false
-        private set
+
+    /**
+     * Bumped by every [run]. A previous run that was merely cancelled (not yet resumed) used to
+     * hold `busy` until its `finally` ran, so a quick second click saw `busy == true` and
+     * returned immediately — the panel kept showing the cancelled run's results. Instead of the
+     * flag, the older run notices it has been superseded and stops touching state.
+     */
+    private var generation = 0
 
     fun selText(by: String, value: String): String =
         (fn[by] ?: "text") + "(" + PickerLogic.quote(value) + ")"
@@ -55,7 +65,16 @@ class AuditController(
         val out = mutableListOf<AuditRow>()
         fun add(b: Block, scope: String) {
             val p = b.params
-            val by = p["by"]?.asText() ?: ""
+            val rawBy = p["by"]?.asText() ?: ""
+            val match = p["match"]?.asText() ?: ""
+            val by = if (b.type in setOf("kitWaitFor", "kitClick")) {
+                if (rawBy !in setOf("text", "desc")) return
+                when (match) {
+                    "contains" -> "${rawBy}Contains"
+                    "regex" -> "${rawBy}Matches"
+                    else -> rawBy
+                }
+            } else rawBy
             val value = p["value"]?.asText() ?: ""
             if (by !in bySet || value.isBlank()) return
             val expr = p["expr"]?.asText()?.takeIf { it.isNotBlank() } ?: ""
@@ -83,17 +102,19 @@ class AuditController(
     }
 
     suspend fun run(project: Project) {
-        if (busy) return
-        busy = true
+        val gen = ++generation
         rows = collect(project)
         onRows(rows, if (rows.isEmpty()) "项目里没有 by/value 选择器积木" else "正在逐个校验…")
-        if (rows.isEmpty()) { busy = false; return }
-
+        if (rows.isEmpty()) return
         for (i in rows.indices) {
+            // Each auditOne is a phone round-trip (up to 15 s); stop promptly when the user
+            // closes the panel or starts a newer audit instead of finishing stale rows.
+            currentCoroutineContext().ensureActive()
+            if (gen != generation) return
             rows = rows.toMutableList().also { it[i] = auditOne(it[i]) }
             onRows(rows, "体检中 ${i + 1}/${rows.size}…")
         }
-        busy = false
+        if (gen != generation) return
         val bad = rows.count { it.status in setOf(AuditStatus.MULTIPLE, AuditStatus.MISSING, AuditStatus.ERROR) }
         onRows(
             rows,
@@ -110,12 +131,16 @@ class AuditController(
             when (f.count) {
                 0 -> {
                     var note = "这条选择器在当前页面找不到节点"
-                    runCatching {
+                    try {
                         val explain = bridge.explainSelector(selector)
                         val o = PickerLogic.json.parseToJsonElement(explain).let { it as? JsonObject }
                         val fail = o?.get("firstFail")?.let { (it as? JsonPrimitive)?.content }
                             ?: o?.get("firstFailingCondition")?.let { (it as? JsonPrimitive)?.content }
                         if (!fail.isNullOrBlank()) note += "；卡在「$fail」"
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // explainSelector 仅补充排查信息，失败时保留基础提示
                     }
                     row.copy(status = AuditStatus.MISSING, count = 0, note = note)
                 }
@@ -132,7 +157,13 @@ class AuditController(
                         val alternatives = PickerLogic.buildCandidates(first)
                             .filterNot { it.by == row.by && it.value == row.value }
                         for (c in alternatives) {
-                            val cf = runCatching { bridge.uiFind(PickerLogic.selectorJson(c), 20) }.getOrNull()
+                            val cf = try {
+                                bridge.uiFind(PickerLogic.selectorJson(c), 20)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                null
+                            }
                             if (cf?.count == 1) {
                                 fix = c.by to c.value
                                 note += "；可用 " + selText(c.by, c.value) + " 收窄到唯一"
@@ -143,6 +174,8 @@ class AuditController(
                     row.copy(status = AuditStatus.MULTIPLE, count = f.count, note = note, fix = fix)
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // M1: cancellation must propagate, or Stop/close never takes effect
         } catch (e: Exception) {
             row.copy(status = AuditStatus.ERROR, note = "体检失败：${e.message}")
         }
@@ -151,6 +184,7 @@ class AuditController(
     fun report(): String {
         if (rows.isEmpty()) return "选择器体检报告\n\n（还没有体检结果）\n"
         val head = "| 状态 | 积木 | 范围 | 选择器 | 说明 |\n| --- | --- | --- | --- | --- |"
+        fun esc(s: String) = s.replace("|", "\\|").replace("\n", " ").replace("\r", "")
         val lines = rows.map { r ->
             val st = when (r.status) {
                 AuditStatus.UNIQUE -> "唯一"
@@ -160,7 +194,7 @@ class AuditController(
                 AuditStatus.EXPR -> "表达式"
                 AuditStatus.IDLE -> "待检"
             }
-            "| $st | ${r.name} | ${r.scope} | `${selText(r.by, r.value)}` | ${r.note} |"
+            "| $st | ${esc(r.name)} | ${esc(r.scope)} | `${esc(selText(r.by, r.value))}` | ${esc(r.note)} |"
         }
         return "选择器体检报告\n\n" + (listOf(head) + lines).joinToString("\n") + "\n"
     }

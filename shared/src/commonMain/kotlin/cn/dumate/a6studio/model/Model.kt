@@ -2,6 +2,7 @@ package cn.dumate.a6studio.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import cn.dumate.a6studio.platform.nowMillis
 import kotlinx.serialization.json.JsonPrimitive
 import kotlin.random.Random
 
@@ -63,7 +64,9 @@ object ParamValueSerializer : kotlinx.serialization.KSerializer<ParamValue> {
     override fun serialize(encoder: kotlinx.serialization.encoding.Encoder, value: ParamValue) {
         val prim = when (value) {
             is ParamValue.Text -> JsonPrimitive(value.value)
-            is ParamValue.Num -> JsonPrimitive(value.value)
+            // JSON has no Infinity/NaN, and encoding one throws — which made the whole project
+            // unsavable. Write it as text so the save goes through and codegen still sees it.
+            is ParamValue.Num -> if (value.value.isFinite()) JsonPrimitive(value.value) else JsonPrimitive(value.asText())
             is ParamValue.Bool -> JsonPrimitive(value.value)
         }
         delegate.serialize(encoder, prim)
@@ -105,7 +108,9 @@ data class DeviceEntry(
 @Serializable
 data class BridgeSettings(
     val url: String = "",
-    val devices: List<DeviceEntry> = emptyList()
+    val devices: List<DeviceEntry> = emptyList(),
+    /** ProxyPin MCP 已保存的设备列表（与 AutoJs6 的 devices 同级，可记忆/删除）。 */
+    val proxyPinDevices: List<DeviceEntry> = emptyList()
 )
 
 @Serializable
@@ -115,7 +120,13 @@ data class Project(
     val modules: List<StudioModule> = emptyList(),
     val tests: List<TestCase> = emptyList(),
     val bridge: BridgeSettings = BridgeSettings(),
-    @SerialName("createdAt") val createdAt: Long = 0L
+    @SerialName("createdAt") val createdAt: Long = 0L,
+    /**
+     * R-2：工程被外部 MCP 补丁改过、且用户尚未确认。随工程一起落盘，重启/重新导入后仍然有效，
+     * 真机运行前必须先确认。默认 false，旧工程文件无此字段时按 false 读取（向后兼容）。
+     * 撤销到补丁前的快照时会自然恢复为 false。
+     */
+    @SerialName("externalPatchPending") val externalPatchPending: Boolean = false
 ) {
     companion object {
         fun rootBlock() = Block(
@@ -127,15 +138,19 @@ data class Project(
     }
 }
 
-/** Stable, collision-resistant ids (mirrors the web `b_<ts>_<n>` scheme). */
+/**
+ * Stable, collision-resistant ids, shaped like the web `b_<ts>_<n>` scheme.
+ *
+ * The old implementation bumped a shared `counter`, which is not thread-safe: two blocks created
+ * from different threads in the same millisecond could receive the same id and then collide in
+ * selection/undo. A random numeric suffix keeps the exact `b_<ts>_<digits>` shape the legacy
+ * parity fixture normalises, without any shared mutable state.
+ */
 object Ids {
-    private var counter = 0
-    fun next(): String {
-        counter += 1
-        return "b_" + System.currentTimeMillis().toString(36) + "_" + counter
-    }
+    fun next(): String = "b_" + nowMillis().toString(36) + "_" + Random.nextInt(1, 1_000_000_000)
 
-    fun nextWith(prefix: String): String = prefix + "_" + System.currentTimeMillis().toString(36)
+    fun nextWith(prefix: String): String =
+        prefix + "_" + nowMillis().toString(36) + "_" + Random.nextInt(1, 1_000_000_000)
 
     fun randomHex(len: Int = 8): String =
         (1..len).map { "0123456789abcdef"[Random.nextInt(16)] }.joinToString("")

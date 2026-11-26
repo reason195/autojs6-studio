@@ -6,10 +6,12 @@ import android.content.Context
 class AndroidProjectStorage(private val context: Context) : ProjectStorage {
     private val file get() = java.io.File(context.filesDir, "project.json")
 
-    override fun loadRaw(): String? =
-        if (file.exists()) runCatching { file.readText() }.getOrNull() else null
+    /** Null only when there is no project yet; read errors are thrown (see ProjectRepo.load). */
+    override fun loadRaw(): String? = AtomicFiles.readOrNull(file)
 
-    override fun saveRaw(json: String) {
-        runCatching { file.writeText(json) }
-    }
+    // Throws on failure so directory-full / revoked-storage cases reach the user instead of
+    // looking like a successful save.
+    override fun saveRaw(json: String) = AtomicFiles.write(file, json)
+
+    override fun backupBroken(raw: String): String? = runCatching { AtomicFiles.backupBroken(file, raw) }.getOrNull()
 }

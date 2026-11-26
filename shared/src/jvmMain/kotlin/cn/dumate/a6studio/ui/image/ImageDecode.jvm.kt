@@ -7,6 +7,6 @@ import java.util.Base64
 
 actual fun decodeBase64ToImage(base64: String): ImageBitmap {
     val clean = base64.substringAfter("base64,", base64)
-    val bytes = Base64.getDecoder().decode(clean)
+    val bytes = Base64.getMimeDecoder().decode(clean)
     return Image.makeFromEncoded(bytes).toComposeImageBitmap()
 }

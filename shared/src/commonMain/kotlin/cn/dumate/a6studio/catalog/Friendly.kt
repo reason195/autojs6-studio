@@ -25,10 +25,12 @@ object Friendly {
         FriendlyCategory("ui", "点击和输入", "在屏幕上点按钮、填内容", true),
         FriendlyCategory("gesture", "滑动和按键", "滑动屏幕、按返回键", true),
         FriendlyCategory("jd", "京东领券示例", "照着这个改就能用", true),
+        FriendlyCategory("kit", "护栏脚本（aj6_kit）", "自带风控停手与防误判机制", false),
         FriendlyCategory("vision", "看图 / 认字", "截图、找图、识别文字", false),
         FriendlyCategory("data", "文件 / 网络", "存数据、发请求", false),
         FriendlyCategory("debug", "调试工具", "检查脚本哪里出错", false),
-        FriendlyCategory("module", "我的模块", "把一段操作打包复用", false)
+        FriendlyCategory("module", "我的模块", "把一段操作打包复用", false),
+        FriendlyCategory("raw", "原生代码", "从 .js 脚本导入、暂时无法变成积木的代码", false)
     )
 
     fun categoryName(id: String): String =
@@ -76,6 +78,16 @@ object Friendly {
         "clipSet" to "把一段文字复制到剪贴板",
         "clipGet" to "把剪贴板里的文字读出来（高级）",
         "shellCmd" to "执行一条系统命令（高级，可能没权限）",
+
+        // 护栏运行时（aj6_kit）
+        "kitBoot" to "启动护栏底座：自动拦截风控验证码、支付/结算页面和底部禁点区",
+        "kitLaunch" to "安全拉起目标 App 并确认已在前台",
+        "kitOpenDeepLink" to "通过深链直达活动页，避开首页入口变动",
+        "kitGuard" to "检查当前是否触发风控、误入危险页或总时长超时",
+        "kitWaitFor" to "只等待真正在屏幕可见区域内的控件出现（忽略离屏节点）",
+        "kitClick" to "按控件中心点安全点击，避免误点屏幕边缘",
+        "kitWaitCountdown" to "轮询落地页倒计时归零并多等几秒余量再返回，防止浏览时长不足",
+        "kitFinish" to "按实际完成情况输出汇总，有未完成任务时标记 WARN",
 
         // 点击和输入
         "waitText" to "等屏幕上出现某段文字，出现了再继续",
@@ -128,7 +140,10 @@ object Friendly {
         "jdFinishGuard" to "【示例】确认没有更多任务了才收工",
 
         // 模块
-        "moduleCall" to "执行你自己打包好的那段操作"
+        "moduleCall" to "执行你自己打包好的那段操作",
+
+        // 原生代码
+        "rawJs" to "从你的 .js 脚本原样搬过来的代码；能运行，但暂时不能在画布上改参数"
     )
 
     private val paramHints: Map<String, Map<String, String>> = mapOf(

@@ -14,15 +14,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,6 +36,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.runtime.DisposableEffect
 import cn.dumate.a6studio.catalog.Catalog
 import cn.dumate.a6studio.catalog.ParamDef
 import cn.dumate.a6studio.catalog.ParamKind
@@ -49,6 +52,7 @@ import cn.dumate.a6studio.ui.EmptyCanvasGuide
 import cn.dumate.a6studio.ui.Palette as P
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.fields.InlineField
+import cn.dumate.a6studio.ui.currentStudioStyle
 
 /** Blocks that can have a param picked from the device, and which kind of pick it is. */
 private fun pickKindFor(block: Block, param: ParamDef): PickKind? {
@@ -72,24 +76,47 @@ fun CanvasPanel(
     beginner: Boolean = false,
     onTemplates: () -> Unit = {},
     onShowPalette: () -> Unit = {},
-    onShowGuide: () -> Unit = {}
+    onShowGuide: () -> Unit = {},
+    drag: PaletteDragState? = null
 ) {
-    val scope = repo.scope.value
+    val scope = repo.currentScope
     val module = repo.currentModule()
     val body = when (scope) {
         is Scope.Module -> module?.children?.get("body").orEmpty()
         Scope.Root -> project.root.children["body"].orEmpty()
     }
 
-    // Reverse sync: selecting a block from the code pane scrolls it into view (nested blocks
-    // can't be targeted precisely, so only top-level matches scroll).
-    val listState = rememberLazyListState()
-    LaunchedEffect(selectedId) {
-        val idx = selectedId?.let { id -> body.indexOfFirst { it.id == id } } ?: -1
-        if (idx >= 0) runCatching { listState.animateScrollToItem(idx + 1) }
-    }
+    val style = currentStudioStyle
+    val dotModifier = if (style.canvasDots) {
+        val dotColor = style.canvasDotsColor
+        Modifier.drawBehind {
+            val step = 16.dp.toPx()
+            val radius = 1.dp.toPx()
+            var x = step
+            while (x < size.width) {
+                var y = step
+                while (y < size.height) {
+                    drawCircle(color = dotColor, radius = radius, center = Offset(x, y))
+                    y += step
+                }
+                x += step
+            }
+        }
+    } else Modifier
 
-    LazyColumn(modifier.padding(12.dp), state = listState) {
+    val rootId = repo.scopeRootId()
+    if (drag != null) {
+        DisposableEffect(drag, rootId) { onDispose { drag.unregisterContainer(rootId, "body") } }
+    }
+    val target = drag?.target
+    LazyColumn(
+        modifier
+            .then(if (drag != null) Modifier.onGloballyPositioned {
+                drag.registerContainer(DropContainer(rootId, "body", body.size, it.boundsInRoot()))
+            } else Modifier)
+            .then(if (drag?.active == true && target?.parentId == rootId) Modifier.border(1.5.dp, P.accent.copy(alpha = 0.5f), RoundedCornerShape(8.dp)) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 14.dp).then(dotModifier)
+    ) {
         item {
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 8.dp),
@@ -135,7 +162,8 @@ fun CanvasPanel(
                 }
             }
         }
-        items(count = body.size) { i ->
+        items(count = body.size, key = { i -> body[i].id }) { i ->
+            DropLine(drag, rootId, "body", i)
             BlockCard(
                 block = body[i],
                 repo = repo,
@@ -143,11 +171,27 @@ fun CanvasPanel(
                 selectedId = selectedId,
                 onPick = onPick,
                 onCommit = onCommit,
-                beginner = beginner
+                beginner = beginner,
+                drag = drag,
+                parentId = rootId,
+                slot = "body",
+                index = i
             )
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(10.dp))
         }
+        item { DropLine(drag, rootId, "body", body.size) }
     }
+}
+
+/** Thin accent bar shown where a dragged palette block would land. */
+@Composable
+private fun DropLine(drag: PaletteDragState?, parentId: String, slot: String, index: Int) {
+    val t = drag?.target ?: return
+    if (!drag.active || t.parentId != parentId || t.slot != slot || t.index != index) return
+    Box(
+        Modifier.fillMaxWidth().padding(vertical = 3.dp).height(3.dp)
+            .clip(RoundedCornerShape(2.dp)).background(P.accent)
+    )
 }
 
 @Composable
@@ -158,8 +202,15 @@ private fun BlockCard(
     selectedId: String?,
     onPick: (String, String, PickKind) -> Unit,
     onCommit: () -> Unit,
-    beginner: Boolean = false
+    beginner: Boolean = false,
+    drag: PaletteDragState? = null,
+    parentId: String = "root",
+    slot: String = "body",
+    index: Int = 0
 ) {
+    if (drag != null) {
+        DisposableEffect(drag, block.id) { onDispose { drag.unregisterCard(block.id) } }
+    }
     val def = Catalog.byType(block.type) ?: run {
         Text("未知积木：${block.type}", color = P.err, fontSize = 11.sp, modifier = Modifier.padding(8.dp))
         return
@@ -170,6 +221,9 @@ private fun BlockCard(
 
     Column(
         Modifier.fillMaxWidth()
+            .then(if (drag != null) Modifier.onGloballyPositioned {
+                drag.registerCard(DropCard(block.id, parentId, slot, index, it.boundsInRoot()))
+            } else Modifier)
             .clip(RoundedCornerShape(7.dp))
             .background(bg)
             .border(
@@ -178,12 +232,12 @@ private fun BlockCard(
                 shape = RoundedCornerShape(7.dp)
             )
             .clickable { repo.select(block.id) }
-            .padding(horizontal = 8.dp, vertical = 7.dp)
+            .padding(horizontal = 12.dp, vertical = 11.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(width = 3.dp, height = 15.dp).clip(RoundedCornerShape(2.dp)).background(accent))
             Spacer(Modifier.width(7.dp))
-            Text(Catalog.cleanName(def), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = P.text)
+            Text(Catalog.filledName(def, block.params), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = P.text)
             if (block.params["expr"]?.asText()?.isNotBlank() == true) {
                 Spacer(Modifier.width(6.dp))
                 Text(
@@ -194,23 +248,52 @@ private fun BlockCard(
                 )
             }
             Spacer(Modifier.weight(1f))
-            // Long-press anywhere on the card then drag up/down to reorder. Keyboard/buttons
-            // remain for precision; this is the touch-friendly path on phones.
+            // Long-press anywhere on the handle then drag up/down to reorder. Accumulate drag
+            // distance to a 40dp threshold so reordering does not flood undo snapshots or disk I/O.
+            val dragDensity = androidx.compose.ui.platform.LocalDensity.current
+            val stepPx = with(dragDensity) { 40.dp.toPx() }
             Box(
-                Modifier.size(16.dp).pointerInput(block.id) {
+                Modifier.size(20.dp).pointerInput(block.id, stepPx) {
+                    var accY = 0f
+                    var shifted = false
                     detectDragGesturesAfterLongPress(
-                        onDragEnd = { },
+                        onDragStart = {
+                            accY = 0f
+                            shifted = false
+                        },
+                        onDragEnd = {
+                            if (shifted) onCommit()
+                            accY = 0f
+                            shifted = false
+                        },
+                        onDragCancel = {
+                            if (shifted) onCommit()
+                            accY = 0f
+                            shifted = false
+                        },
                         onDrag = { change, dragAmount ->
                             change.consume()
-                            if (dragAmount.y > 8f) { repo.shiftBlock(block.id, 1); onCommit() }
-                            else if (dragAmount.y < -8f) { repo.shiftBlock(block.id, -1); onCommit() }
+                            accY += dragAmount.y
+                            if (accY >= stepPx) {
+                                if (!shifted) repo.snapshot("调整顺序")
+                                if (repo.shiftBlock(block.id, 1, snapshot = false, saveNow = false)) {
+                                    shifted = true
+                                }
+                                accY -= stepPx
+                            } else if (accY <= -stepPx) {
+                                if (!shifted) repo.snapshot("调整顺序")
+                                if (repo.shiftBlock(block.id, -1, snapshot = false, saveNow = false)) {
+                                    shifted = true
+                                }
+                                accY += stepPx
+                            }
                         }
                     )
                 },
                 contentAlignment = Alignment.Center
             ) { Text("⠿", fontSize = 11.sp, color = P.textDim.copy(alpha = 0.7f)) }
-            Spacer(Modifier.width(4.dp))
-            BlockActions(block, repo, onCommit)
+            Spacer(Modifier.width(2.dp))
+            BlockMenu(block, repo, onCommit)
         }
 
         if (beginner) {
@@ -227,51 +310,68 @@ private fun BlockCard(
         }
 
         if (def.params.isNotEmpty()) {
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(8.dp))
             ParamRow(block, def.params, repo, onPick, onCommit, beginner = beginner)
         }
 
-        def.slots.forEach { slot ->
-            val kids = block.children[slot.key].orEmpty()
+        def.slots.forEach { slotDef ->
+            val kids = block.children[slotDef.key].orEmpty()
+            if (drag != null) {
+                DisposableEffect(drag, block.id, slotDef.key) {
+                    onDispose { drag.unregisterContainer(block.id, slotDef.key) }
+                }
+            }
+            val hot = drag?.active == true && drag.target?.parentId == block.id && drag.target?.slot == slotDef.key
             Column(
-                Modifier.fillMaxWidth().padding(start = 12.dp, top = 6.dp)
-                    .border(1.dp, P.borderSoft, RoundedCornerShape(5.dp))
-                    .padding(6.dp)
+                Modifier.fillMaxWidth().padding(start = 14.dp, top = 9.dp)
+                    .then(if (drag != null) Modifier.onGloballyPositioned {
+                        drag.registerContainer(DropContainer(block.id, slotDef.key, kids.size, it.boundsInRoot()))
+                    } else Modifier)
+                    .border(if (hot) 1.5.dp else 1.dp, if (hot) P.accent else P.borderSoft, RoundedCornerShape(6.dp))
+                    .padding(8.dp)
             ) {
-                Text("↳ ${slot.label}", fontSize = 10.sp, color = P.textDim)
-                if (kids.isEmpty()) {
+                Text("↳ ${slotDef.label}", fontSize = 10.sp, color = P.textDim)
+                if (kids.isEmpty() && !hot) {
                     Text("（空）", fontSize = 10.sp, color = P.textDim.copy(alpha = 0.6f), modifier = Modifier.padding(start = 4.dp, top = 3.dp))
                 }
-                kids.forEach { kid ->
-                    BlockCard(kid, repo, project, selectedId, onPick, onCommit, beginner)
-                    Spacer(Modifier.height(4.dp))
+                kids.forEachIndexed { k, kid ->
+                    DropLine(drag, block.id, slotDef.key, k)
+                    BlockCard(kid, repo, project, selectedId, onPick, onCommit, beginner, drag, block.id, slotDef.key, k)
+                    Spacer(Modifier.height(8.dp))
                 }
+                DropLine(drag, block.id, slotDef.key, kids.size)
             }
         }
     }
 }
 
+/**
+ * 卡片右侧直接给出 ↑ ↓ ⧉ ✕，一次点击就能移动、复制、删除。曾经收进 ⋯ 菜单，但删除要点两下、
+ * 还得在弹出菜单里找，用户反馈不如直接摆出来。图标做成无边框的淡色小按钮，悬停/按下才显出底色，
+ * 删除用错误色，避免四个按钮同样醒目。
+ */
 @Composable
-private fun BlockActions(block: Block, repo: ProjectRepo, onCommit: () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        MiniAction("↑", "上移") { repo.shiftBlock(block.id, -1); onCommit() }
-        MiniAction("↓", "下移") { repo.shiftBlock(block.id, 1); onCommit() }
-        MiniAction("⧉", "复制") { repo.duplicateBlock(block.id); onCommit() }
-        MiniAction("✕", "删除", danger = true) { repo.removeBlock(block.id); onCommit() }
+private fun BlockMenu(block: Block, repo: ProjectRepo, onCommit: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CardAction("↑") { repo.shiftBlock(block.id, -1); onCommit() }
+        CardAction("↓") { repo.shiftBlock(block.id, 1); onCommit() }
+        CardAction("⧉") { repo.duplicateBlock(block.id); onCommit() }
+        CardAction("✕", danger = true) { repo.removeBlock(block.id); onCommit() }
     }
 }
 
+/** One small borderless action on a block card (about 28dp, enough to tap on a phone). */
 @Composable
-private fun MiniAction(label: String, tooltip: String, danger: Boolean = false, onClick: () -> Unit) {
-    Text(
-        label,
-        fontSize = 11.sp,
-        color = if (danger) P.err.copy(alpha = 0.85f) else P.textDim,
-        modifier = Modifier
-            .clip(RoundedCornerShape(3.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 2.dp)
-    )
+private fun CardAction(glyph: String, danger: Boolean = false, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(28.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(glyph, fontSize = 13.sp, color = if (danger) P.err.copy(alpha = 0.85f) else P.textDim)
+    }
 }
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -293,6 +393,13 @@ private fun ParamRow(
     ) {
         params.forEach { param ->
             val value = block.params[param.key]?.takeUnless { it.isBlank() } ?: param.default
+            if (param.kind == ParamKind.CODE) {
+                // Raw code (imported script chunks, shell commands, JSON payloads) is multi-line by
+                // nature. A single-line field showed only the first line and could not accept
+                // Enter, so an imported script was effectively read-only. Give it its own row.
+                CodeParamField(block, param, value, repo, onCommit)
+                return@forEach
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (param.kind == ParamKind.CHECKBOX) {
                     CheckChip(param.label, value.asBool()) {
@@ -309,28 +416,21 @@ private fun ParamRow(
                     )
                     when (param.kind) {
                         ParamKind.SELECT -> SelectField(block, param, value, repo, onCommit)
-                        ParamKind.NUMBER -> InlineField(
-                            value = value.asText(),
-                            onValueChange = {
-                                repo.updateParam(block.id, param.key, ParamValue.Num(it.toDoubleOrNull() ?: 0.0))
-                                onCommit()
-                            },
-                            placeholder = param.label,
-                            mono = true,
-                            modifier = Modifier.width(64.dp)
-                        )
-                        ParamKind.EXPR, ParamKind.CODE -> InlineField(
+                        ParamKind.NUMBER -> NumberField(block, param, value, repo, onCommit)
+                        ParamKind.EXPR -> InlineField(
                             value = value.asText(),
                             onValueChange = { repo.updateParam(block.id, param.key, ParamValue.Text(it)); onCommit() },
                             placeholder = param.label,
                             mono = true,
-                            modifier = Modifier.widthIn(min = 90.dp, max = 260.dp)
+                            modifier = Modifier.widthIn(min = 90.dp, max = 260.dp),
+                            onEditingFinished = { repo.endParamEdit() }
                         )
                         else -> InlineField(
                             value = value.asText(),
                             onValueChange = { repo.updateParam(block.id, param.key, ParamValue.Text(it)); onCommit() },
                             placeholder = param.label,
-                            modifier = Modifier.widthIn(min = 70.dp, max = 200.dp)
+                            modifier = Modifier.widthIn(min = 70.dp, max = 200.dp),
+                            onEditingFinished = { repo.endParamEdit() }
                         )
                     }
                     val pick = pickKindFor(block, param)
@@ -348,6 +448,67 @@ private fun ParamRow(
                 }
             }
         }
+    }
+}
+
+/**
+ * Number input that keeps what the user is typing. Writing `toDoubleOrNull() ?: 0.0` back on
+ * every keystroke turned "1." into "1", "-" into "0" and "1e" into "0", so decimals and
+ * negatives could not be typed. The text lives locally; the model is updated only with a
+ * finite number, and an empty or half-typed value leaves the previous number in place.
+ */
+@Composable
+private fun NumberField(block: Block, param: ParamDef, value: ParamValue, repo: ProjectRepo, onCommit: () -> Unit) {
+    var text by remember(block.id, param.key) { mutableStateOf(value.asText()) }
+    // Follow outside changes (undo, picker, import) unless they match what is being typed.
+    val modelText = value.asText()
+    if (text.toDoubleOrNull() != value.asNumber(Double.NaN) && text.toDoubleOrNull() != null) text = modelText
+    InlineField(
+        value = text,
+        onValueChange = { raw ->
+            val cleaned = raw.filter { it.isDigit() || it == '.' || it == '-' }
+            text = cleaned
+            val n = cleaned.toDoubleOrNull()
+            if (n != null && n.isFinite()) {
+                repo.updateParam(block.id, param.key, ParamValue.Num(n))
+                onCommit()
+            }
+        },
+        placeholder = param.label,
+        mono = true,
+        modifier = Modifier.width(72.dp),
+        onEditingFinished = { repo.endParamEdit() }
+    )
+}
+
+@Composable
+private fun CodeParamField(
+    block: Block,
+    param: ParamDef,
+    value: ParamValue,
+    repo: ProjectRepo,
+    onCommit: () -> Unit
+) {
+    val lines = value.asText().lines().size
+    Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(param.label, fontSize = 10.sp, color = P.textDim, maxLines = 1, softWrap = false)
+            Spacer(Modifier.width(6.dp))
+            Text("$lines 行 · 可换行编辑", fontSize = 9.sp, color = P.textDim.copy(alpha = 0.7f))
+        }
+        Spacer(Modifier.height(2.dp))
+        InlineField(
+            value = value.asText(),
+            onValueChange = { repo.updateParam(block.id, param.key, ParamValue.Text(it)); onCommit() },
+            placeholder = param.label,
+            mono = true,
+            singleLine = false,
+            minLines = if (lines > 3) 3 else lines.coerceAtLeast(1),
+            // Imported scripts are often 50+ lines; 14 visible lines made them hard to edit.
+            // Beyond this the field scrolls inside itself.
+            maxLines = 40,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -379,8 +540,8 @@ private fun SelectField(block: Block, param: ParamDef, value: ParamValue, repo: 
                     text = { Text(opt.label, fontSize = 11.5.sp) },
                     onClick = {
                         expanded = false
-                        repo.snapshot("修改参数")
-                        repo.updateParam(block.id, param.key, ParamValue.Text(opt.value))
+                        repo.updateParam(block.id, param.key, ParamValue.Text(opt.value), snapshot = true)
+                        repo.endParamEdit()
                         onCommit()
                     }
                 )

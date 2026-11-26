@@ -17,7 +17,13 @@ interface Platform {
     suspend fun openTextFile(extensions: List<String>): Pair<String, String>?
 
     fun copyToClipboard(text: String)
+    /** Current clipboard text, or null when empty / not text / not available. */
+    fun readClipboard(): String? = null
     fun setWindowTitle(title: String)
+
+    /** 采集目标 App 期间保活（Android 用前台服务；其他平台默认无操作）。 */
+    fun startKeepAlive() {}
+    fun stopKeepAlive() {}
 }
 
 /** Default used by previews and tests. */

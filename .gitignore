@@ -21,3 +21,15 @@ captures/
 
 # 旧 Web 版的 Node 依赖（只在使用 bridge / mock 时需要）
 **/node_modules/
+# 真机 MCP 令牌（绝不入库）
+mcp.txt
+*.mcp.json
+
+# Mimosa 安全扫描缓存（各级目录都会生成）
+.mimosa/
+
+# 真机验证本地物料（APK 解包、设备地址等，不入库）
+verify_oppo/
+verify_meizu/
+verify/bridge*.json
+verify/apk_*/

@@ -4,8 +4,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,10 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -114,13 +111,44 @@ fun ClickableRow(onClick: () -> Unit, modifier: Modifier = Modifier, content: @C
 }
 
 /**
- * Hover state for clickable surfaces (desktop mouse users). Returns a [Modifier] that reports
- * hover (via `Modifier.hoverable`) and whether the pointer is currently over the surface.
- * On phone/touch this simply never becomes true, so call sites can use it unconditionally.
+ * 分段标签条：把一页内容按逻辑拆成几个标签页（连接 / 工具 / 输出 之类）。
+ * 与主界面顶部的 PhoneyTabs 同一套外观：等宽分段、选中底色加亮。
  */
 @Composable
-fun rememberHovered(): Pair<Modifier, Boolean> {
-    val source = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-    val hovered by source.collectIsHoveredAsState()
-    return Modifier.hoverable(source) to hovered
+fun SectionTabs(
+    tabs: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Palette.panelAlt)
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        tabs.forEach { (id, label) ->
+            val active = selected == id
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(32.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (active) Palette.panel else Color.Transparent)
+                    .clickable { onSelect(id) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    label,
+                    fontSize = 11.sp,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (active) Palette.text else Palette.textDim,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
 }

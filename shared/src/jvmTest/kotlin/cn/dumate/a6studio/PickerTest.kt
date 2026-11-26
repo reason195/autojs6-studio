@@ -71,6 +71,9 @@ class PickerLogicTest {
     @Test
     fun `regex escaping keeps metacharacters literal`() {
         assertEquals("a\\.b\\[c\\]", PickerLogic.escapeRegex("a.b[c]"))
+        // `{` `}` are regex quantifiers: unescaped `a{` throws at compile time, so the
+        // idMatches selector for a view id containing braces used to be broken.
+        assertEquals("a\\{2\\}", PickerLogic.escapeRegex("a{2}"))
     }
 
     @Test

@@ -2,6 +2,8 @@ package cn.dumate.a6studio.picker
 
 import cn.dumate.a6studio.bridge.McpClient
 import cn.dumate.a6studio.bridge.parseNodes
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -62,7 +64,7 @@ class PickerController(
             PickerState(
                 target = target,
                 view = PickerView.LIST,
-                swipePoints = if (target.kind == PickKind.SWIPE) null to null else null to null
+                swipePoints = null to null
             )
         }
         refresh()
@@ -81,6 +83,7 @@ class PickerController(
 
     suspend fun refresh() {
         if (state.target == null) return
+        currentCoroutineContext().ensureActive()
         update { it.copy(busy = true, error = null, selected = null, candidates = emptyList(), chosen = null, coord = null) }
         try {
             if (!bridge.isReady) bridge.ping()
@@ -103,6 +106,8 @@ class PickerController(
                 )
             }
             if (state.view == PickerView.SHOT) capture()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // M1: cancellation must propagate, or Stop/close never takes effect
         } catch (e: Exception) {
             update { it.copy(busy = false, error = e.message ?: e.toString(), nodes = emptyList()) }
         }
@@ -113,6 +118,7 @@ class PickerController(
         update { it.copy(selected = node, candidates = emptyList(), chosen = null) }
         if (state.target?.kind == PickKind.SWIPE) {
             takeSwipePoint(node.centerX, node.centerY)
+            return
         }
         if (state.target?.kind == PickKind.COORD) return
 
@@ -125,6 +131,8 @@ class PickerController(
             val v = try {
                 val r = bridge.uiFind(PickerLogic.selectorJson(c), 20)
                 c.copy(count = r.count).also { it.score = PickerLogic.scoreOf(it, node, r.count) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // M1: cancellation must propagate, or Stop/close never takes effect
             } catch (e: Exception) {
                 c.copy(count = -1, error = e.message).also { it.score = PickerLogic.scoreOf(it, node, 0) }
             }
@@ -139,6 +147,8 @@ class PickerController(
                 try {
                     val r = bridge.uiFind(PickerLogic.selectorJson(c), 20)
                     c.copy(count = r.count).also { it.score = PickerLogic.scoreOf(it, node, r.count) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e // M1: cancellation must propagate, or Stop/close never takes effect
                 } catch (e: Exception) {
                     c.copy(count = -1).also { it.score = PickerLogic.scoreOf(it, node, 0) }
                 }
@@ -158,6 +168,8 @@ class PickerController(
         }
     }
 
+    fun clearSwipePoints() = update { it.copy(swipePoints = null to null, coord = null) }
+
     fun setCoord(x: Int, y: Int) = update { it.copy(coord = x to y) }
 
     suspend fun capture() {
@@ -165,6 +177,8 @@ class PickerController(
         try {
             val shot = bridge.screenCapture()
             update { it.copy(shotBase64 = shot.base64, shotMime = shot.mimeType, hint = "点绿框选控件；点空白处取坐标；拖拽框选区域") }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // M1: cancellation must propagate, or Stop/close never takes effect
         } catch (e: Exception) {
             update { it.copy(hint = "截图失败：${e.message}", shotBase64 = null) }
         }
@@ -205,6 +219,8 @@ class PickerController(
                     else "已下钻：${hierarchy.size} 个节点"
                 )
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // M1: cancellation must propagate, or Stop/close never takes effect
         } catch (e: Exception) {
             update { it.copy(hint = "区域取节点失败：${e.message}") }
         }

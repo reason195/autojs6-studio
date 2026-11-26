@@ -25,6 +25,23 @@ object Diagnose {
         "clickNode", "longClickNode", "setTextNode", "waitText", "scrollNode", "nodeTextVar", "existsVar"
     )
 
+    val identifierParams: Map<String, List<String>> = mapOf(
+        "varSet" to listOf("name"), "varAssign" to listOf("name"),
+        "funcDef" to listOf("name"), "funcCall" to listOf("name"),
+        "forRange" to listOf("i"), "forOf" to listOf("item"),
+        "tryCatch" to listOf("err"),
+        "currentPkgVar" to listOf("name"), "clipGet" to listOf("name"),
+        "shellCmd" to listOf("var"), "nodeTextVar" to listOf("var"), "existsVar" to listOf("var"),
+        "findImage" to listOf("var"), "ocrText" to listOf("var"), "filesRead" to listOf("var"),
+        "filesExistsVar" to listOf("var"), "storageGet" to listOf("var"),
+        "httpGet" to listOf("var"), "httpPostJson" to listOf("var"),
+        "timerStart" to listOf("var"), "timerLap" to listOf("var"),
+        "jdTaskLoop" to listOf("taskVar"), "jdDoTask" to listOf("taskVar")
+    )
+
+    /** Params pasted into a function signature as a comma-separated identifier list. */
+    val identifierListParams: Map<String, List<String>> = mapOf("funcDef" to listOf("args"))
+
     private data class Item(val b: Block, val scope: String, val index: Int, val ancestors: List<Block>)
 
     private fun collect(project: Project): List<Item> {
@@ -63,6 +80,26 @@ object Diagnose {
         val scopeHasFunc = firstUi != null && items.any { it.scope == firstUi.scope && it.b.type == "funcDef" }
         if (firstUi != null && !hasAutoWait && !scopeHasFunc) {
             add(Level.WARN, "UI 操作前没有 auto.waitFor()", "无障碍服务未就绪时选择器会全部落空；在主程序开头加一块「等待无障碍服务就绪」", firstUi)
+        }
+
+        // L11: these params are pasted into the script as JS identifiers (`let <var> = …`,
+        // `function <name>()`). A space, a dash or a leading digit is a SyntaxError that stops
+        // the whole script, so flag it here instead of letting the run fail.
+        items.forEach { it ->
+            identifierParams[it.b.type]?.forEach { key ->
+                val v = it.b.params[key]?.asText().orEmpty().trim()
+                if (v.isNotEmpty() && !isJsIdentifier(v)) {
+                    add(Level.ERROR, "名称不是合法标识符：$v",
+                        "只能用字母、数字、_ 和 $，且不能以数字开头，也不能是 JS 关键字（如 let、if）", it)
+                }
+            }
+            identifierListParams[it.b.type]?.forEach { key ->
+                val v = it.b.params[key]?.asText().orEmpty()
+                if (!isJsIdentifierList(v)) {
+                    add(Level.ERROR, "参数列表不合法：$v",
+                        "用英文逗号分隔的变量名，如 a, b；不合法的项生成代码时会被丢弃", it)
+                }
+            }
         }
 
         items.forEach { it ->
@@ -108,6 +145,47 @@ object Diagnose {
                         add(Level.WARN, "任务循环体为空", "循环体里至少放「执行任务」或「跨 app 切回」", it)
                     }
                 }
+                "kitOpenDeepLink" -> {
+                    if (s("url").isBlank()) {
+                        add(Level.ERROR, "深链地址为空", "请填写 openapp.jdmobile:// 或 https:// 活动深链", it)
+                    }
+                }
+                "kitBoot" -> {
+                    if (s("pkg").isBlank()) {
+                        add(Level.ERROR, "护栏目标包名为空", "请填写目标应用包名（如 com.jingdong.app.mall）", it)
+                    }
+                    // N-L9：kitBoot 放在模块里会让 $kit 成为函数局部变量，其他地方的 kit 积木找不到它
+                    if (it.scope != "主程序") {
+                        add(Level.ERROR, "kitBoot 不能放在模块内", "\$kit 变量必须在主程序作用域声明，否则其他积木访问不到", it)
+                    }
+                }
+                "kitWaitFor", "kitClick" -> {
+                    if (s("value").isBlank()) {
+                        add(Level.ERROR, "护栏控件定位值为空", "空值无法定位目标节点；请填写要匹配的文本 / desc / id", it)
+                    }
+                    if (b.type == "kitWaitFor" && n("timeoutMs") <= 0) {
+                        add(Level.WARN, "护栏等待超时未设置", "建议设置为 5000~15000 毫秒", it)
+                    }
+                    // N-L9：match="regex" 时检查正则能否编译
+                    if (s("match") == "regex" && s("value").isNotBlank()) {
+                        runCatching { Regex(s("value")) }.onFailure { _ ->
+                            add(Level.ERROR, "正则表达式无效：${s("value")}", "请修复正则语法，或改用「包含/精确等于」模式", it)
+                        }
+                    }
+                }
+            }
+
+            if (b.type.startsWith("kit") && b.type != "kitBoot" && items.none { x -> x.b.type == "kitBoot" }) {
+                add(Level.ERROR, "缺少「初始化护栏运行时」", "使用护栏积木前，需在脚本开头添加「初始化护栏运行时 (kitBoot)」以创建 \$kit 实例", it)
+            }
+
+            // N-L9：Kit 和 $kit 是运行时保留名，用户不能用这些名字定义变量/函数
+            val reservedKitNames = setOf("Kit", "\$kit")
+            if (b.type in setOf("varSet", "varAssign") && s("name") in reservedKitNames) {
+                add(Level.ERROR, "变量名 ${s("name")} 是护栏运行时保留名", "Kit 和 \$kit 由 kitBoot 创建，请使用其他名称", it)
+            }
+            if (b.type == "funcDef" && s("name") in reservedKitNames) {
+                add(Level.ERROR, "函数名 ${s("name")} 是护栏运行时保留名", "Kit 和 \$kit 由 kitBoot 创建，请使用其他名称", it)
             }
 
             if (b.type in containerTypes && b.children.values.all { it.isEmpty() }) {
@@ -120,11 +198,29 @@ object Diagnose {
             add(Level.WARN, "缺少「收工判定」", "浮层首屏可能全是抽奖/券，0 任务要下滑扫描后再收工，否则会漏做京豆任务", last)
         }
 
-        val names = mutableSetOf<String>()
+        if (items.any { it.b.type == "kitBoot" } && items.none { it.b.type == "kitFinish" }) {
+            val lastKit = items.lastOrNull { it.b.type.startsWith("kit") }
+            add(Level.WARN, "护栏流程缺少「护栏收尾汇总」", "建议在末尾添加「护栏收尾汇总 (kitFinish)」以输出动作统计与 WARN/SUCCESS 判定", lastKit)
+        }
+
+        // N-L9：kitBoot 必须在第一个其他 kit 积木之前使用
+        val mainItems = items.filter { it.scope == "主程序" }
+        val kitBootIdx = mainItems.indexOfFirst { it.b.type == "kitBoot" }
+        val firstOtherKitIdx = mainItems.indexOfFirst { it.b.type.startsWith("kit") && it.b.type != "kitBoot" }
+        if (kitBootIdx >= 0 && firstOtherKitIdx >= 0 && firstOtherKitIdx < kitBootIdx) {
+            val offender = mainItems[firstOtherKitIdx]
+            add(Level.ERROR, "护栏积木出现在 kitBoot 之前", "kitBoot 必须是第一个护栏积木，否则 \$kit 变量未定义就被使用", offender)
+        }
+
+        val seenClean = mutableMapOf<String, String>() // cleaned -> original name
         project.modules.forEach { m ->
             val name = m.name.trim()
+            val cleaned = cn.dumate.a6studio.catalog.Js.moduleName(name)
             if (name.isEmpty()) add(Level.ERROR, "模块名为空", "模块名用于生成函数名，不能为空")
-            else if (!names.add(name)) add(Level.ERROR, "模块名重复：$name", "重名会生成同名函数，互相覆盖")
+            else {
+                val prev = seenClean.put(cleaned, name)
+                if (prev != null) add(Level.ERROR, "模块名冲突：$prev / $name", "两者清洗后都变成 $cleaned，会生成同名函数互相覆盖")
+            }
             if (m.children["body"].isNullOrEmpty()) add(Level.INFO, "模块「$name」是空的", "空模块可以占位，但调用它什么也不做")
         }
 
@@ -140,6 +236,9 @@ object Diagnose {
         val issues = mutableListOf<Issue>()
         if (run.status == "error" && run.error != null) {
             issues += Issue(Level.ERROR, "运行抛出异常", run.error, "运行日志")
+        }
+        if (run.status == "timeout") {
+            issues += Issue(Level.ERROR, "运行超时被自动停止", run.error ?: "脚本可能卡在死循环里", "运行日志")
         }
         val logs = run.logs
         fun count(pattern: Regex) = logs.count { pattern.containsMatchIn(it.msg) }
@@ -166,6 +265,23 @@ object Diagnose {
     }
 
     /** Human-readable block label used in diagnostics and the audit panel. */
+    private val jsIdentifier = Regex("^[A-Za-z_$][A-Za-z0-9_$]*$")
+    private val jsReserved = setOf(
+        "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do",
+        "else", "export", "extends", "finally", "for", "function", "if", "import", "in", "instanceof",
+        "new", "return", "super", "switch", "this", "throw", "try", "typeof", "var", "void", "while",
+        "with", "yield", "let", "static", "enum", "await", "null", "true", "false"
+    )
+
+    /** ASCII-only on purpose: Rhino's ES6 mode rejects some Unicode identifiers other engines accept. */
+    fun isJsIdentifier(text: String): Boolean = jsIdentifier.matches(text) && text !in jsReserved
+
+    fun isJsReserved(text: String): Boolean = text in jsReserved
+
+    /** Blank, or every comma-separated item is a valid identifier (`a, b`). */
+    fun isJsIdentifierList(text: String): Boolean =
+        text.isBlank() || text.split(',').all { isJsIdentifier(it.trim()) }
+
     fun blockLabel(block: Block): String {
         val def = Catalog.byType(block.type) ?: return block.type
         return Catalog.cleanName(def)

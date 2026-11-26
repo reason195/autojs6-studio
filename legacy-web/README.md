@@ -78,6 +78,8 @@ MCP_UPSTREAM="http://<手机IP>:<端口>/mcp" node mcp-bridge.mjs
 # 浏览器里填 http://127.0.0.1:8765/mcp
 ```
 
+桥接默认只监听 `127.0.0.1`，只接受本机页面（`localhost` / `127.0.0.1` 来源）且 `Content-Type: application/json` 的请求，其他网页及默认 `null` 来源一律 403；若确需以 `file://` 打开页面（来源为 `null`），需显式设 `ALLOW_NULL_ORIGIN=1` 并在设备页自己填令牌（桥接不会替 `null` 来源代填 `MCP_TOKEN`，也不会在 `/health` 暴露上游地址）。确实要让局域网别的机器连进来时设 `HOST=0.0.0.0`，部署在其他域名时用 `ALLOW_ORIGINS=https://你的域名` 放行。
+
 桥接只是一层带 CORS 的透明转发，不改协议；调用的是 `initialize` → `notifications/initialized` → `tools/call`（`device_ping` / `device_info` / `script_run` / `console_tail` / `ui_dump` / `ui_find` / `ui_explain_selector` / `ui_current_window`）。
 
 ### 没真机也想试拾取器

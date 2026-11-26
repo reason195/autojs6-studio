@@ -1,0 +1,192 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    # The release artifacts are Windows-only for now (MSI + portable zip), and jpackage only
+    # produces an MSI on Windows, so one job covers tests and packaging end to end.
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write # 推 tag 时要创建/更新 Release 并上传附件
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # shared/ applies the Android library plugin, so the SDK must exist for :shared:jvmTest
+      # to configure at all, and androidApp/ needs compileSdk 35.
+      #
+      # windows-latest ships the SDK (ANDROID_HOME set, licenses accepted), but this used to go
+      # through android-actions/setup-android@v3, which runs `sdkmanager tools` — a package that
+      # no longer exists. Every run died there in 20 s with
+      # `Warning: Failed to find package 'tools'` before compiling a single line.
+      - name: Android SDK
+        shell: pwsh
+        run: ./tools/ci-android-sdk.ps1 -Required
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew :shared:jvmTest --console=plain
+
+      - name: Android debug APK
+        run: ./gradlew :androidApp:assembleDebug --console=plain
+
+      # jpackage needs WiX 3.x; the Compose plugin downloads 3.11.2 into build/wix311 and puts
+      # it on jpackage's PATH, so no separate WiX step is required.
+      # Note: nativeDistributions.description must stay ASCII, otherwise light.exe fails with
+      # the useless `exit 311`.
+      - name: Windows MSI
+        run: ./gradlew :desktop:packageMsi --console=plain
+
+      - name: Windows portable image
+        run: ./gradlew :desktop:createDistributable --console=plain
+
+      - name: Collect release artifacts
+        shell: pwsh
+        run: |
+          # 版本号只有一个来源：gradle.properties 的 a6studio.version
+          $version = (Select-String -Path gradle.properties -Pattern '^a6studio\.version=').Line.Split('=')[1].Trim()
+          Write-Host "version=$version"
+          "A6STUDIO_VERSION=$version" | Out-File -Append $env:GITHUB_ENV
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "desktop/build/compose/binaries/main/msi/AutoJs6 Studio-$version.msi" "dist/AutoJs6Studio-$version-windows-x64.msi"
+          Copy-Item "androidApp/build/outputs/apk/debug/androidApp-debug.apk" "dist/AutoJs6Studio-$version-debug.apk"
+          # 用脚本打包，不用 Compress-Archive（后者写反斜杠分隔符，跨平台解压会出错）
+          python tools/make-zip.py --out "dist/AutoJs6Studio-$version-windows-x64.zip"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/*
+          if-no-files-found: error
+
+      # 推 tag 就是发版：正文取自 docs/release-notes.md 的对应小节 + 本次产物的 SHA-256，
+      # 所以「发布说明里的哈希」永远等于「上传的文件」。
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          if ($tag -ne "v$env:A6STUDIO_VERSION") {
+            throw "tag $tag 与 gradle.properties 的版本 $env:A6STUDIO_VERSION 不一致"
+          }
+          python tools/release-notes.py $env:A6STUDIO_VERSION --dist dist | Out-File -Encoding utf8 notes.md
+          if (gh release view $tag --json tagName 2>$null) {
+            gh release upload $tag (Get-ChildItem dist).FullName --clobber
+            gh release edit $tag --notes-file notes.md --title "AutoJs6 Studio $env:A6STUDIO_VERSION"
+          } else {
+            gh release create $tag --title "AutoJs6 Studio $env:A6STUDIO_VERSION" --notes-file notes.md (Get-ChildItem dist).FullName
+          }
+
+      # jpackage only says `light.exe ... exited with 311 code`; its logs are the only way to
+      # see what actually broke, so keep them when the build fails.
+      - name: Upload jpackage logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jpackage-logs
+          path: desktop/build/compose/logs/**
+          if-no-files-found: ignore
+
+  # macOS / Linux 一直是「你自己在对应系统上构建」——README 这么写，但没人真的跑过。
+  # 这个 job 至少保证代码在 Linux 上能编译、能跑单测、能产出桌面可分发目录（不做安装包，
+  # 那需要 fakeroot 等打包工具，且没有用户会去装）。
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # shared/ 应用了 Android library 插件，即使只跑 jvmTest 也需要 SDK 存在；
+      # ubuntu runner 自带 ANDROID_HOME，用同一个脚本写 local.properties。
+      - name: Android SDK
+        shell: bash
+        run: |
+          sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          [ -n "$sdk" ] || { echo "ANDROID_HOME 未设置" >&2; exit 1; }
+          echo "sdk.dir=$sdk" > local.properties
+          echo "Android SDK: $sdk"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew :shared:jvmTest --console=plain
+
+      - name: Desktop distributable (Linux)
+        run: ./gradlew :desktop:createDistributable --console=plain
+
+      - name: Check the produced image
+        shell: bash
+        run: |
+          app="desktop/build/compose/binaries/main/app/AutoJs6 Studio"
+          ls -la "$app"
+          ls -la "$app/bin" || true
+          test -x "$app/bin/AutoJs6 Studio"
+
+  # 真机链路（ping / device_info / ui_dump / script_run / console_tail）只能在能访问
+  # 192.168.x.x 的机器上跑：GitHub 托管的 runner 在局域网外，连不到手机。
+  #
+  # 启用方式（令牌不进仓库）：
+  #   1. 在一台常开、与手机同网段的机器上装 self-hosted runner，打上标签 a6studio-lan
+  #   2. 把 mcp.txt 的内容存成仓库 secret A6_MCP_CONFIG
+  #   3. 把仓库变量 LIVE_DEVICES 设为 true（不设就跳过，避免任务在队列里干等）
+  # 然后手动触发本 workflow（Actions → build → Run workflow）。
+  live-devices:
+    if: github.event_name == 'workflow_dispatch' && vars.LIVE_DEVICES == 'true'
+    runs-on: [self-hosted, a6studio-lan]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # self-hosted 机器上可能没有 ANDROID_HOME，只在本目录放了 local.properties；
+      # 不带 -Required 时脚本容忍这种情况。
+      - name: Android SDK
+        shell: pwsh
+        run: ./tools/ci-android-sdk.ps1
+
+      - name: Write device config
+        shell: pwsh
+        env:
+          A6_MCP_CONFIG: ${{ secrets.A6_MCP_CONFIG }}
+        run: |
+          if (-not $env:A6_MCP_CONFIG) { throw '缺少仓库 secret A6_MCP_CONFIG（mcp.txt 的内容，含令牌）' }
+          $env:A6_MCP_CONFIG | Out-File -Encoding utf8 mcp.txt
+
+      - name: Live MCP check
+        run: python tools/live-check.py
+
+      - name: Remove device config
+        if: always()
+        shell: pwsh
+        run: Remove-Item mcp.txt -ErrorAction SilentlyContinue

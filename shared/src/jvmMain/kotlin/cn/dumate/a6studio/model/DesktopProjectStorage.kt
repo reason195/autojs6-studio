@@ -10,11 +10,11 @@ class DesktopProjectStorage(private val platform: Platform) : ProjectStorage {
         ".a6studio" + File.separator + "project.json"
     )
 
-    override fun loadRaw(): String? =
-        if (file.exists()) runCatching { file.readText() }.getOrNull() else null
+    /** Null only when there is no project yet; read errors are thrown (see ProjectRepo.load). */
+    override fun loadRaw(): String? = AtomicFiles.readOrNull(file)
 
-    override fun saveRaw(json: String) {
-        file.parentFile?.mkdirs()
-        file.writeText(json)
-    }
+    override fun saveRaw(json: String) = AtomicFiles.write(file, json)
+
+    /** Keeps unreadable content beside the project so a bad read cannot destroy the user's work. */
+    override fun backupBroken(raw: String): String? = runCatching { AtomicFiles.backupBroken(file, raw) }.getOrNull()
 }

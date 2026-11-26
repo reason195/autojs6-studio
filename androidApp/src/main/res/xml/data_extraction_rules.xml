@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ replaces fullBackupContent with dataExtractionRules. Same rule as backup_rules.xml:
+  cloud backup and device-to-device transfer must not carry the MCP token file, which can run
+  scripts and shell commands on the phone.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="a6studio.tokens.v1" />
+        <exclude domain="file" path="a6studio.tokens.ai.v1" />
+        <exclude domain="file" path="a6studio.ai.v1" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="a6studio.tokens.v1" />
+        <exclude domain="file" path="a6studio.tokens.ai.v1" />
+        <exclude domain="file" path="a6studio.ai.v1" />
+    </device-transfer>
+</data-extraction-rules>

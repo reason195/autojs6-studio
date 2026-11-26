@@ -37,7 +37,6 @@ import cn.dumate.a6studio.model.Template
 import cn.dumate.a6studio.model.Templates
 import cn.dumate.a6studio.ui.components.Badge
 import cn.dumate.a6studio.ui.components.BadgeKind
-import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.panes.SmallButton
 
 /**
@@ -108,7 +107,7 @@ fun GuideOverlay(state: StudioState) {
     val current = steps[step.coerceIn(0, steps.size - 1)]
 
     Box(
-        Modifier.fillMaxSize().background(Color(0xE605070A)).clickable(enabled = false) { },
+        Modifier.fillMaxSize().background(Color(0x661F2328)).clickable(enabled = false) { },
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -179,7 +178,7 @@ fun GuideOverlay(state: StudioState) {
 @Composable
 fun TemplateOverlay(state: StudioState) {
     Box(
-        Modifier.fillMaxSize().background(Color(0xCC05070A)).clickable { state.closeTemplates() },
+        Modifier.fillMaxSize().background(Color(0x551F2328)).clickable { state.closeTemplates() },
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -218,13 +217,11 @@ fun TemplateOverlay(state: StudioState) {
 
 @Composable
 private fun TemplateCard(template: Template, onPick: () -> Unit) {
-    val (hoverMod, hovered) = rememberHovered()
     Column(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .then(hoverMod)
-            .background(if (hovered) Palette.hover else Palette.panelAlt)
-            .border(1.dp, if (hovered) Palette.accent.copy(alpha = 0.45f) else Palette.borderSoft, RoundedCornerShape(8.dp))
+            .background(Palette.panelAlt)
+            .border(1.dp, Palette.borderSoft, RoundedCornerShape(8.dp))
             .clickable(onClick = onPick)
             .padding(12.dp)
     ) {
@@ -281,13 +278,11 @@ fun EmptyCanvasGuide(
 
 @Composable
 private fun NextStepCard(title: String, hint: String, onClick: () -> Unit) {
-    val (hoverMod, hovered) = rememberHovered()
     Row(
         Modifier.widthIn(max = 460.dp).fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .then(hoverMod)
-            .background(if (hovered) Palette.hover else Palette.panelAlt)
-            .border(1.dp, if (hovered) Palette.accent.copy(alpha = 0.45f) else Palette.borderSoft, RoundedCornerShape(8.dp))
+            .background(Palette.panelAlt)
+            .border(1.dp, Palette.borderSoft, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically

@@ -1,5 +1,6 @@
 package cn.dumate.a6studio.catalog
 
+import cn.dumate.a6studio.diagnose.Diagnose
 import cn.dumate.a6studio.model.Block
 import cn.dumate.a6studio.model.ParamValue
 import cn.dumate.a6studio.model.Project
@@ -87,7 +88,10 @@ class GenContext(
 
     fun callModule(block: Block): String {
         val key = block.params["module"]?.asText() ?: ""
-        val m = project.modules.firstOrNull { it.id == key || it.name == key }
+        // L10: match by id only. The old name fallback let a renamed module, or a new module
+        // that happened to reuse an old name, silently receive calls meant for another one.
+        // Old projects that stored names are migrated to ids once, in ProjectRepo.load().
+        val m = project.modules.firstOrNull { it.id == key }
             ?: return "// 未选择模块"
         val args = block.params["args"]?.asText().orEmpty()
         return Js.moduleName(m.name) + "(" + args + ");"
@@ -107,14 +111,61 @@ object Js {
                 '\t' -> sb.append("\\t")
                 '\b' -> sb.append("\\b")
                 '\u000C' -> sb.append("\\f")
+                // U+2028 / U+2029 are JS line terminators. Modern engines (ES2019) accept
+                // them inside literals, but older Rhino builds choke — escaping is free.
+                '\u2028' -> sb.append("\\u2028")
+                '\u2029' -> sb.append("\\u2029")
                 else ->
-                    if (ch < ' ') sb.append("\\u%04x".format(ch.code))
+                    if (ch < ' ') sb.append("\\u" + ch.code.toString(16).padStart(4, '0'))
                     else sb.append(ch)
             }
         }
         sb.append("\"")
         return sb.toString()
     }
+
+    /**
+     * Text that ends up inside a line comment or a block comment.
+     *
+     * Only line terminators matter here: one stray CR turns the rest of a line comment into
+     * code (`// 说明` + CR + `下一行` runs 「下一行」). For block comments the closing marker is
+     * neutralised too, otherwise an imported project name could end the comment early and the
+     * rest of it would be compiled as code that the UI never shows.
+     */
+    fun commentSafe(text: String, block: Boolean = false): String {
+        var out = text
+            .replace("\r\n", " ")
+            .replace('\r', ' ')
+            .replace('\n', ' ')
+            .replace("\u2028", " ")
+            .replace("\u2029", " ")
+        if (block) out = out.replace("*/", "* /")
+        return out
+    }
+
+    /** Identifier-safe text: keeps letters/digits/underscore/dollar and the CJK range. */
+    fun idSafe(text: String): String {
+        val cleaned = text.map { ch ->
+            if (ch.isLetterOrDigit() || ch == '_' || ch == '$' || (ch.code in 0x4E00..0x9FA5)) ch else '_'
+        }.joinToString("")
+        return if (cleaned.isEmpty() || cleaned[0].isDigit()) "_$cleaned" else cleaned
+    }
+
+    /** True when [text] can be used as a parameter name without quoting. */
+    fun isIdentifier(text: String): Boolean =
+        text.isNotEmpty() && (text[0].isLetter() || text[0] == '_' || text[0] == '$') &&
+            text.all { it.isLetterOrDigit() || it == '_' || it == '$' }
+
+    /**
+     * Comma-separated parameter list for a function signature. The text is free-form, so keep
+     * only plain, non-reserved identifiers: `a) {} evil(); function z(b` used to land verbatim
+     * in `function name(...)` and run at the script's top level.
+     */
+    fun paramList(raw: String): String =
+        raw.split(',')
+            .map { it.trim() }
+            .filter { Diagnose.isJsIdentifier(it) }
+            .joinToString(", ")
 
     fun indentLines(text: String, level: Int): String {
         if (text.isEmpty() || level <= 0) return text

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Auto Backup (API 26-30). The MCP tokens in files/a6studio.tokens.v1 can drive the phone
+  (script_run / shell_exec), so they must never leave the device inside a cloud backup or an
+  adb backup. Everything else (the project file) is still backed up.
+-->
+<full-backup-content>
+    <exclude domain="file" path="a6studio.tokens.v1" />
+    <exclude domain="file" path="a6studio.tokens.ai.v1" />
+    <exclude domain="file" path="a6studio.ai.v1" />
+</full-backup-content>

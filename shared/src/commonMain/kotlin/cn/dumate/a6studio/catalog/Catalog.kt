@@ -19,7 +19,9 @@ object Catalog {
         Category("data", "数据 / 网络 / 文件", 0xFF3D8BD4),
         Category("debug", "调试与诊断", 0xFFD4A017),
         Category("jd", "京东领券中心（实战）", 0xFFD94F4F),
-        Category("module", "我的模块", 0xFF64748B)
+        Category("kit", "护栏运行时（aj6_kit）", 0xFF0D9488),
+        Category("module", "我的模块", 0xFF64748B),
+        Category("raw", "原生代码", 0xFF7A8699)
     )
 
     val BY: List<SelectOption> = listOf(
@@ -82,13 +84,16 @@ object Catalog {
         defData()
         defDebug()
         defJd()
+        defKit()
+        defRaw()
         defModule()
     }
 
     // ===================== 流程与控制 =====================
     private fun defFlow() {
         def("comment", "flow", "注释", listOf(text("text", "内容", "说明"))) { b, c ->
-            "// " + c.str(b, "text").replace("\n", " ")
+            // 之前只把 \n 换成空格：从 Windows 粘进来的 \r 仍是行终止符，后半句会变成代码。
+            "// " + Js.commentSafe(c.str(b, "text"))
         }
         def("autoWait", "flow", "等待无障碍服务就绪") { _, _ -> "auto.waitFor();" }
         def("consoleShow", "flow", "显示控制台浮窗") { _, _ -> "console.show();" }
@@ -156,7 +161,8 @@ object Catalog {
             val g = c.newVar("guard")
             val cond = c.str(b, "cond").ifEmpty { "false" }
             "let $g = 0;\nwhile ($cond) {\n  if (++$g > ${c.num(b, "max").toLong().coerceAtLeast(1)}) " +
-                "{ log(\"循环保护触发: ${escForString(cond)}\"); break; }\n" +
+                // 条件写成多行表达式时，插进字符串字面量会变成未闭合的字符串；Js.quote 负责转义。
+                "{ log(${c.quote("循环保护触发: " + cond)}); break; }\n" +
                 c.body(b, "body", 1) + "\n}"
         }
         def(
@@ -174,13 +180,15 @@ object Catalog {
             "funcDef", "flow", "定义函数 {name}({args})",
             listOf(
                 text("name", "函数名", "doTask"),
-                text("args", "参数列表", "task"),
-                chk("isAsync", "生成 async 函数", false)
+                // No "生成 async 函数" switch: Rhino 1.9.2 (what AutoJs6 ships) does not support
+                // `async`, so the checkbox had no effect and turning it on produced a script the
+                // device rejects.
+                text("args", "参数列表", "task")
             ),
             listOf(SlotDef("body", "函数体"))
         ) { b, c ->
             val name = c.str(b, "name").ifEmpty { "fn" }
-            "function $name(${c.str(b, "args")}) {\n" + c.body(b, "body", 1) + "\n}"
+            "function $name(${Js.paramList(c.str(b, "args"))}) {\n" + c.body(b, "body", 1) + "\n}"
         }
         def(
             "funcCall", "flow", "调用函数 {name}({args})",
@@ -209,7 +217,9 @@ object Catalog {
             "launchPackage", "app", "启动应用 {pkg}",
             listOf(text("pkg", "包名", "com.jingdong.app.mall"), num("wait", "等待毫秒", 1500.0))
         ) { b, c ->
-            "app.launchPackage(${c.quote(c.str(b, "pkg"))});\nsleep(${c.num(b, "wait").toLong()});"
+            val wait = c.num(b, "wait").toLong()
+            val launch = "app.launchPackage(${c.quote(c.str(b, "pkg"))});"
+            if (wait > 0) "$launch\nsleep($wait);" else launch
         }
         def("openUrl", "app", "打开链接 / 深链", listOf(text("url", "URL", "https://pro.m.jd.com/"))) { b, c ->
             "app.openUrl(${c.quote(c.str(b, "url"))});"
@@ -294,7 +304,9 @@ object Catalog {
         ) { b, c ->
             val v = c.str(b, "var").ifEmpty { "t" }
             val n = c.newVar("node")
-            "let $n = ${c.selector(b)}.findOne(2000);\nlet $v = $n ? $n.text() : null;\nlog(\"$v = \" + $v);"
+            // L11: the variable name also appears inside a log string; quote it so a name with
+            // a quote or backslash cannot break out of the literal.
+            "let $n = ${c.selector(b)}.findOne(2000);\nlet $v = $n ? $n.text() : null;\nlog(${c.quote("$v = ")} + $v);"
         }
         def(
             "existsVar", "ui", "{var} = 控件是否存在",
@@ -312,7 +324,9 @@ object Catalog {
         ) { b, c ->
             val times = c.num(b, "times").toLong().coerceAtLeast(1)
             val call = if (c.str(b, "dir") == "backward") "scrollBackward" else "scrollForward"
-            (1..times).joinToString("") { "${c.selector(b)}.findOne(2000).$call();\n" }.removeSuffix("\n")
+            val n = c.newVar("node")
+            "let $n = ${c.selector(b)}.findOne(2000);\n" +
+                "if ($n) { for (let i = 0; i < $times; i++) $n.$call(); } else { log(\"找不到控件，无法滚动\"); }"
         }
         def("pressBack", "ui", "按返回键") { _, _ -> "back();" }
         def("pressHome", "ui", "回到桌面") { _, _ -> "home();" }
@@ -337,7 +351,7 @@ object Catalog {
             "swipe(device.width / 2, device.height * 0.78, device.width / 2, device.height * 0.28, 420);"
         }
         def("edgeBackGesture", "gesture", "左边缘右滑（切回上个应用）") { _, _ ->
-            "gesture(2, device.height * 0.5, device.width * 0.65, device.height * 0.5, 320);"
+            "gesture(320, [2, device.height * 0.5], [device.width * 0.65, device.height * 0.5]);"
         }
         def(
             "pressKey", "gesture", "按键 {key}",
@@ -350,7 +364,13 @@ object Catalog {
                 )
             )
         ) { b, c ->
-            "press(${c.quote(c.str(b, "key").ifEmpty { "back" })});"
+            when (c.str(b, "key").ifEmpty { "back" }) {
+                "back" -> "back();"
+                "home" -> "home();"
+                "recents" -> "recents();"
+                "menu" -> "KeyCode(\"KEYCODE_MENU\");"
+                else -> "back();"
+            }
         }
     }
 
@@ -374,7 +394,10 @@ object Catalog {
         }
         def("saveScreen", "vision", "截图保存到 {path}", listOf(text("path", "路径", "/sdcard/autojs6/shot.png"))) { b, c ->
             val p = c.str(b, "path")
-            "files.ensureDir(${c.quote(dirname(p))});\nimages.save(images.captureScreen(), ${c.quote(p)}, \"png\", 100);\nlog(\"截图已保存\");"
+            // AutoJs6 的 ensureDir(path) 是「确保这个文件所在的目录存在」（真机实测：
+            // ensureDir("/sdcard/x/a.png") 会建 /sdcard/x，不会把 a.png 建成目录）。
+            // 之前多套一层 dirname，只建了更上一级，保存截图会因为目录不存在而失败。
+            "files.ensureDir(${c.quote(p)});\nimages.save(images.captureScreen(), ${c.quote(p)}, \"png\", 100);\nlog(\"截图已保存\");"
         }
     }
 
@@ -386,7 +409,7 @@ object Catalog {
         ) { b, c ->
             val p = c.str(b, "path")
             val fn = if (b.params["append"]?.asBool() != false) "files.append(" else "files.write("
-            "files.ensureDir(${c.quote(dirname(p))});\n$fn${c.quote(p)}, ${c.str(b, "content").ifEmpty { "\"\"" }});"
+            "files.ensureDir(${c.quote(p)});\n$fn${c.quote(p)}, ${c.str(b, "content").ifEmpty { "\"\"" }});"
         }
         def(
             "filesRead", "data", "读文件 {path} → {var}",
@@ -546,7 +569,7 @@ object Catalog {
             listOf(
                 "// 跳到京东金融后不要在其中等待：手势条右滑切回京东",
                 "sleep(800);",
-                "gesture(2, device.height * 0.5, device.width * 0.65, device.height * 0.5, 320);",
+                "gesture(320, [2, device.height * 0.5], [device.width * 0.65, device.height * 0.5]);",
                 "sleep(1500);",
                 "log(\"已切回京东\");"
             ).joinToString("\n")
@@ -584,6 +607,174 @@ object Catalog {
         }
     }
 
+    // ===================== 护栏运行时（aj6_kit） =====================
+    private fun defKit() {
+        val matchOpts = listOf(
+            SelectOption("contains", "包含"),
+            SelectOption("eq", "精确等于"),
+            SelectOption("regex", "正则")
+        )
+        val byOpts = listOf(
+            SelectOption("text", "文本 (text)"),
+            SelectOption("desc", "描述 (desc)")
+        )
+        val resultOpts = listOf(
+            SelectOption("auto", "自动判定（有未完成报 WARN）"),
+            SelectOption("success", "强制成功 (SUCCESS)"),
+            SelectOption("warn", "警告 (WARN)"),
+            SelectOption("failed", "失败 (FAILED)")
+        )
+
+        def(
+            "kitBoot", "kit", "初始化护栏运行时 {name}",
+            listOf(
+                text("pkg", "目标包名", "com.jingdong.app.mall"),
+                text("name", "脚本名称", "京东任务"),
+                num("maxRuntimeMs", "总超时毫秒", 900000.0),
+                // N-M9：导入 IR 时原样保存的 policy JSON。只能在默认护栏基础上加严（见 KitPolicy）
+                text("policyJson", "附加护栏策略 (JSON，可空)", "")
+            )
+        ) { b, c ->
+            val pkg = c.quote(c.str(b, "pkg").ifEmpty { "com.jingdong.app.mall" })
+            val rawName = c.str(b, "name").ifEmpty { "京东任务" }
+            val name = c.quote(rawName)
+            // N-L6：id 用于日志文件名（'jdstudio_'+id+'.log'），必须过滤掉路径穿越字符和控制字符。
+            // 只保留 [A-Za-z0-9_-]；全部过滤完为空时用 "kit" 兜底。
+            val safeId = rawName.replace(Regex("[^A-Za-z0-9_-]"), "").ifEmpty { "kit" }
+            val idLit = c.quote(safeId)
+            val maxMs = c.num(b, "maxRuntimeMs").toLong().let { if (it <= 0) 900000L else it }
+            (
+                listOf(
+                    "var \$kit = Kit.boot({",
+                    "  id: $idLit, name: $name, pkg: $pkg,",
+                    "  policy: {"
+                ) +
+                    KitPolicy.renderJs(c.str(b, "policyJson"), maxMs) +
+                    listOf("  }", "});")
+            ).joinToString("\n")
+        }
+
+        def("kitLaunch", "kit", "护栏拉起目标 App 并等前台") { _, _ ->
+            listOf(
+                "if (!\$kit.launch()) {",
+                "  \$kit.log(\"FAILED 未能将目标 App 拉到前台\");",
+                "  \$kit.finish(\"failed\");",
+                "  exit();",
+                "}"
+            ).joinToString("\n")
+        }
+
+        def(
+            "kitOpenDeepLink", "kit", "深链直达并等前台就绪",
+            listOf(text("url", "深链地址", "openapp.jdmobile://virtual"))
+        ) { b, c ->
+            val url = c.quote(c.str(b, "url"))
+            listOf(
+                "if (!\$kit.openDeepLink($url)) {",
+                "  \$kit.log(\"FAILED 深链打开失败或超时\");",
+                "  \$kit.finish(\"failed\");",
+                "  exit();",
+                "}"
+            ).joinToString("\n")
+        }
+
+        def("kitGuard", "kit", "执行风控与危险页拦截检查") { _, _ ->
+            listOf(
+                "if (!\$kit.guard()) {",
+                "  \$kit.log(\"风控或超时触发，安全停止\");",
+                "  \$kit.finish(\"failed\");",
+                "  exit();",
+                "}"
+            ).joinToString("\n")
+        }
+
+        def(
+            "kitWaitFor", "kit", "护栏等待可见控件 {value}",
+            listOf(
+                sel("by", "定位方式", "text", byOpts),
+                sel("match", "匹配模式", "contains", matchOpts),
+                text("value", "目标文案", "天天签到"),
+                num("timeoutMs", "超时毫秒", 15000.0)
+            )
+        ) { b, c ->
+            val by = c.quote(c.str(b, "by").ifEmpty { "text" })
+            val match = c.quote(c.str(b, "match").ifEmpty { "contains" })
+            val value = c.quote(c.str(b, "value"))
+            val ms = c.num(b, "timeoutMs").toLong().let { if (it <= 0) 15000L else it }
+            listOf(
+                "if (!\$kit.waitFor({ by: $by, match: $match, value: $value, filters: { inScreen: true } }, $ms)) {",
+                "  \$kit.log(\"未等到控件: \" + $value);",
+                "  \$kit.reportLeftover($value);",
+                "  \$kit.stat(\"failed\");",
+                "  if (\$kit.overBudget() || \$kit.atRisk()) { \$kit.finish(\"failed\"); exit(); }",
+                "}"
+            ).joinToString("\n")
+        }
+
+        def(
+            "kitClick", "kit", "护栏安全点击 {value}（bounds 中心）",
+            listOf(
+                sel("by", "定位方式", "text", byOpts),
+                sel("match", "匹配模式", "contains", matchOpts),
+                text("value", "目标文案", "去完成")
+            )
+        ) { b, c ->
+            val by = c.quote(c.str(b, "by").ifEmpty { "text" })
+            val match = c.quote(c.str(b, "match").ifEmpty { "contains" })
+            val value = c.quote(c.str(b, "value"))
+            listOf(
+                "var _r = \$kit.click({ by: $by, match: $match, value: $value, filters: { inScreen: true } });",
+                "if (!_r || !_r.ok) {",
+                "  if (_r && (_r.reason === \"guard\" || _r.reason === \"abort\")) { \$kit.finish(\"failed\"); exit(); }",
+                "  \$kit.reportLeftover($value);",
+                "  \$kit.stat(\"failed\");",
+                "}"
+            ).joinToString("\n")
+        }
+
+        def(
+            "kitWaitCountdown", "kit", "等倒计时归零 + {graceSec}s 余量后返回",
+            listOf(
+                num("minDwellSec", "无倒计时保底秒数", 12.0),
+                num("graceSec", "归零后余量秒数", 2.0)
+            )
+        ) { b, c ->
+            val minSec = c.num(b, "minDwellSec").toLong().let { if (it <= 0) 12L else it }
+            val graceSec = c.num(b, "graceSec").toLong().let { if (it < 0) 2L else it }
+            listOf(
+                "var _cd = \$kit.waitCountdown({ fallbackDwellMs: ${minSec * 1000L}, graceMs: ${graceSec * 1000L} });",
+                // R-4：返回 null 既可能是「没看到返回按钮」也可能是「护栏拦截」；后者必须停，不能继续导航
+                "if (!_cd) { if (\$kit.overBudget() || \$kit.atRisk()) { \$kit.finish(\"failed\"); exit(); } \$kit.backToBean(); }"
+            ).joinToString("\n")
+        }
+
+        def(
+            "kitFinish", "kit", "护栏收尾汇总（{result}）",
+            listOf(sel("result", "结束状态", "auto", resultOpts))
+        ) { b, c ->
+            val res = c.str(b, "result").ifEmpty { "auto" }
+            if (res == "auto") "\$kit.finish();" else "\$kit.finish(${c.quote(res)});"
+        }
+    }
+
+    // ===================== 导入的原生代码 =====================
+    /**
+     * Verbatim AutoJs6 script. Used when a script imported from `.js` contains constructs the
+     * block catalogue cannot express (helper functions, `ocr.detect()`, `app.startActivity`…):
+     * keeping the source as one block guarantees the imported project behaves exactly like the
+     * original instead of silently dropping code we failed to map.
+     */
+    private fun defRaw() {
+        def(
+            "rawJs", "raw", "原生 JavaScript 代码（导入的脚本）",
+            params = listOf(ParamDef("code", "代码", ParamKind.CODE, ParamValue.Text(""))),
+            slots = emptyList()
+        ) { b, c ->
+            val body = b.params["code"]?.asText().orEmpty()
+            if (body.isBlank()) "// （空的原生代码积木）" else body
+        }
+    }
+
     // ===================== 我的模块 =====================
     private fun defModule() {
         def(
@@ -605,11 +796,20 @@ object Catalog {
         return noPlaceholders.replace(Regex("\\s+"), " ").trim()
     }
 
-    private fun dirname(path: String): String {
-        val idx = path.lastIndexOf('/')
-        return if (idx > 0) path.substring(0, idx) else path
+    /**
+     * Block title with `{param}` placeholders filled from the block's current values, for the
+     * canvas header. cleanName() is for the palette, where no values exist yet: using it on
+     * the canvas left gaps like 「保持屏幕常亮 毫秒」 and 「每页最多 个」.
+     */
+    fun filledName(def: BlockDef, params: Map<String, cn.dumate.a6studio.model.ParamValue>): String {
+        val filled = Regex("\\{([^}]*)\\}").replace(def.name) { m ->
+            val key = m.groupValues[1]
+            val v = params[key] ?: def.params.firstOrNull { it.key == key }?.default
+            // asText() already prints whole numbers without ".0"; long text is shortened so
+            // the header stays on one line.
+            v?.asText()?.let { if (it.length > 24) it.take(23) + "…" else it } ?: ""
+        }
+        return filled.replace(Regex("\\s+"), " ").trim()
     }
 
-    /** Escape text that goes inside a generated double-quoted JS string literal. */
-    private fun escForString(s: String): String = s.replace("\\", "\\\\").replace("\"", "\\\"")
 }
