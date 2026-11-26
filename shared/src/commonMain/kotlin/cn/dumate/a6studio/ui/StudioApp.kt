@@ -29,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,6 +39,7 @@ import cn.dumate.a6studio.platform.systemBarPadding
 import cn.dumate.a6studio.ui.canvas.CanvasPanel
 import cn.dumate.a6studio.ui.components.Badge
 import cn.dumate.a6studio.ui.components.badgeKindOf
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.fields.InlineField
 import cn.dumate.a6studio.ui.palette.PalettePanel
 import cn.dumate.a6studio.ui.panes.CodePane
@@ -178,6 +180,9 @@ private fun TopBar(state: StudioState) {
                 }
                 Spacer(Modifier.width(8.dp))
                 Badge(state.deviceStatusText, badgeKindOf(state.deviceStatusLevel))
+                Spacer(Modifier.width(8.dp))
+                // Wide layout used to have no way to toggle beginner mode at all.
+                ModeSwitch(state)
             }
         }
     }
@@ -185,8 +190,11 @@ private fun TopBar(state: StudioState) {
 
 @Composable
 private fun BrandMark() {
+    val brush = androidx.compose.ui.graphics.Brush.linearGradient(
+        colors = listOf(Palette.accent, Color(0xFF7B5CFF))
+    )
     Box(
-        Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)).background(Palette.accent),
+        Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)).background(brush),
         contentAlignment = Alignment.Center
     ) { Text("A6", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color.White) }
 }
@@ -219,13 +227,15 @@ private fun TopActions(state: StudioState) {
 @Composable
 private fun ModeSwitch(state: StudioState) {
     val toFull = state.beginnerMode
+    val (hoverMod, hovered) = rememberHovered()
     Text(
         if (toFull) "高级" else "简单",
         fontSize = 11.sp,
         color = if (toFull) Palette.accent else Palette.ok,
         modifier = Modifier
             .clip(RoundedCornerShape(5.dp))
-            .background(Palette.panelAlt)
+            .then(hoverMod)
+            .background(if (hovered) Palette.hover else Palette.panelAlt)
             .border(1.dp, if (toFull) Palette.accent.copy(alpha = 0.5f) else Palette.border, RoundedCornerShape(5.dp))
             .clickable { state.changeBeginnerMode(!toFull) }
             .padding(horizontal = 9.dp, vertical = 5.dp)
@@ -234,13 +244,20 @@ private fun ModeSwitch(state: StudioState) {
 
 @Composable
 private fun TopAction(label: String, primary: Boolean = false, onClick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
+    val background = when {
+        primary -> if (hovered) Palette.accent else Palette.accent.copy(alpha = 0.85f)
+        hovered -> Palette.hover
+        else -> Palette.panelAlt
+    }
     Text(
         label,
         fontSize = 11.sp,
         color = if (primary) Color.White else Palette.text,
         modifier = Modifier
             .clip(RoundedCornerShape(5.dp))
-            .background(if (primary) Palette.accent.copy(alpha = 0.85f) else Palette.panelAlt)
+            .then(hoverMod)
+            .background(background)
             .border(1.dp, if (primary) Color.Transparent else Palette.border, RoundedCornerShape(5.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 5.dp)
@@ -326,6 +343,7 @@ private fun PaneTabs(state: StudioState) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
         tabs.forEach { (pane, label) ->
             val active = state.pane == pane
+            val (hoverMod, hovered) = rememberHovered()
             Text(
                 label,
                 fontSize = 10.5.sp,
@@ -333,7 +351,8 @@ private fun PaneTabs(state: StudioState) {
                 fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
                 modifier = Modifier
                     .clip(RoundedCornerShape(4.dp))
-                    .background(if (active) Palette.panelAlt else Color.Transparent)
+                    .then(hoverMod)
+                    .background(if (active) Palette.panelAlt else if (hovered) Palette.hover else Color.Transparent)
                     .border(if (active) 1.dp else 0.dp, Palette.border, RoundedCornerShape(4.dp))
                     .clickable { state.showPane(pane) }
                     .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -346,16 +365,19 @@ private fun PaneTabs(state: StudioState) {
 fun ToastHost(state: StudioState) {
     val msg = state.toastText.value ?: return
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-        Text(
-            msg,
-            fontSize = 11.5.sp,
-            color = Palette.text,
-            modifier = Modifier.padding(bottom = 40.dp)
-                .clip(RoundedCornerShape(6.dp))
+        Row(
+            Modifier.padding(bottom = 44.dp)
+                .shadow(elevation = 12.dp, shape = RoundedCornerShape(8.dp), clip = false)
+                .clip(RoundedCornerShape(8.dp))
                 .background(Palette.panelAlt)
-                .border(1.dp, Palette.border, RoundedCornerShape(6.dp))
-                .padding(horizontal = 12.dp, vertical = 7.dp)
-        )
+                .border(1.dp, Palette.border, RoundedCornerShape(8.dp))
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(7.dp).clip(RoundedCornerShape(4.dp)).background(Palette.accent))
+            Spacer(Modifier.width(8.dp))
+            Text(msg, fontSize = 11.5.sp, color = Palette.text)
+        }
     }
 }
 
@@ -363,7 +385,12 @@ fun ToastHost(state: StudioState) {
 private fun PaletteColumn(state: StudioState, modifier: Modifier) {
     val project = state.repo.current
     Column(modifier.border(width = 1.dp, color = Palette.borderSoft).background(Palette.panel)) {
-        PalettePanel(onAdd = { state.addBlock(it) }, modifier = Modifier.weight(1f), beginner = state.beginnerMode)
+        PalettePanel(
+            onAdd = { state.addBlock(it) },
+            modifier = Modifier.weight(1f),
+            beginner = state.beginnerMode,
+            focusRequest = state.paletteSearchFocusRequest
+        )
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)

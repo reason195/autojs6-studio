@@ -20,7 +20,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -37,6 +39,7 @@ import cn.dumate.a6studio.catalog.Category
 import cn.dumate.a6studio.catalog.Friendly
 import cn.dumate.a6studio.ui.Palette as P
 import cn.dumate.a6studio.ui.components.EmptyHint
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.fields.SearchField
 
 /**
@@ -47,10 +50,15 @@ import cn.dumate.a6studio.ui.fields.SearchField
 fun PalettePanel(
     onAdd: (String) -> Unit,
     modifier: Modifier = Modifier,
-    beginner: Boolean = false
+    beginner: Boolean = false,
+    focusRequest: Int = 0
 ) {
     var query by remember { mutableStateOf("") }
     val collapsed = remember { mutableStateOf(setOf<String>()) }
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(focusRequest) {
+        if (focusRequest > 0) runCatching { searchFocus.requestFocus() }
+    }
 
     val grouped = remember(query, beginner) {
         val q = query.trim().lowercase()
@@ -71,7 +79,8 @@ fun PalettePanel(
                 value = query,
                 onValueChange = { query = it },
                 placeholder = "搜索积木（Ctrl+K）",
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                focusRequester = searchFocus
             )
         }
         if (grouped.isEmpty()) {
@@ -103,8 +112,12 @@ fun PalettePanel(
 
 @Composable
 private fun CategoryHeader(category: Category, beginner: Boolean, collapsed: Boolean, count: Int, onToggle: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onToggle)
+        Modifier.fillMaxWidth()
+            .then(hoverMod)
+            .background(if (hovered) P.hover else Color.Transparent)
+            .clickable(onClick = onToggle)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -121,8 +134,12 @@ private fun CategoryHeader(category: Category, beginner: Boolean, collapsed: Boo
 @Composable
 private fun PaletteItem(def: BlockDef, color: Long, beginner: Boolean, onClick: () -> Unit) {
     val c = Color(color)
+    val (hoverMod, hovered) = rememberHovered()
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick)
+        Modifier.fillMaxWidth()
+            .then(hoverMod)
+            .background(if (hovered) P.hover else Color.Transparent)
+            .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

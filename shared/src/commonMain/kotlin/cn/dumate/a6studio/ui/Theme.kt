@@ -26,6 +26,9 @@ object Palette {
     val info = Color(0xFF6B9BD1)
     val codeBg = Color(0xFF0B0E13)
     val codeHl = Color(0xFF1D2A44)
+    // Hover fill for clickable rows/buttons (desktop mouse). A touch above panelAlt so it
+    // reads on both panels and rows; touch never triggers it.
+    val hover = Color(0xFF232B3C)
 }
 
 private val scheme = darkColorScheme(

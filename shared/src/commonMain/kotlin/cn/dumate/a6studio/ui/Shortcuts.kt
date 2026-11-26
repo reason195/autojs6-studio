@@ -14,7 +14,8 @@ import androidx.compose.foundation.focusable
 
 /**
  * Keyboard shortcuts matching the web build: F5 run, F6 tests, F7 diagnose, F8 audit,
- * F9 recorder, Ctrl+S save, Ctrl+Z undo, Ctrl+E export, Delete removes the selected block.
+ * F9 recorder, Ctrl+S save, Ctrl+Z undo, Ctrl+E export, Ctrl+K focus block search,
+ * Delete removes the selected block.
  */
 @Composable
 fun Modifier.studioShortcuts(state: StudioState): Modifier {
@@ -32,6 +33,7 @@ fun Modifier.studioShortcuts(state: StudioState): Modifier {
                 ctrl && ev.key == Key.S -> { state.saveNow(); true }
                 ctrl && ev.key == Key.Z -> { state.undo(); true }
                 ctrl && ev.key == Key.E -> { state.exportJs(); true }
+                ctrl && ev.key == Key.K -> { state.requestPaletteSearchFocus(); true }
                 ev.key == Key.Escape -> { state.closeOverlay(); true }
                 ev.key == Key.Delete -> {
                     if (state.repo.selected.value != null) { state.removeSelected(); true } else false

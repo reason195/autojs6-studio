@@ -38,6 +38,7 @@ import cn.dumate.a6studio.ui.components.BadgeKind
 import cn.dumate.a6studio.ui.components.Chip
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.components.KV
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.fields.InlineField
 import cn.dumate.a6studio.ui.fields.SearchField
 
@@ -377,14 +378,20 @@ private fun HelpItem(text: String) {
 
 @Composable
 fun SmallButton(label: String, primary: Boolean = false, onClick: () -> Unit) {
-    val color = if (primary) P.accent else P.textDim
+    val (hoverMod, hovered) = rememberHovered()
+    val background = when {
+        primary -> P.accent.copy(alpha = if (hovered) 0.35f else 0.25f)
+        hovered -> P.hover
+        else -> P.panelAlt
+    }
     Text(
         label,
         fontSize = 10.5.sp,
         color = if (primary) androidx.compose.ui.graphics.Color.White else P.text,
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(if (primary) color.copy(alpha = 0.25f) else P.panelAlt)
+            .then(hoverMod)
+            .background(background)
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp)
     )

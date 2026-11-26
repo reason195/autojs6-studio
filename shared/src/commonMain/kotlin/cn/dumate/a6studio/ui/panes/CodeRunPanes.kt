@@ -191,6 +191,17 @@ private fun SimPhone(state: StudioState) {
                 .background(androidx.compose.ui.graphics.Color(0xFF0A0C10))
                 .padding(6.dp)
         ) {
+            Box(
+                Modifier.fillMaxWidth().padding(top = 3.dp, bottom = 3.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                // Speaker slot: cheap realism cue that this is a phone, not a dialog.
+                Box(
+                    Modifier.width(56.dp).height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(androidx.compose.ui.graphics.Color(0xFF232B3C))
+                )
+            }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically

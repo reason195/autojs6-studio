@@ -6,6 +6,7 @@ import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -16,6 +17,8 @@ import androidx.compose.ui.unit.dp
 import cn.dumate.a6studio.model.AndroidProjectStorage
 import cn.dumate.a6studio.platform.Platform
 import cn.dumate.a6studio.runtime.RhinoRunEngine
+import cn.dumate.a6studio.ui.MobileSheet
+import cn.dumate.a6studio.ui.Overlay
 import cn.dumate.a6studio.ui.Palette
 import cn.dumate.a6studio.ui.StudioApp
 import cn.dumate.a6studio.ui.StudioState
@@ -119,6 +122,18 @@ class MainActivity : ComponentActivity() {
                     engineFactory = OkHttp,
                     engine = RhinoRunEngine
                 ).also { it.init() }
+            }
+            // System back closes transient UI (overlay → guide → templates → sheet) instead of
+            // dropping the user straight out of the app.
+            val backHandled = state.overlay != Overlay.NONE || state.showGuide ||
+                state.showTemplatePicker || state.mobileSheet != MobileSheet.CANVAS
+            BackHandler(enabled = backHandled) {
+                when {
+                    state.overlay != Overlay.NONE -> state.closeOverlay()
+                    state.showGuide -> state.dismissGuide()
+                    state.showTemplatePicker -> state.closeTemplates()
+                    else -> state.mobileSheet = MobileSheet.CANVAS
+                }
             }
             StudioTheme {
                 Surface(Modifier.fillMaxSize(), color = Palette.bg) {
