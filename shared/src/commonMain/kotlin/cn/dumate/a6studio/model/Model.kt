@@ -108,7 +108,9 @@ data class DeviceEntry(
 @Serializable
 data class BridgeSettings(
     val url: String = "",
-    val devices: List<DeviceEntry> = emptyList()
+    val devices: List<DeviceEntry> = emptyList(),
+    /** ProxyPin MCP 已保存的设备列表（与 AutoJs6 的 devices 同级，可记忆/删除）。 */
+    val proxyPinDevices: List<DeviceEntry> = emptyList()
 )
 
 @Serializable

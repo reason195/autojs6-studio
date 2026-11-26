@@ -448,11 +448,17 @@ class StudioState(
         val seenGuide = platform.readTextFile(GUIDE_MARKER) == "1"
         // 直接显示完整模式：默认不再进入简单模式（老用户仍可在「更多」里手动切换）
         beginnerMode = platform.readTextFile(BEGINNER_MARKER) == "1"
+        restoreUiState()
         if (!seenGuide) {
             if (repo.current.root.children["body"].isNullOrEmpty() && repo.current.modules.isEmpty()) {
                 repo.setProjectDirect(cn.dumate.a6studio.model.Samples.emptyProject())
             }
             showGuide = true
+        }
+
+        // 界面状态（当前页签 / 面板）随变化自动落盘：退出到桌面再回来，仍停在退出前的位置。
+        scope.launch {
+            androidx.compose.runtime.snapshotFlow { pane to mobileSheet }.collect { persistUiState() }
         }
 
         refreshCode()
@@ -470,6 +476,34 @@ class StudioState(
         const val BRIDGE_CONFIG_PATH = "a6studio.bridge.v1"
         const val AI_CONFIG_PATH = "a6studio.ai.v1"
         const val AI_TOKENS_PATH = "a6studio.tokens.ai.v1"
+        const val UI_STATE_PATH = "a6studio.ui.v1"
+    }
+
+    /**
+     * 恢复退出前的界面位置：当前主面板页签 + 手机端是「画布」还是「面板」。
+     * 文件格式 `{"pane":"run","sheet":"pane"}`；解析失败或字段无效时静默回到默认页。
+     */
+    private fun restoreUiState() {
+        val raw = platform.readTextFile(UI_STATE_PATH) ?: return
+        runCatching {
+            val obj = Json.parseToJsonElement(raw) as? JsonObject ?: return
+            (obj["pane"] as? JsonPrimitive)?.contentOrNull?.let { p ->
+                Pane.entries.firstOrNull { it.name == p }?.let { showPane(it) }
+            }
+            (obj["sheet"] as? JsonPrimitive)?.contentOrNull?.let { s ->
+                MobileSheet.entries.firstOrNull { it.name == s }?.let { mobileSheet = it }
+            }
+        }
+        // 新手模式只显示 运行 / 检查问题 / 帮助：恢复到的页签若被隐藏则回落。
+        if (beginnerMode && pane !in listOf(Pane.RUN, Pane.DIAG, Pane.HELP)) pane = Pane.RUN
+    }
+
+    private fun persistUiState() {
+        val obj = buildJsonObject {
+            put("pane", pane.name)
+            put("sheet", mobileSheet.name)
+        }
+        platform.writeTextFile(UI_STATE_PATH, obj.toString())
     }
 
     fun dismissGuide() {
@@ -1128,15 +1162,8 @@ class StudioState(
                 deviceToolsText = when {
                     lastError != null && all.isEmpty() -> "读取工具清单失败：$lastError"
                     all.isEmpty() -> "该版本没有返回工具清单（可能是旧版 MCP 插件）"
-                    else -> buildString {
-                        append("可用工具 ${all.size} 个（$pages 页）：")
-                        append(all.keys.joinToString("、"))
-                        if (!cursor.isNullOrBlank()) append("\n已达 10 页上限，工具清单可能没取全。")
-                        if (all.size < 40) {
-                            append("\n只看到 ${all.size} 个通常是 AutoJs6 默认关掉了一些工具组。")
-                            append("到 AutoJs6 → 插件 → MCP Server → 设置 → 工具组，把「脚本 / 文件 / Shell / 手势 / 应用」等打开，再点一次工具清单。")
-                        }
-                    }
+                    // 成功时不打印任何清单文案：工具都在「直接调用工具」的下拉里，页面不用再列一遍。
+                    else -> ""
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -1214,6 +1241,47 @@ class StudioState(
 
     fun setToolParam(name: String, value: String) {
         deviceToolParamValues = deviceToolParamValues + (name to value)
+    }
+
+    /**
+     * 工具参数的可选预置项，供「可编辑下拉」使用：
+     *  - enum 参数：schema 给出的全部枚举值；
+     *  - boolean：true / false；
+     *  - 其他：类型化示例 + 本工具表单已输入过的历史值，真正做到免手输。
+     */
+    fun toolParamPresets(p: ToolParamField): List<String> {
+        if (p.options.isNotEmpty()) return p.options
+        val presets = LinkedHashSet<String>()
+        when (p.type.lowercase()) {
+            "boolean" -> { presets += "true"; presets += "false" }
+            "number", "integer" -> presets += listOf("0", "1", "10", "100", "30000", "60000")
+            "string", "object", "array" -> {
+                presets += listOf("", "{}", "[]")
+            }
+        }
+        // 加历史值：同工具之前填过的参数优先
+        val history = deviceToolParamHistory[p.name].orEmpty()
+        presets += history
+        return presets.toList()
+    }
+
+    /** 记录工具参数填过的值（内存，重启即清，仅用于下拉预置）。 */
+    private var deviceToolParamHistory = mutableMapOf<String, MutableList<String>>()
+
+    fun rememberToolParamValue(p: ToolParamField, v: String) {
+        val t = v.trim()
+        if (t.isEmpty()) return
+        val list = deviceToolParamHistory.getOrPut(p.name) { mutableListOf() }
+        if (t in list) list.remove(t)
+        list.add(0, t)
+        if (list.size > 6) list.removeAt(list.size - 1)
+    }
+
+    /** 从下拉列表选中工具名：清掉上一个工具的参数表单，避免串参数。 */
+    fun selectDeviceTool(name: String) {
+        deviceToolNameDraft = name
+        deviceToolParamValues = emptyMap()
+        deviceToolArgsDraft = "{}"
     }
 
     /** 用表单值拼出 JSON 参数并调用；数字/开关按 schema 类型转换。 */
@@ -1883,6 +1951,57 @@ class StudioState(
         repo.saveDevice(bridgeUrl, "")
         persistBridgeConfig()
         toast("已保存设备")
+    }
+
+    /** 删除一条已保存的设备；若删的是当前地址，切回第一台/默认地址。 */
+    fun deleteSavedDevice(url: String) {
+        if (url.isBlank()) return
+        repo.removeDevice(url)
+        persistBridgeConfig()
+        if (url == bridgeUrl) {
+            val next = repo.current.bridge.devices.firstOrNull()?.url
+            if (!next.isNullOrBlank()) {
+                bridgeUrl = next
+                bridge.setUrl(next)
+            } else {
+                bridgeUrl = cn.dumate.a6studio.config.AppConfig.defaultUrl
+                bridge.setUrl(bridgeUrl)
+            }
+            repo.updateBridgeUrl(bridgeUrl)
+            bridgeToken = bridge.authMap()[normUrl(bridgeUrl)]?.removePrefix("Bearer ").orEmpty()
+        }
+        toast("已删除设备")
+    }
+
+    // ---- ProxyPin 设备记忆 / 删除 -------------------------------------------
+
+    /** 把当前 ProxyPin 地址存入已保存设备列表。 */
+    fun saveCurrentProxyPinDevice() {
+        if (proxyPinUrl.isBlank()) return
+        repo.saveProxyPinDevice(proxyPinUrl, "")
+        persistBridgeConfig()
+        toast("已保存 ProxyPin 设备")
+    }
+
+    /** 切到另一台已保存的 ProxyPin 设备（令牌全局复用，仅切地址）。 */
+    fun switchProxyPinDevice(url: String) {
+        if (url.isBlank()) return
+        proxyPinUrl = url
+        persistAiConfig()
+        toast("已切换到 ${url.removePrefix("http://").removePrefix("https://")}")
+    }
+
+    /** 删除一台已保存的 ProxyPin 设备；删的是当前地址则恢复默认。 */
+    fun deleteSavedProxyPinDevice(url: String) {
+        if (url.isBlank()) return
+        repo.removeProxyPinDevice(url)
+        persistBridgeConfig()
+        if (url == proxyPinUrl) {
+            proxyPinUrl = repo.current.bridge.proxyPinDevices.firstOrNull()?.url
+                ?: "http://127.0.0.1:9000/mcp"
+            proxyPinToken = ""
+        }
+        toast("已删除 ProxyPin 设备")
     }
 
     fun switchDevice(url: String) {

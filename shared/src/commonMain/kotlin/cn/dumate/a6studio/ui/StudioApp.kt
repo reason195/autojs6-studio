@@ -32,12 +32,15 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -381,70 +384,90 @@ private fun PlainNameField(value: String, onChange: (String) -> Unit) {
 
 /**
  * Everything that used to sit in the toolbar, grouped so the menu reads like a table of contents
- * instead of a button dump: 视图 / 检查 / 文件.
+ * instead of a button dump.
+ *
+ * 用 ModalBottomSheet 而非 DropdownMenu：DropdownMenu 是 SubcomposeLayout，内容不能加滚动容器
+ * （放 LazyColumn 崩 intrinsic measurement，放 Column+verticalScroll 崩 infinity constraints，
+ * 真机两次实测）。底部抽屉自带滚动区与高度约束，菜单项再多也不会被屏幕截断且能滑动。
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun MoreMenu(state: StudioState) {
     var open by remember { mutableStateOf(false) }
 
-    @Composable
-    fun item(label: String, icon: ImageVector, action: () -> Unit) {
-        DropdownMenuItem(
-            text = { Text(label, fontSize = 12.5.sp, color = Palette.text) },
-            leadingIcon = {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    tint = Palette.textDim,
-                    modifier = Modifier.size(16.dp)
-                )
-            },
-            onClick = { open = false; action() },
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 9.dp)
-        )
-    }
-
-    @Composable
-    fun group(title: String) {
-        Text(
-            title,
-            fontSize = 9.5.sp,
-            color = Palette.textDim,
-            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp)
-        )
-    }
-
     Box {
         QuietAction("⋯", "更多") { open = true }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            group("视图")
-            item("模板库", Icons.AutoMirrored.Filled.List) { state.openTemplates() }
-            item("怎么做（新手引导）", Icons.Filled.Info) { state.showGuide = true }
-            item(if (state.beginnerMode) "切换到完整模式" else "切换到简单模式", Icons.Filled.Settings) {
-                state.changeBeginnerMode(!state.beginnerMode)
+        if (open) {
+            androidx.compose.material3.ModalBottomSheet(
+                onDismissRequest = { open = false },
+                containerColor = Palette.panel
+            ) {
+                LazyColumn(
+                    Modifier.fillMaxWidth().padding(bottom = 24.dp),
+                    contentPadding = PaddingValues(bottom = 8.dp)
+                ) {
+                    item {
+                        groupTitle("常用")
+                        menuItem("保存", Icons.Filled.Done) { open = false; state.saveNow() }
+                        menuItem("导出 JS", Icons.Filled.Share) { open = false; state.exportJs() }
+                        menuItem("导出项目", Icons.Filled.Share) { open = false; state.exportProject() }
+                        menuItem("载入示例", Icons.Filled.Star) { open = false; state.loadExample() }
+                    }
+                    item {
+                        groupTitle("检查")
+                        if (state.beginnerMode) {
+                            menuItem("检查问题", Icons.Filled.Warning) { open = false; state.showPane(Pane.DIAG) }
+                        } else {
+                            menuItem("跑一遍测试", Icons.Filled.Check) { open = false; state.runTests() }
+                            menuItem("诊断", Icons.Filled.Warning) { open = false; state.showPane(Pane.DIAG) }
+                            menuItem("选择器体检", Icons.Filled.Search) { open = false; state.openAudit() }
+                            menuItem("录制操作", Icons.Filled.PlayArrow) { open = false; state.openRecorder() }
+                        }
+                    }
+                    item {
+                        groupTitle("视图 / 项目")
+                        menuItem(if (state.beginnerMode) "切换到完整模式" else "切换到简单模式", Icons.Filled.Settings) { open = false; state.changeBeginnerMode(!state.beginnerMode) }
+                        menuItem("模板库", Icons.AutoMirrored.Filled.List) { open = false; state.openTemplates() }
+                        menuItem("怎么做（新手引导）", Icons.Filled.Info) { open = false; state.showGuide = true }
+                        if (!state.beginnerMode) {
+                            menuItem("导入 JS 脚本", Icons.Filled.Add) { open = false; state.importScript() }
+                            menuItem("导入项目", Icons.Filled.Add) { open = false; state.importProject() }
+                        }
+                        menuItem("新建项目", Icons.Filled.AddCircle) { open = false; state.newProject() }
+                    }
+                }
             }
-            group("检查")
-            if (state.beginnerMode) {
-                item("检查问题", Icons.Filled.Warning) { state.showPane(Pane.DIAG) }
-            } else {
-                item("跑一遍测试", Icons.Filled.Check) { state.runTests() }
-                item("诊断", Icons.Filled.Warning) { state.showPane(Pane.DIAG) }
-                item("选择器体检", Icons.Filled.Search) { state.openAudit() }
-                item("录制操作", Icons.Filled.PlayArrow) { state.openRecorder() }
-            }
-            group("文件")
-            item("保存", Icons.Filled.Done) { state.saveNow() }
-            item("导出 JS", Icons.Filled.Share) { state.exportJs() }
-            item("导出项目", Icons.Filled.Share) { state.exportProject() }
-            if (!state.beginnerMode) {
-                item("导入 JS 脚本", Icons.Filled.Add) { state.importScript() }
-                item("导入项目", Icons.Filled.Add) { state.importProject() }
-            }
-            group("项目")
-            item("载入示例", Icons.Filled.Star) { state.loadExample() }
-            item("新建项目", Icons.Filled.AddCircle) { state.newProject() }
         }
     }
+}
+
+/** 底部菜单里的一个条目：图标 + 文案，触摸整行触发。 */
+@Composable
+private fun menuItem(label: String, icon: ImageVector, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(label, fontSize = 11.5.sp, color = Palette.text) },
+        leadingIcon = {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = Palette.textDim,
+                modifier = Modifier.size(14.dp)
+            )
+        },
+        onClick = onClick,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 5.dp)
+    )
+}
+
+/** 底部菜单的分组小标题。 */
+@Composable
+private fun groupTitle(title: String) {
+    Text(
+        title,
+        fontSize = 9.sp,
+        color = Palette.textDim,
+        modifier = Modifier.padding(start = 18.dp, top = 8.dp, bottom = 2.dp)
+    )
 }
 
 @Composable

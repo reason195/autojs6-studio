@@ -1,5 +1,6 @@
 package cn.dumate.a6studio.ui.panes
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -41,6 +43,9 @@ import cn.dumate.a6studio.ui.components.BadgeKind
 import cn.dumate.a6studio.ui.components.Chip
 import cn.dumate.a6studio.ui.components.EmptyHint
 import cn.dumate.a6studio.ui.components.KV
+import cn.dumate.a6studio.ui.components.SectionTabs
+import cn.dumate.a6studio.ui.fields.DropdownField
+import cn.dumate.a6studio.ui.fields.EditableDropdownField
 import cn.dumate.a6studio.ui.fields.InlineField
 import cn.dumate.a6studio.ui.fields.SearchField
 
@@ -248,7 +253,50 @@ fun DiagPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolea
 @Composable
 fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
     val project = state.repo.current
+    // 默认停在「连接」：先连接真机，才有后续的一键上手/工具/输出
+    var tab by remember { mutableStateOf("connect") }
+    val connected = state.deviceStatusLevel == "ok" || state.deviceInfo != null
+
     Column(modifier.verticalScroll(rememberScrollState()).padding(10.dp)) {
+        // 打开即见全部标签页，不再折叠；按使用逻辑排序：连接 → 一键上手 → 工具 → 真机输出
+        SectionTabs(
+            tabs = listOf(
+                "connect" to "连接",
+                "guide" to "一键上手",
+                "tools" to "工具",
+                "output" to "真机输出"
+            ),
+            selected = tab,
+            onSelect = { tab = it }
+        )
+        Spacer(Modifier.height(10.dp))
+
+        // 功能依赖连接：先连接 AutoJs6 才有东西可做——所有非「连接」标签都拦截，
+        // 一键上手的识别/录制同样依赖真机，因此也纳入拦截。
+        if (tab != "connect" && !connected) {
+            Surface(
+                color = P.panelAlt,
+                shape = RoundedCornerShape(8.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, P.warn)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "还没有连接真机：先点左侧「连接」页连上 AutoJs6，这里才有内容。",
+                        fontSize = 10.5.sp, color = P.warn, modifier = Modifier.weight(1f)
+                    )
+                    SmallButton("去连接", primary = true) { tab = "connect" }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            return@Column
+        }
+
+        when (tab) {
+            "guide" -> {
         // 一键上手：目标 App、按钮、参数全部从真机采集，小白不用手输任何东西
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(P.panelAlt).padding(10.dp),
@@ -336,123 +384,271 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
                 )
             }
         }
+            }
+            "connect" -> {
+            Spacer(Modifier.height(2.dp))
+            // ---------- AutoJs6 MCP ----------
+            Surface(
+                color = P.panelAlt,
+                shape = RoundedCornerShape(8.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, P.border)
+            ) {
+                Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("AutoJs6 MCP（真机自动化）", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = P.text)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        var expanded by remember { mutableStateOf(false) }
+                        androidx.compose.foundation.layout.Box(Modifier.weight(1f)) {
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(5.dp))
+                                    .background(P.codeBg)
+                                    .clickable { expanded = true }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 手机上这块只有 300 多 dp：去掉 http:// 和 /mcp，型号 + IP:端口 才放得下。
+                                Text(
+                                    project.bridge.devices.firstOrNull { it.url == project.bridge.url }?.let {
+                                        val host = it.url.removePrefix("http://").removePrefix("https://").removeSuffix("/mcp")
+                                        "${it.name} · $host"
+                                    } ?: "已保存设备（${project.bridge.devices.size}）",
+                                    fontSize = 11.sp, color = P.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                                )
+                                Text("▾", fontSize = 9.sp, color = P.textDim)
+                            }
+                            androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                project.bridge.devices.forEach { d ->
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text("${d.name} · ${d.url}", fontSize = 11.sp, modifier = Modifier.weight(1f))
+                                                // ✕ 删除：切走（若为当前设备）再移除，避免下拉里残留无效项。
+                                                Text(
+                                                    "✕",
+                                                    fontSize = 11.sp,
+                                                    color = P.err.copy(alpha = 0.8f),
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(3.dp))
+                                                        .clickable {
+                                                            expanded = false
+                                                            state.deleteSavedDevice(d.url)
+                                                        }
+                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        },
+                                        onClick = { expanded = false; state.switchDevice(d.url) }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        SmallButton("保存当前") { state.saveCurrentDevice() }
+                    }
 
-        var showAdvanced by remember { mutableStateOf(false) }
-        Spacer(Modifier.height(10.dp))
-        SmallButton(if (showAdvanced) "收起高级设置" else "高级设置（地址 / 令牌 / 工具）") { showAdvanced = !showAdvanced }
-        if (showAdvanced) {
-
-        Spacer(Modifier.height(10.dp))
-        Text("设备", fontSize = 11.sp, color = P.textDim)
-        Spacer(Modifier.height(4.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            var expanded by remember { mutableStateOf(false) }
-            androidx.compose.foundation.layout.Box(Modifier.weight(1f)) {
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(5.dp))
-                        .background(P.codeBg)
-                        .clickable { expanded = true }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 手机上这块只有 300 多 dp：去掉 http:// 和 /mcp，型号 + IP:端口 才放得下。
-                    Text(
-                        project.bridge.devices.firstOrNull { it.url == project.bridge.url }?.let {
-                            val host = it.url.removePrefix("http://").removePrefix("https://").removeSuffix("/mcp")
-                            "${it.name} · $host"
-                        } ?: "已保存设备（${project.bridge.devices.size}）",
-                        fontSize = 11.sp, color = P.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                    // 导入：插件页「复制配置」→ 这里一键读剪贴板；也能选文件（mcp.txt / .json）或手动粘贴。
+                    Text("导入 AutoJs6 MCP 配置", fontSize = 11.sp, color = P.textDim)
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        SmallButton("从剪贴板导入", primary = true) { state.importMcpFromClipboard() }
+                        if (state.platformRef.supportsFileDialogs) SmallButton("从文件导入") { state.importMcpFromFile() }
+                        SmallButton("复制全部配置") { state.exportMcpConfig() }
+                    }
+                    InlineField(
+                        state.mcpImportText, { state.mcpImportText = it },
+                        placeholder = "或粘贴到这里：mcpServers JSON / http://IP:9637/mcp 令牌 / 只写 IP，每行一台",
+                        mono = true, singleLine = false, minLines = 2, maxLines = 6,
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    Text("▾", fontSize = 9.sp, color = P.textDim)
-                }
-                androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    project.bridge.devices.forEach { d ->
-                        androidx.compose.material3.DropdownMenuItem(
-                            text = { Text("${d.name} · ${d.url}", fontSize = 11.sp) },
-                            onClick = { expanded = false; state.switchDevice(d.url) }
+                    if (state.mcpImportText.isNotBlank()) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            SmallButton("导入粘贴内容", primary = true) { state.importMcpFromText() }
+                            SmallButton("清空") { state.mcpImportText = "" }
+                        }
+                    }
+
+                    Text("MCP 桥接地址", fontSize = 11.sp, color = P.textDim)
+                    InlineField(state.bridgeUrl, { state.updateBridgeUrl(it) }, placeholder = "http://127.0.0.1:8765/mcp", mono = true, modifier = Modifier.fillMaxWidth())
+                    Text("从 AutoJs6「插件中心 → MCP Server」复制，或直连 http://手机IP:9637/mcp", fontSize = 9.5.sp, color = P.textDim)
+
+                    Text("令牌（可选，开启下方开关后自动保存在本机）", fontSize = 11.sp, color = P.textDim)
+                    var showToken by remember { mutableStateOf(false) }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        InlineField(
+                            state.bridgeToken,
+                            { state.updateBridgeToken(it) },
+                            placeholder = "Bearer token（没有就留空）",
+                            mono = true,
+                            visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+                            modifier = Modifier.weight(1f)
                         )
+                        SmallButton(if (showToken) "隐藏" else "显示") { showToken = !showToken }
+                    }
+                    TinyToggle("记住本机令牌与密钥（写进本机私有存储，不进项目文件）", state.rememberToken) { state.changeRememberToken(it) }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SmallButton("连接并读取设备", primary = true) { state.connectDevice() }
+                        SmallButton("Ping") { state.pingDevice() }
+                    }
+
+                    // 连接成功 → 设备信息直接显示在连接页（不再单独放一个标签）
+                    state.deviceInfo?.let { info ->
+                        Spacer(Modifier.height(4.dp))
+                        Text("设备信息", fontSize = 11.sp, color = P.textDim)
+                        KV("厂商 / 型号", "${info.manufacturer.ifBlank { "-" }} / ${info.model.ifBlank { "-" }}")
+                        KV("Android", "${info.androidRelease.ifBlank { "-" }} (API ${info.androidApi.ifBlank { "-" }})")
+                        KV("无障碍服务", if (info.accessibilityReady) "已开启（可以找控件）" else "未开启（找不到控件）")
+                        if (info.batteryPercent.isNotBlank()) KV("电量", "${info.batteryPercent}%")
+                        KV("AutoJs6", "${info.versionName.ifBlank { "-" }} (${info.versionCode.ifBlank { "-" }})")
+                        KV("MCP 插件", "${info.plugin.ifBlank { "-" }} / ${info.pluginId.ifBlank { "-" }}")
+                        KV("进程", info.process.ifBlank { "-" })
                     }
                 }
             }
-            Spacer(Modifier.width(6.dp))
-            SmallButton("保存当前") { state.saveCurrentDevice() }
-        }
 
-        // 导入：插件页「复制配置」→ 这里一键读剪贴板；也能选文件（mcp.txt / .json）或手动粘贴。
-        Spacer(Modifier.height(8.dp))
-        Text("导入 MCP 配置", fontSize = 11.sp, color = P.textDim)
-        Spacer(Modifier.height(4.dp))
-        androidx.compose.foundation.layout.FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            SmallButton("从剪贴板导入", primary = true) { state.importMcpFromClipboard() }
-            if (state.platformRef.supportsFileDialogs) SmallButton("从文件导入") { state.importMcpFromFile() }
-            SmallButton("复制全部配置") { state.exportMcpConfig() }
-        }
-        Spacer(Modifier.height(6.dp))
-        InlineField(
-            state.mcpImportText, { state.mcpImportText = it },
-            placeholder = "或粘贴到这里：mcpServers JSON / http://IP:9637/mcp 令牌 / 只写 IP，每行一台",
-            mono = true, singleLine = false, minLines = 2, maxLines = 6,
-            modifier = Modifier.fillMaxWidth()
-        )
-        if (state.mcpImportText.isNotBlank()) {
-            Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SmallButton("导入粘贴内容", primary = true) { state.importMcpFromText() }
-                SmallButton("清空") { state.mcpImportText = "" }
+            Spacer(Modifier.height(10.dp))
+            // ---------- ProxyPin MCP ----------
+            Surface(
+                color = P.panelAlt,
+                shape = RoundedCornerShape(8.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, P.border)
+            ) {
+                Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("ProxyPin MCP（抓包流量）", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = P.text)
+                    // 已保存的 ProxyPin 设备：切换 / 删除（与 AutoJs6 设备同一套交互）
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        var ppExpanded by remember { mutableStateOf(false) }
+                        androidx.compose.foundation.layout.Box(Modifier.weight(1f)) {
+                            Row(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(5.dp))
+                                    .background(P.codeBg)
+                                    .clickable { ppExpanded = true }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    project.bridge.proxyPinDevices.firstOrNull { it.url == state.proxyPinUrl }?.let {
+                                        val host = it.url.removePrefix("http://").removePrefix("https://").removeSuffix("/mcp")
+                                        "${it.name} · $host"
+                                    } ?: "已保存 ProxyPin 设备（${project.bridge.proxyPinDevices.size}）",
+                                    fontSize = 11.sp, color = P.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                                )
+                                Text("▾", fontSize = 9.sp, color = P.textDim)
+                            }
+                            androidx.compose.material3.DropdownMenu(expanded = ppExpanded, onDismissRequest = { ppExpanded = false }) {
+                                project.bridge.proxyPinDevices.forEach { d ->
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text("${d.name} · ${d.url}", fontSize = 11.sp, modifier = Modifier.weight(1f))
+                                                Text(
+                                                    "✕",
+                                                    fontSize = 11.sp,
+                                                    color = P.err.copy(alpha = 0.8f),
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(3.dp))
+                                                        .clickable {
+                                                            ppExpanded = false
+                                                            state.deleteSavedProxyPinDevice(d.url)
+                                                        }
+                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        },
+                                        onClick = { ppExpanded = false; state.switchProxyPinDevice(d.url) }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        SmallButton("保存当前") { state.saveCurrentProxyPinDevice() }
+                    }
+                    InlineField(
+                        state.proxyPinUrl, { state.updateProxyPinUrl(it) },
+                        placeholder = "ProxyPin MCP 地址，例如 http://127.0.0.1:9000/mcp",
+                        mono = true, modifier = Modifier.fillMaxWidth()
+                    )
+                    var showProxyToken by remember { mutableStateOf(false) }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        InlineField(
+                            state.proxyPinToken,
+                            { state.updateProxyPinToken(it) },
+                            placeholder = "ProxyPin 鉴权 Token（不写入项目文件）",
+                            mono = true,
+                            visualTransformation = if (showProxyToken) VisualTransformation.None else PasswordVisualTransformation(),
+                            modifier = Modifier.weight(1f)
+                        )
+                        SmallButton(if (showProxyToken) "隐藏" else "显示") { showProxyToken = !showProxyToken }
+                    }
+                    Text("导入 ProxyPin 配置（mcpServers JSON / URL / IP）", fontSize = 11.sp, color = P.textDim)
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        SmallButton("从剪贴板导入", primary = true) { state.importProxyPinFromClipboard() }
+                        if (state.platformRef.supportsFileDialogs) SmallButton("从文件导入") { state.importProxyPinFromFile() }
+                    }
+                    InlineField(
+                        state.proxyPinImportText, { state.proxyPinImportText = it },
+                        placeholder = "或粘贴到这里：mcpServers JSON / http://IP:9000/mcp 令牌 / 只写 IP",
+                        mono = true, singleLine = false, minLines = 2, maxLines = 6,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (state.proxyPinImportText.isNotBlank()) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            SmallButton("导入粘贴内容", primary = true) { state.importProxyPinFromText() }
+                            SmallButton("清空") { state.proxyPinImportText = "" }
+                        }
+                    }
+                    Text("抓包域名过滤（可选，如 ms.jr.jd.com）", fontSize = 11.sp, color = P.textDim)
+                    InlineField(
+                        state.proxyPinDomainFilter, { state.updateProxyPinDomainFilter(it) },
+                        placeholder = "留空抓全部域名",
+                        mono = true, modifier = Modifier.fillMaxWidth()
+                    )
+                    if (state.trafficDomains.isNotEmpty()) {
+                        Text("抓到的域名（点一个自动填入过滤）：", fontSize = 9.5.sp, color = P.textDim)
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            state.trafficDomains.forEach { d ->
+                                SmallButton(d) { state.updateProxyPinDomainFilter(d) }
+                            }
+                        }
+                    }
+                }
             }
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Text("MCP 桥接地址", fontSize = 11.sp, color = P.textDim)
-        Spacer(Modifier.height(4.dp))
-        InlineField(state.bridgeUrl, { state.updateBridgeUrl(it) }, placeholder = "http://127.0.0.1:8765/mcp", mono = true, modifier = Modifier.fillMaxWidth())
-        Text("从 AutoJs6「插件中心 → MCP Server」复制，或直连 http://手机IP:9637/mcp", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(top = 3.dp))
-
-        Spacer(Modifier.height(10.dp))
-        Text("令牌（可选，开启下方开关后自动保存在本机）", fontSize = 11.sp, color = P.textDim)
-        Spacer(Modifier.height(4.dp))
-        var showToken by remember { mutableStateOf(false) }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            InlineField(
-                state.bridgeToken,
-                { state.updateBridgeToken(it) },
-                placeholder = "Bearer token（没有就留空）",
-                mono = true,
-                visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
-                modifier = Modifier.weight(1f)
-            )
-            SmallButton(if (showToken) "隐藏" else "显示") { showToken = !showToken }
-        }
-        Spacer(Modifier.height(4.dp))
-        TinyToggle("记住本机令牌与密钥（写进本机私有存储，不进项目文件）", state.rememberToken) { state.changeRememberToken(it) }
-
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SmallButton("连接并读取设备", primary = true) { state.connectDevice() }
-            SmallButton("Ping") { state.pingDevice() }
-            SmallButton("界面树") { state.dumpDeviceUi() }
-            SmallButton("工具清单") { state.listDeviceTools() }
-        }
-
-        if (state.deviceToolsText.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Text(state.deviceToolsText, fontSize = 9.5.sp, color = P.textDim)
-        }
-
-        if (state.deviceToolsText.isNotBlank() || state.deviceToolNames.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            Text("直接调用工具", fontSize = 11.sp, color = P.textDim)
-            Text("从上面清单里挑一个工具名，填 JSON 参数（没有就留 {}），点执行；结果会脱敏后显示在下面。", fontSize = 9.5.sp, color = P.textDim)
-            Spacer(Modifier.height(4.dp))
-            InlineField(
-                state.deviceToolNameDraft,
-                { state.deviceToolNameDraft = it },
-                placeholder = "工具名，例如 device_info / ui_dump",
-                mono = true,
-                modifier = Modifier.fillMaxWidth()
+            }
+                "tools" -> {
+                    Spacer(Modifier.height(2.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        SmallButton(if (state.deviceToolRunning) "加载中…" else "工具清单", primary = state.deviceToolNames.isEmpty()) { state.listDeviceTools() }
+                        if (state.deviceToolNames.isNotEmpty()) Text("已加载 ${state.deviceToolNames.size} 个工具", fontSize = 9.5.sp, color = P.ok)
+                    }
+                    if (state.deviceToolsText.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(state.deviceToolsText, fontSize = 9.5.sp, color = P.textDim)
+                    }
+                    if (state.deviceToolNames.isEmpty()) {
+                        Text("还没有工具列表：先点上面的「工具清单」。", fontSize = 10.sp, color = P.textDim)
+                    }
+                    if (state.deviceToolNames.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text("直接调用工具", fontSize = 11.sp, color = P.textDim)
+                        Text("从下拉里挑一个可用工具，参数也按下拉/输入框填好，点执行；结果会脱敏后显示在下面。", fontSize = 9.5.sp, color = P.textDim)
+                        Spacer(Modifier.height(4.dp))
+            DropdownField(
+                value = state.deviceToolNameDraft,
+                onSelect = { state.selectDeviceTool(it) },
+                items = state.deviceToolNames,
+                placeholder = "选择工具（先点「工具清单」读取）",
+                modifier = Modifier.fillMaxWidth(),
+                searchable = true,
+                searchPlaceholder = "搜索工具名…",
+                groupOf = { tool -> toolGroupOf(tool) },
+                groupLabelOf = { group -> toolGroupLabel(group) }
             )
             state.deviceToolDescriptions[state.deviceToolNameDraft]?.takeIf { it.isNotBlank() }?.let {
                 Text("说明：$it", fontSize = 9.5.sp, color = P.info)
@@ -460,31 +656,24 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
             Spacer(Modifier.height(4.dp))
             val params = state.toolParamsFor(state.deviceToolNameDraft)
             if (params.isNotEmpty()) {
-                Text("参数（按工具自动生成，不用写 JSON）：", fontSize = 9.5.sp, color = P.textDim)
+                Text("参数（点 ▾ 选预置值，也可手输）：", fontSize = 9.5.sp, color = P.textDim)
                 params.forEach { p ->
                     val cur = state.deviceToolParamValues[p.name].orEmpty()
                     Text(
                         p.name + (if (p.required) " *" else "") + (if (p.type != "string") " · ${p.type}" else ""),
                         fontSize = 10.sp, color = P.text
                     )
-                    if (p.options.isNotEmpty()) {
-                        androidx.compose.foundation.layout.FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            p.options.forEach { opt ->
-                                SmallButton(if (cur == opt) "✓ $opt" else opt) { state.setToolParam(p.name, opt) }
-                            }
-                        }
-                    } else {
-                        InlineField(
-                            cur,
-                            { state.setToolParam(p.name, it) },
-                            placeholder = p.desc.ifBlank { "可留空" },
-                            mono = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
+                    EditableDropdownField(
+                        value = cur,
+                        onValueChange = { v ->
+                            state.setToolParam(p.name, v)
+                            state.rememberToolParamValue(p, v)
+                        },
+                        items = state.toolParamPresets(p),
+                        placeholder = p.desc.ifBlank { "可留空" },
+                        mono = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     if (p.desc.isNotBlank()) Text(p.desc, fontSize = 9.sp, color = P.textDim)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -523,38 +712,35 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
                 )
             }
         }
+            }
 
-        state.deviceInfo?.let { info ->
-            Spacer(Modifier.height(10.dp))
-            KV("厂商 / 型号", "${info.manufacturer.ifBlank { "-" }} / ${info.model.ifBlank { "-" }}")
-            KV("Android", "${info.androidRelease.ifBlank { "-" }} (API ${info.androidApi.ifBlank { "-" }})")
-            KV("无障碍服务", if (info.accessibilityReady) "已开启（可以找控件）" else "未开启（找不到控件）")
-            if (info.batteryPercent.isNotBlank()) KV("电量", "${info.batteryPercent}%")
-            KV("AutoJs6", "${info.versionName.ifBlank { "-" }} (${info.versionCode.ifBlank { "-" }})")
-            KV("MCP 插件", "${info.plugin.ifBlank { "-" }} / ${info.pluginId.ifBlank { "-" }}")
-            KV("进程", info.process.ifBlank { "-" })
-        }
-
-        Spacer(Modifier.height(10.dp))
-        Text("真机输出", fontSize = 11.sp, color = P.textDim)
-        if (state.deviceLog.isEmpty()) {
-            Text("连接后这里显示真机返回的内容", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(top = 3.dp))
-            return@Column
-        }
-        Column(Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(5.dp)).background(P.codeBg).padding(6.dp)) {
-            state.deviceLog.forEach { l ->
-                Text(
-                    l.msg,
-                    fontSize = 10.5.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = when (l.level) {
-                        "error" -> P.err
-                        "warn" -> P.warn
-                        "ok" -> P.ok
-                        "debug" -> P.textDim
-                        else -> P.text
+        "output" -> {
+            Spacer(Modifier.height(2.dp))
+            // 界面树：读当前界面控件文本 → 输出到下方日志区
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                SmallButton("界面树", primary = true) { state.dumpDeviceUi() }
+                Text("读取当前界面的控件树，结果显示在下方", fontSize = 9.5.sp, color = P.textDim)
+            }
+            Spacer(Modifier.height(8.dp))
+            if (state.deviceLog.isEmpty()) {
+                Text("连接并点「界面树」后，这里显示真机返回的内容", fontSize = 9.5.sp, color = P.textDim)
+            } else {
+                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(5.dp)).background(P.codeBg).padding(6.dp)) {
+                    state.deviceLog.forEach { l ->
+                        Text(
+                            l.msg,
+                            fontSize = 10.5.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = when (l.level) {
+                                "error" -> P.err
+                                "warn" -> P.warn
+                                "ok" -> P.ok
+                                "debug" -> P.textDim
+                                else -> P.text
+                            }
+                        )
                     }
-                )
+                }
             }
         }
         }
@@ -649,4 +835,30 @@ fun SmallButton(label: String, primary: Boolean = false, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp)
     )
+}
+
+/**
+ * 把真机 MCP 工具名按第一个下划线之前的前缀分组（app_launch → "app"、script_run → "script"）。
+ * 不带下划线的工具（如 device_info、ui_dump、screen_capture 这类单段名）归到 null，
+ * 在下拉里显示在「其他」组之后且不带头。
+ */
+private fun toolGroupOf(tool: String): String? {
+    val idx = tool.indexOf('_')
+    return if (idx > 0) tool.substring(0, idx) else null
+}
+
+/** 分组标题的人话：script → 脚本、app → 应用、ui → UI、files → 文件、device → 设备、screen → 截屏。 */
+private fun toolGroupLabel(group: String): String = when (group) {
+    "script" -> "脚本"
+    "app" -> "应用"
+    "ui" -> "UI / 无障碍"
+    "files" -> "文件"
+    "device" -> "设备"
+    "screen" -> "截屏"
+    "shell" -> "Shell"
+    "console" -> "控制台"
+    "clipboard" -> "剪贴板"
+    "http" -> "网络"
+    "image" -> "图像"
+    else -> group
 }

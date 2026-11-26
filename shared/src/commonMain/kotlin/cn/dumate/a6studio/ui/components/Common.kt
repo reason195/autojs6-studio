@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -107,4 +108,47 @@ fun KV(key: String, value: String, modifier: Modifier = Modifier) {
 @Composable
 fun ClickableRow(onClick: () -> Unit, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Column(modifier.fillMaxWidth().clickable(onClick = onClick)) { content() }
+}
+
+/**
+ * 分段标签条：把一页内容按逻辑拆成几个标签页（连接 / 工具 / 输出 之类）。
+ * 与主界面顶部的 PhoneyTabs 同一套外观：等宽分段、选中底色加亮。
+ */
+@Composable
+fun SectionTabs(
+    tabs: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Palette.panelAlt)
+            .padding(3.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        tabs.forEach { (id, label) ->
+            val active = selected == id
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(32.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (active) Palette.panel else Color.Transparent)
+                    .clickable { onSelect(id) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    label,
+                    fontSize = 11.sp,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (active) Palette.text else Palette.textDim,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
 }

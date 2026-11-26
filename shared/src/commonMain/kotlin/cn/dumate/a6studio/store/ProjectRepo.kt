@@ -556,6 +556,32 @@ class ProjectRepo(private val storage: ProjectStorage) {
         save()
     }
 
+    fun removeDevice(url: String) {
+        if (url.isBlank()) return
+        val next = current.bridge.devices.filterNot { it.url == url }
+        if (next.size == current.bridge.devices.size) return
+        _projectState = current.copy(bridge = current.bridge.copy(devices = next))
+        save()
+    }
+
+    fun saveProxyPinDevice(url: String, name: String) {
+        if (url.isBlank()) return
+        val list = current.bridge.proxyPinDevices.toMutableList()
+        val hit = list.indexOfFirst { it.url == url }
+        val entry = cn.dumate.a6studio.model.DeviceEntry(url, name.ifBlank { url.removePrefix("http://").removePrefix("https://") })
+        if (hit >= 0) list[hit] = entry else list += entry
+        _projectState = current.copy(bridge = current.bridge.copy(proxyPinDevices = list))
+        save()
+    }
+
+    fun removeProxyPinDevice(url: String) {
+        if (url.isBlank()) return
+        val next = current.bridge.proxyPinDevices.filterNot { it.url == url }
+        if (next.size == current.bridge.proxyPinDevices.size) return
+        _projectState = current.copy(bridge = current.bridge.copy(proxyPinDevices = next))
+        save()
+    }
+
     fun setProjectDirect(p: Project) {
         // Imported files and templates get the same repair as a loaded file (unique ids,
         // moduleCall name → id); otherwise an imported project could carry duplicate ids

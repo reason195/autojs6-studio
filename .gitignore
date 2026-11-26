@@ -27,3 +27,9 @@ mcp.txt
 
 # Mimosa 安全扫描缓存（各级目录都会生成）
 .mimosa/
+
+# 真机验证本地物料（APK 解包、设备地址等，不入库）
+verify_oppo/
+verify_meizu/
+verify/bridge*.json
+verify/apk_*/
