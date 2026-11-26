@@ -72,24 +72,48 @@ class ProxyPinBridge(
         limit: Int = 20,
         transport: McpTransport = McpTransport.HTTP_JSONRPC,
         devMode: Boolean = false
-    ): McpGatewayResponse = gateway.call(
-        CallMcpGatewayOptions(
-            serverId = McpServerId.PROXYPIN,
-            transport = transport,
-            endpointUrl = configuredUrl,
-            method = "tools/call",
-            toolName = "list_http_flows",
-            args = buildJsonObject {
-                if (domain.isNotBlank()) put("domain", domain.trim())
-                if (method.isNotBlank()) put("method", method.trim())
-                if (statusCode != null) put("statusCode", statusCode)
-                put("limit", limit)
-            },
-            allowLocal = configuredAllowLocal,
-            authToken = configuredToken,
-            devMode = devMode
+    ): McpGatewayResponse {
+        // ProxyPin 1.4 的工具名是 list_flows（host/method/status_from/limit）；老版本才是 list_http_flows。
+        val modernArgs = buildJsonObject {
+            put("limit", limit)
+            if (domain.isNotBlank()) put("host", domain.trim())
+            if (method.isNotBlank()) put("method", method.trim())
+            if (statusCode != null) { put("status_from", statusCode); put("status_to", statusCode) }
+        }
+        val modern = gateway.call(
+            CallMcpGatewayOptions(
+                serverId = McpServerId.PROXYPIN,
+                transport = transport,
+                endpointUrl = configuredUrl,
+                method = "tools/call",
+                toolName = "list_flows",
+                args = modernArgs,
+                allowLocal = configuredAllowLocal,
+                authToken = configuredToken,
+                devMode = devMode
+            )
         )
-    )
+        if (modern.ok || !DualMcpGateway.isToolNotFoundMessage(modern.errorKind, modern.errorMessage)) return modern
+        val legacyArgs = buildJsonObject {
+            if (domain.isNotBlank()) put("domain", domain.trim())
+            if (method.isNotBlank()) put("method", method.trim())
+            if (statusCode != null) put("statusCode", statusCode)
+            put("limit", limit)
+        }
+        return gateway.call(
+            CallMcpGatewayOptions(
+                serverId = McpServerId.PROXYPIN,
+                transport = transport,
+                endpointUrl = configuredUrl,
+                method = "tools/call",
+                toolName = "list_http_flows",
+                args = legacyArgs,
+                allowLocal = configuredAllowLocal,
+                authToken = configuredToken,
+                devMode = devMode
+            )
+        )
+    }
 
     suspend fun getFlowDetail(
         flowId: String,
@@ -102,7 +126,8 @@ class ProxyPinBridge(
             endpointUrl = configuredUrl,
             method = "tools/call",
             toolName = "get_flow_detail",
-            args = buildJsonObject { put("flowId", flowId) },
+            // ProxyPin 1.4 用 id；preview_bytes 要够大才能拿到请求体做参数提取
+            args = buildJsonObject { put("id", flowId); put("preview_bytes", 20_000) },
             allowLocal = configuredAllowLocal,
             authToken = configuredToken,
             devMode = devMode

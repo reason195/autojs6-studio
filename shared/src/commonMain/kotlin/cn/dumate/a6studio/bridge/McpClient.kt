@@ -509,9 +509,11 @@ class McpClient(
         return McpToolResult(text = text, content = contents, isError = false)
     }
 
-    suspend fun listTools(timeoutMs: Long = 15_000): JsonElement {
+    suspend fun listTools(timeoutMs: Long = 15_000, cursor: String? = null): JsonElement {
         ensureReady()
-        return rpc("tools/list", buildJsonObject { }, timeoutMs)
+        return rpc("tools/list", buildJsonObject {
+            if (!cursor.isNullOrBlank()) put("cursor", cursor)
+        }, timeoutMs)
     }
 
     // ---- convenience wrappers used by the UI --------------------------------
@@ -681,6 +683,22 @@ class McpClient(
     }
 
     suspend fun stopAllScripts(): String = callTool("script_stop_all").text
+
+    /** 直接启动已安装应用（包名来自 app_list，不需要用户输入）。 */
+    suspend fun launchApp(pkg: String): String =
+        callTool("app_launch", buildJsonObject { put("packageName", pkg) }, timeoutMs = 20_000).text
+
+    /** 列出已安装应用（包名 + 应用名），用于把包名自动填给一键生成，避免手输。 */
+    suspend fun listApps(): List<Pair<String, String>> {
+        val r = callTool("app_list", buildJsonObject { }, timeoutMs = 20_000)
+        val root = runCatching { json.parseToJsonElement(r.text).jsonObject }.getOrNull() ?: return emptyList()
+        val arr = root["apps"] as? JsonArray ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            val pkg = (o["packageName"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+            if (pkg.isEmpty()) null else pkg to (o["appName"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        }
+    }
 
     suspend fun shellExec(cmd: String): String = callTool("shell_exec", buildJsonObject { put("cmd", cmd) }).text
 }

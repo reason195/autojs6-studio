@@ -151,6 +151,20 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
 @Composable
 fun RunPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolean = false) {
     Column(modifier) {
+        Column(
+            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp)
+                .clip(RoundedCornerShape(8.dp)).background(P.panelAlt).padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("不想写代码？", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = P.text)
+            Text("先打开要自动化的 App，回来点下面两步，剩下自动完成。", fontSize = 9.5.sp, color = P.textDim)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallButton("① 识别当前 App") { state.autoDetectForeground() }
+                SmallButton("② 生成并试跑", primary = true) { state.autoGenerateFlow(runAfter = true) }
+            }
+            if (state.autoStatus.isNotBlank()) Text(state.autoStatus, fontSize = 9.5.sp, color = P.info)
+        }
+
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically

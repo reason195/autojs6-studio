@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -199,13 +200,12 @@ private fun PopularRow(
     defs: List<BlockDef>, onAdd: (String) -> Unit, drag: PaletteDragState?, longPress: Boolean,
     onDrop: (String, cn.dumate.a6studio.ui.canvas.DropTarget) -> Unit
 ) {
-    Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp)) {
-        Text("常用", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(bottom = 6.dp))
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            defs.forEach { def ->
+    Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 4.dp)) {
+        Text("常用", fontSize = 9.5.sp, color = P.textDim, modifier = Modifier.padding(bottom = 3.dp))
+        // 单行横向滚动：原来 FlowRow 会占两三行，把下方分类列表的可视区压得很小。
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(defs.size) { idx ->
+                val def = defs[idx]
                 val c = Color(Catalog.colorOf(def.cat))
                 Row(
                     Modifier
@@ -214,12 +214,12 @@ private fun PopularRow(
                         .border(1.dp, P.border, RoundedCornerShape(7.dp))
                         .paletteDraggable(def.type, drag, longPress, onDrop)
                         .clickable { onAdd(def.type) }
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                        .padding(horizontal = 9.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Box(Modifier.size(5.dp).clip(RoundedCornerShape(3.dp)).background(c))
-                    Spacer(Modifier.width(6.dp))
-                    Text(chipLabel(def), fontSize = 11.5.sp, color = P.text, maxLines = 1)
+                    Spacer(Modifier.width(5.dp))
+                    Text(chipLabel(def), fontSize = 11.sp, color = P.text, maxLines = 1)
                 }
             }
         }

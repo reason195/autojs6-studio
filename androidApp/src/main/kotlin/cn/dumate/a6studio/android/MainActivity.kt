@@ -1,5 +1,7 @@
 package cn.dumate.a6studio.android
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,6 +9,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Surface
 import androidx.compose.material3.dynamicLightColorScheme
@@ -38,6 +41,10 @@ class MainActivity : ComponentActivity() {
         override fun launchOpen(mimes: Array<String>) { openLauncher.launch(mimes) }
         override fun launchSave(suggestedName: String) { saveLauncher.launch(suggestedName) }
     }
+
+    private val notifPermLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { /* 拒绝也不影响前台服务启动，只是通知不显示 */ }
 
     private val openLauncher = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
@@ -86,6 +93,18 @@ class MainActivity : ComponentActivity() {
         const val MAX_OPEN_BYTES = 10 * 1024 * 1024
     }
 
+    override fun onStart() {
+        super.onStart()
+        // 回到前台后不需要保活，交给 StudioState 自己按采集状态再启停
+        KeepAliveService.stop(this)
+    }
+
+    override fun onStop() {
+        // 正在采集/授权倒计时时离开 Studio（切去目标 App），立刻挂前台服务，避免进程被系统回收
+        if (vm.state.autoBusy) KeepAliveService.start(this)
+        super.onStop()
+    }
+
     override fun onDestroy() {
         SafBridge.detach(safHost)
         super.onDestroy()
@@ -93,6 +112,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         enableEdgeToEdge()
         SafBridge.attach(safHost)
 
@@ -130,7 +154,7 @@ class MainActivity : ComponentActivity() {
             val state = vm.state
             StudioTheme(style = androidStyle) {
                 Surface(Modifier.fillMaxSize(), color = Palette.bg) {
-                    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().padding(0.dp)) {
+                    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().imePadding().padding(0.dp)) {
                         StudioApp(state)
                     }
                 }

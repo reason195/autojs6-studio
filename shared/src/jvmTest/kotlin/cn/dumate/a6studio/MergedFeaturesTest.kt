@@ -864,6 +864,8 @@ class MergedFeaturesTest {
         assertTrue(gw.isToolNotFoundError(be("RPC_ERROR", "Method not found: get_device_state")))
         assertTrue(gw.isToolNotFoundError(be("RPC_ERROR", "-32601")))
         assertTrue(gw.isToolNotFoundError(be("TOOL_ERROR", "unknown tool list_http_flows")))
+        // AutoJs6 6.8.0 MCP 插件对未知工具的真实回包（复现于真机）
+        assertTrue(gw.isToolNotFoundError(be("RPC_ERROR", "Tool get_device_state not found")))
         // 业务层「找不到」不是缺工具 → 不能降级
         assertFalse(gw.isToolNotFoundError(be("TOOL_ERROR", "node not found")))
         assertFalse(gw.isToolNotFoundError(be("TOOL_ERROR", "flow not found: flow_123")))

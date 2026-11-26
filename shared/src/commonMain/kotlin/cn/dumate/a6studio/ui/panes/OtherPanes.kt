@@ -249,6 +249,100 @@ fun DiagPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolea
 fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
     val project = state.repo.current
     Column(modifier.verticalScroll(rememberScrollState()).padding(10.dp)) {
+        // 一键上手：目标 App、按钮、参数全部从真机采集，小白不用手输任何东西
+        Column(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(P.panelAlt).padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("一键上手（不用写代码）", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = P.text)
+            Text(
+                "先打开要自动化的 App，再回来点「① 识别」——它有 5 秒倒计时，趁这 5 秒切到目标 App 就行；然后点「② 生成脚本」。按钮和参数都从真机自动采集，不用手输。",
+                fontSize = 9.5.sp, color = P.textDim
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallButton("① 识别（5秒内切到目标 App）", primary = true) { state.autoDetectForeground() }
+                SmallButton("② 生成脚本", primary = true) { state.autoGenerateFlow() }
+            }
+            if (state.autoStatus.isNotBlank()) {
+                Text(state.autoStatus, fontSize = 10.sp, color = P.info)
+            }
+            if (state.autoPkg.isNotBlank()) {
+                Text("目标 App：${state.autoPkgLabel.ifBlank { state.autoPkg }}（${state.autoPkg}）", fontSize = 9.5.sp, color = P.textDim)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                SmallButton("从已装应用选（自动打开并采集）") { state.loadInstalledApps() }
+                if (state.appsLoading) Text("读取中…", fontSize = 9.5.sp, color = P.textDim)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallButton("一键自检（连没连上）") { state.autoSelfCheck() }
+                SmallButton("自动找本机服务（地址不用填）") { state.autoDiscoverLocalServices() }
+            }
+            if (state.installedApps.isNotEmpty()) {
+                InlineField(
+                    state.appQuery,
+                    { state.appQuery = it },
+                    placeholder = "搜索应用名（不用输包名）",
+                    modifier = Modifier.fillMaxWidth()
+                )
+                val q = state.appQuery.trim().lowercase()
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    state.installedApps
+                        .filter { q.isBlank() || it.second.lowercase().contains(q) || it.first.lowercase().contains(q) }
+                        .take(12)
+                        .forEach { (pkg, label) ->
+                            SmallButton(label.ifBlank { pkg }) { state.launchAppAndCapture(pkg, label) }
+                        }
+                }
+            }
+            if (state.autoCandidates.isNotEmpty()) {
+                Text("识别到的可点按钮（先点选，再生成或追加）：", fontSize = 9.5.sp, color = P.textDim)
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    state.autoCandidates.forEach { v ->
+                        SmallButton(if (state.autoSelected == v) "✓ $v" else v) { state.selectAutoCandidate(v) }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SmallButton("用选中生成", primary = true) { state.autoGenerateFlow() }
+                    SmallButton("生成并试跑") { state.autoGenerateFlow(runAfter = true) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SmallButton("追加为下一步", primary = true) { state.autoAppendStep() }
+                    SmallButton("撤销上一步") { state.undo() }
+                    SmallButton("去运行") { state.showPane(cn.dumate.a6studio.ui.Pane.RUN) }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SmallButton("③ 录制我的操作") { state.recorderStart() }
+                SmallButton("④ 读取并生成") { state.recorderFetchAndGenerate() }
+            }
+            Text(
+                "③ 点完去操作手机（按音量下键停止），回到本页点 ④，刚才的操作会自动变成积木。",
+                fontSize = 9.5.sp, color = P.textDim
+            )
+            SmallButton("录制失败？从文件导入录制") { state.recorderImport() }
+            if (state.recorderState.note.isNotBlank()) {
+                Text(state.recorderState.note, fontSize = 10.sp, color = P.info)
+            }
+            if (state.recorderState.usableCount > 0) {
+                Text(
+                    "已录到 ${state.recorderState.usableCount} 个操作（待生成 ${state.recorderState.freshCount} 个）",
+                    fontSize = 9.5.sp, color = P.ok
+                )
+            }
+        }
+
+        var showAdvanced by remember { mutableStateOf(false) }
+        Spacer(Modifier.height(10.dp))
+        SmallButton(if (showAdvanced) "收起高级设置" else "高级设置（地址 / 令牌 / 工具）") { showAdvanced = !showAdvanced }
+        if (showAdvanced) {
+
+        Spacer(Modifier.height(10.dp))
         Text("设备", fontSize = 11.sp, color = P.textDim)
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -340,6 +434,94 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
             SmallButton("连接并读取设备", primary = true) { state.connectDevice() }
             SmallButton("Ping") { state.pingDevice() }
             SmallButton("界面树") { state.dumpDeviceUi() }
+            SmallButton("工具清单") { state.listDeviceTools() }
+        }
+
+        if (state.deviceToolsText.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(state.deviceToolsText, fontSize = 9.5.sp, color = P.textDim)
+        }
+
+        if (state.deviceToolsText.isNotBlank() || state.deviceToolNames.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text("直接调用工具", fontSize = 11.sp, color = P.textDim)
+            Text("从上面清单里挑一个工具名，填 JSON 参数（没有就留 {}），点执行；结果会脱敏后显示在下面。", fontSize = 9.5.sp, color = P.textDim)
+            Spacer(Modifier.height(4.dp))
+            InlineField(
+                state.deviceToolNameDraft,
+                { state.deviceToolNameDraft = it },
+                placeholder = "工具名，例如 device_info / ui_dump",
+                mono = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            state.deviceToolDescriptions[state.deviceToolNameDraft]?.takeIf { it.isNotBlank() }?.let {
+                Text("说明：$it", fontSize = 9.5.sp, color = P.info)
+            }
+            Spacer(Modifier.height(4.dp))
+            val params = state.toolParamsFor(state.deviceToolNameDraft)
+            if (params.isNotEmpty()) {
+                Text("参数（按工具自动生成，不用写 JSON）：", fontSize = 9.5.sp, color = P.textDim)
+                params.forEach { p ->
+                    val cur = state.deviceToolParamValues[p.name].orEmpty()
+                    Text(
+                        p.name + (if (p.required) " *" else "") + (if (p.type != "string") " · ${p.type}" else ""),
+                        fontSize = 10.sp, color = P.text
+                    )
+                    if (p.options.isNotEmpty()) {
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            p.options.forEach { opt ->
+                                SmallButton(if (cur == opt) "✓ $opt" else opt) { state.setToolParam(p.name, opt) }
+                            }
+                        }
+                    } else {
+                        InlineField(
+                            cur,
+                            { state.setToolParam(p.name, it) },
+                            placeholder = p.desc.ifBlank { "可留空" },
+                            mono = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    if (p.desc.isNotBlank()) Text(p.desc, fontSize = 9.sp, color = P.textDim)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SmallButton(if (state.deviceToolRunning) "执行中…" else "执行工具", primary = true) {
+                        if (!state.deviceToolRunning) state.runDeviceToolFromForm(state.deviceToolNameDraft)
+                    }
+                    SmallButton("清空参数") { params.forEach { state.setToolParam(it.name, "") } }
+                }
+            } else {
+                InlineField(
+                    state.deviceToolArgsDraft,
+                    { state.deviceToolArgsDraft = it },
+                    placeholder = "参数 JSON，例如 {\"lines\": 20}",
+                    mono = true,
+                    singleLine = false,
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SmallButton(if (state.deviceToolRunning) "执行中…" else "执行工具", primary = true) {
+                        if (!state.deviceToolRunning) state.runDeviceTool(state.deviceToolNameDraft, state.deviceToolArgsDraft)
+                    }
+                    SmallButton("参数清空 {}") { state.deviceToolArgsDraft = "{}" }
+                }
+            }
+            if (state.deviceToolResult.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    state.deviceToolResult,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = P.text,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(5.dp)).background(P.codeBg).padding(6.dp)
+                )
+            }
         }
 
         state.deviceInfo?.let { info ->
@@ -374,6 +556,7 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
                     }
                 )
             }
+        }
         }
     }
 }

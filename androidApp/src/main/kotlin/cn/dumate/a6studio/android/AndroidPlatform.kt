@@ -79,4 +79,13 @@ class AndroidPlatform(private val ctx: Context) : Platform {
     }.getOrNull()
 
     override fun setWindowTitle(title: String) { }
+
+    override fun startKeepAlive() {
+        // 用 applicationContext：Activity 旋转/离开都不影响前台服务
+        KeepAliveService.start(ctx.applicationContext)
+    }
+
+    override fun stopKeepAlive() {
+        KeepAliveService.stop(ctx.applicationContext)
+    }
 }

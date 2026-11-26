@@ -28,6 +28,9 @@ import cn.dumate.a6studio.catalog.CodeGen
 import cn.dumate.a6studio.diagnose.Diagnose
 import cn.dumate.a6studio.diagnose.Issue
 import cn.dumate.a6studio.model.ParamValue
+import cn.dumate.a6studio.model.Block
+import cn.dumate.a6studio.model.Project
+import cn.dumate.a6studio.model.newBlock
 import cn.dumate.a6studio.store.ProjectRepo
 import cn.dumate.a6studio.model.Samples
 import cn.dumate.a6studio.picker.PickKind
@@ -59,6 +62,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -147,6 +151,42 @@ class StudioState(
         private set
     var lastRefineIsSynthetic by mutableStateOf(false)
         private set
+
+    /** 把「采集到的原始设备/控件数据」翻成小白能看懂的一句话。 */
+    val autoJsPlainSummary: String
+        get() {
+            val o = lastAutoJsStateReport?.redactedPayload as? JsonObject ?: return ""
+            fun str(k: String) = (o[k] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val model = str("deviceModel")
+            val pkg = str("currentPackage")
+            val texts = (o["visibleActionTexts"] as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            val sb = StringBuilder()
+            if (model.isNotBlank()) sb.append("手机：").append(model).append("；")
+            if (pkg.isNotBlank()) sb.append("前台应用：").append(pkg).append("；")
+            if (texts.isNotEmpty()) sb.append("现在屏幕上能点的：").append(texts.joinToString("、")).append("。")
+            else sb.append("没识别到明显的可点按钮，先手动把目标页面打开再采集一次。")
+            return sb.toString()
+        }
+
+    /** 把 AI 提炼结果翻成「照着做就行」的步骤，不暴露任何字段名。 */
+    val refinePlainSummary: String
+        get() {
+            val out = lastRefineOutput ?: return ""
+            if (out.refinedKeywords.isEmpty() && out.branchConditions.isEmpty()) return ""
+            val wait = (out.recommendedBrowseWaitMs / 1000).coerceAtLeast(1)
+            val sb = StringBuilder()
+            if (out.refinedKeywords.isNotEmpty()) {
+                sb.append("按顺序点：").append(out.refinedKeywords.joinToString(" → "))
+                    .append("。每点一个等约 ").append(wait).append(" 秒再返回。")
+            }
+            if (out.branchConditions.isNotEmpty()) {
+                sb.append("遇到这些情况就停手：")
+                    .append(out.branchConditions.joinToString("；") { "${it.`when`} → ${it.action}" })
+                    .append("。")
+            }
+            return sb.toString()
+        }
     var aiBusy by mutableStateOf(false)
         private set
     var aiStatusMsg by mutableStateOf("")
@@ -266,6 +306,57 @@ class StudioState(
         private set
     var deviceStatusLevel by mutableStateOf("idle")
         private set
+    /** 「工具清单」按钮的输出：真机 MCP 实际暴露的工具名，用来回答"能不能调全部工具"。 */
+    var deviceToolsText by mutableStateOf("")
+        private set
+    var deviceToolNames by mutableStateOf<List<String>>(emptyList())
+        private set
+    var deviceToolDescriptions by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+    var deviceToolSchemas by mutableStateOf<Map<String, JsonObject>>(emptyMap())
+        private set
+    var deviceToolParamValues by mutableStateOf<Map<String, String>>(emptyMap())
+    var deviceToolNameDraft by mutableStateOf("")
+    var deviceToolArgsDraft by mutableStateOf("{}")
+    var deviceToolRunning by mutableStateOf(false)
+        private set
+    var deviceToolResult by mutableStateOf("")
+        private set
+
+    // ---- 一键上手：从当前真机页面自动生成脚本，不需要用户输入任何命令/参数 ----
+    var autoPkg by mutableStateOf("")
+        private set
+    var autoPkgLabel by mutableStateOf("")
+        private set
+    var autoCandidates by mutableStateOf<List<String>>(emptyList())
+        private set
+    var autoSelected by mutableStateOf("")
+        private set
+    var installedApps by mutableStateOf<List<Pair<String, String>>>(emptyList())
+        private set
+    var appQuery by mutableStateOf("")
+    var appsLoading by mutableStateOf(false)
+        private set
+    var autoBusy by mutableStateOf(false)
+        private set
+    var autoStatus by mutableStateOf("")
+        private set
+    /** ProxyPin 自动解析结果：不用用户手输域名/接口。 */
+    var trafficDomains by mutableStateOf<List<String>>(emptyList())
+        private set
+    var trafficEndpoints by mutableStateOf<List<String>>(emptyList())
+        private set
+    data class TrafficFlow(val flowId: String, val method: String, val url: String, val domain: String, val path: String)
+    var trafficFlows by mutableStateOf<List<TrafficFlow>>(emptyList())
+        private set
+    /** 从抓包请求体里拆出来的参数（键 → 值），自动填好，用户只改需要的值。 */
+    var trafficParamValues by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
+    private var trafficPayloadRaw: String = "{}"
+    var trafficStatus by mutableStateOf("")
+        private set
+    /** 上次识别到的候选（by/value），生成时直接复用，不需要再把 App 切到前台。 */
+    private var autoCands: List<AutoCand> = emptyList()
     var bridgeUrl by mutableStateOf("")
         private set
     var bridgeToken by mutableStateOf("")
@@ -355,7 +446,8 @@ class StudioState(
 
         // A first run should not land on an empty canvas with no explanation.
         val seenGuide = platform.readTextFile(GUIDE_MARKER) == "1"
-        beginnerMode = platform.readTextFile(BEGINNER_MARKER) != "0"
+        // 直接显示完整模式：默认不再进入简单模式（老用户仍可在「更多」里手动切换）
+        beginnerMode = platform.readTextFile(BEGINNER_MARKER) == "1"
         if (!seenGuide) {
             if (repo.current.root.children["body"].isNullOrEmpty() && repo.current.modules.isEmpty()) {
                 repo.setProjectDirect(cn.dumate.a6studio.model.Samples.emptyProject())
@@ -738,6 +830,762 @@ class StudioState(
                 throw e // M1: cancellation must propagate, or Stop/close never takes effect
             } catch (e: Exception) {
                 appendDevice("error", "取界面树失败：${e.message}")
+            }
+        }
+    }
+
+    /** 读取真机 MCP 的 tools/list，把可用工具名显示在真机页；只读，不执行任何脚本。 */
+    private data class AutoCand(val by: String, val value: String)
+
+    /** 从 ui_dump 里挑出「可见 + 可点 + 有文字」的控件，动作类文案排前面。 */
+    private fun extractAutoCandidates(dump: JsonObject?): List<AutoCand> {
+        if (dump == null) return emptyList()
+        val out = LinkedHashMap<String, AutoCand>()
+        val action = Regex("^(去|立即|马上|点击|继续|领取|签到|逛|看|完成|打开|搜索|查|抢|报名|参与|做任务)")
+        // 任务类按钮优先：签到/领取/去完成/浏览/逛/看视频…；底部导航和频道入口排在后面。
+        val taskWords = Regex("(签到|领取|去完成|做任务|浏览|逛|看视频|赚|开宝箱|抽奖|参与|报名|抢|领券|领豆|金币|奖励|打卡)")
+        val navWords = setOf(
+            "首页", "推荐", "关注", "我的", "购物车", "消息", "分类", "二手", "爱车",
+            "看病买药", "国家补贴", "大牌奥莱", "秒杀", "医药健康", "家电家居", "京东宠物",
+            "直播", "更多", "返回", "关闭"
+        )
+        fun score(v: String): Int {
+            if (v in navWords) return -1
+            var s = 0
+            if (taskWords.containsMatchIn(v)) s += 3
+            if (action.containsMatchIn(v)) s += 1
+            return s
+        }
+        var seen = 0
+        fun walk(el: JsonElement?) {
+            if (seen >= 300 || out.size >= 40) return
+            when (el) {
+                is JsonObject -> {
+                    seen++
+                    val clickable = (el["clickable"] as? JsonPrimitive)?.booleanOrNull == true ||
+                        (el["clickable"] as? JsonPrimitive)?.contentOrNull == "true"
+                    val visible = (el["visibleToUser"] as? JsonPrimitive)?.booleanOrNull != false &&
+                        (el["visible"] as? JsonPrimitive)?.booleanOrNull != false
+                    if (clickable && visible) {
+                        val text = (el["text"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                        val desc = (el["desc"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+                            .ifEmpty { (el["contentDescription"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty() }
+                        val label = text.ifEmpty { desc }
+                        if (label.isNotEmpty() && label.length <= 24 && !out.containsKey(label)) {
+                            out[label] = AutoCand(if (text.isNotEmpty()) "text" else "desc", label)
+                        }
+                    }
+                    el.values.forEach(::walk)
+                }
+                is JsonArray -> el.forEach(::walk)
+                else -> Unit
+            }
+        }
+        walk(dump)
+        val ranked = out.values
+            .map { it to score(it.value) }
+            .filter { it.second >= 0 }
+            .sortedWith(compareByDescending<Pair<AutoCand, Int>> { it.second }.thenBy { it.first.value.length })
+            .map { it.first }
+        return (if (ranked.isNotEmpty()) ranked else out.values.toList()).take(12)
+    }
+
+    /**
+     * 一键识别：给 5 秒倒计时让用户切到目标 App，然后由 AutoJs6 读它当前的前台窗口与控件树。
+     * 整个过程中不要求用户输入包名、选择器或参数。
+     */
+    fun autoDetectForeground(delaySec: Int = 5) {
+        if (autoBusy) return
+        scope.launch {
+            autoBusy = true
+            platformRef.startKeepAlive()
+            try {
+                applyBridgeConfig()
+                for (s in delaySec downTo 1) {
+                    autoStatus = "$s 秒后采集：现在请切到要自动化的 App（保持屏幕亮着）…"
+                    kotlinx.coroutines.delay(1000)
+                }
+                autoStatus = "正在读取目标 App 的页面…"
+                val win = withContext(Dispatchers.Default) { bridge.currentWindow() }
+                val pkg = win.packageName
+                if (pkg.isBlank() || pkg == "cn.dumate.a6studio") {
+                    autoStatus = "没读到目标 App：请确认已切到目标 App 且无障碍正常，再点一次"
+                    return@launch
+                }
+                val label = runCatching { bridge.listApps() }.getOrDefault(emptyList())
+                    .firstOrNull { it.first == pkg }?.second.orEmpty()
+                autoPkg = pkg
+                autoPkgLabel = label.ifBlank { pkg }
+                val dump = withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 350, maxDepth = 30) }
+                autoCands = extractAutoCandidates(dump)
+                autoCandidates = autoCands.map { it.value }
+                autoStatus = if (autoCands.isEmpty()) {
+                    "已识别 ${autoPkgLabel}（$pkg），但没找到可点按钮；先手动把目标页打开再识别"
+                } else {
+                    "已识别 ${autoPkgLabel}（$pkg）；可点：${autoCandidates.take(6).joinToString("、")}"
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                autoStatus = "识别失败：${e.message}"
+            } finally {
+                autoBusy = false
+                platformRef.stopKeepAlive()
+            }
+        }
+    }
+
+    /** 一键生成：打开目标 App → 等候选按钮 → 点它 → 收工，全部参数来自真机采集。 */
+    fun selectAutoCandidate(value: String) {
+        autoSelected = value
+        autoStatus = "已选按钮：$value（可生成新脚本或追加为下一步）"
+    }
+
+    fun autoGenerateFlow(pickedValue: String? = null, runAfter: Boolean = false) {
+        if (autoBusy) return
+        scope.launch {
+            autoBusy = true
+            autoStatus = "正在采集当前页面并生成脚本…"
+            try {
+                applyBridgeConfig()
+                val win = withContext(Dispatchers.Default) { bridge.currentWindow() }
+                val pkg = autoPkg.ifBlank { win.packageName }
+                if (pkg.isBlank() || pkg == "cn.dumate.a6studio") {
+                    autoStatus = "先打开要自动化的 App（或点「从已装应用选」），再点「生成」"
+                    return@launch
+                }
+                val cands = if (autoCands.isNotEmpty()) autoCands else {
+                    val dump = withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 400, maxDepth = 32) }
+                    extractAutoCandidates(dump).also { autoCands = it }
+                }
+                if (cands.isEmpty()) {
+                    autoStatus = "还没有识别到按钮：先点「① 识别当前页面」"
+                    return@launch
+                }
+                val chosen = (pickedValue ?: autoSelected).takeIf { it.isNotBlank() }
+                    ?.let { v -> cands.firstOrNull { it.value == v } } ?: cands.first()
+                val label = autoPkgLabel.substringAfterLast('.').ifBlank { pkg }
+                val body = mutableListOf<Block>()
+                body += newBlock("autoWait")
+                body += newBlock(
+                    "kitBoot",
+                    mapOf(
+                        "pkg" to ParamValue.Text(pkg),
+                        "name" to ParamValue.Text("自动 · $label"),
+                        "maxRuntimeMs" to ParamValue.Num(600000.0)
+                    )
+                )
+                body += newBlock("kitLaunch")
+                body += newBlock("kitGuard")
+                body += newBlock(
+                    "kitWaitFor",
+                    mapOf(
+                        "by" to ParamValue.Text(chosen.by),
+                        "match" to ParamValue.Text("contains"),
+                        "value" to ParamValue.Text(chosen.value),
+                        "timeoutMs" to ParamValue.Num(12000.0)
+                    )
+                )
+                body += newBlock(
+                    "kitClick",
+                    mapOf(
+                        "by" to ParamValue.Text(chosen.by),
+                        "match" to ParamValue.Text("contains"),
+                        "value" to ParamValue.Text(chosen.value)
+                    )
+                )
+                body += newBlock("kitFinish", mapOf("result" to ParamValue.Text("auto")))
+                val project = Project(
+                    name = "自动 · $label",
+                    root = Project.rootBlock().copy(children = mapOf("body" to body))
+                )
+                repo.snapshot("一键生成")
+                repo.setProjectDirect(project)
+                autoPkg = pkg
+                autoStatus = "已生成：打开 $label → 等「${chosen.value}」→ 点它 → 结束。可去「运行」页试跑。"
+                refreshAll()
+                toast("已生成脚本，共 ${body.size} 个积木")
+                autoSelected = chosen.value
+                // 生成后清空旧候选：下一步必须在目标 App 的新页面上重新识别，避免把同一步重复追加
+                autoCands = emptyList()
+                autoCandidates = emptyList()
+                if (runAfter) run()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                autoStatus = "生成失败：${e.message}"
+            } finally {
+                autoBusy = false
+            }
+        }
+    }
+
+    /**
+     * 多步流程：在当前「一键生成」的脚本后面再追加一步（等一个按钮 → 点它）。
+     * 用法：在真机上操作到下一页 → 回本页点「① 识别」→ 点「追加为下一步」。
+     */
+    fun autoAppendStep(pickedValue: String? = null) {
+        if (autoBusy) return
+        val hasKitBoot = repo.current.root.children["body"].orEmpty().any { it.type == "kitBoot" }
+        if (!hasKitBoot) {
+            autoStatus = "当前脚本还不是可运行的一键流程：先点「② 生成脚本」"
+            return
+        }
+        scope.launch {
+            autoBusy = true
+            autoStatus = "正在追加下一步…"
+            try {
+                val cands = if (autoCands.isNotEmpty()) autoCands else {
+                    applyBridgeConfig()
+                    val dump = withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 400, maxDepth = 32) }
+                    extractAutoCandidates(dump).also { autoCands = it }
+                }
+                if (cands.isEmpty()) {
+                    autoStatus = "先点「① 识别」拿到当前页面的按钮，再追加"
+                    return@launch
+                }
+                val chosen = (pickedValue ?: autoSelected).takeIf { it.isNotBlank() }
+                    ?.let { v -> cands.firstOrNull { it.value == v } } ?: cands.first()
+                val blocks = listOf(
+                    newBlock(
+                        "kitWaitFor",
+                        mapOf(
+                            "by" to ParamValue.Text(chosen.by),
+                            "match" to ParamValue.Text("contains"),
+                            "value" to ParamValue.Text(chosen.value),
+                            "timeoutMs" to ParamValue.Num(12000.0)
+                        )
+                    ),
+                    newBlock(
+                        "kitClick",
+                        mapOf(
+                            "by" to ParamValue.Text(chosen.by),
+                            "match" to ParamValue.Text("contains"),
+                            "value" to ParamValue.Text(chosen.value)
+                        )
+                    )
+                )
+                repo.addBlocksAtScopeEnd(blocks)
+                commit()
+                autoStatus = "已追加下一步：等「${chosen.value}」→ 点它。到新页面后点「① 识别」可再追加。"
+                toast("已追加 1 步")
+                autoCands = emptyList()
+                autoCandidates = emptyList()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                autoStatus = "追加失败：${e.message}"
+            } finally {
+                autoBusy = false
+            }
+        }
+    }
+
+    fun listDeviceTools() {
+        applyBridgeConfig()
+        deviceToolsText = "正在读取工具清单…"
+        scope.launch {
+            try {
+                val all = LinkedHashMap<String, String>()
+                val schemas = LinkedHashMap<String, JsonObject>()
+                var cursor: String? = null
+                var pages = 0
+                var lastError: String? = null
+                // MCP 的 tools/list 可能分页：每页 20 个并带 nextCursor，必须循环取完。
+                do {
+                    pages++
+                    val cur = cursor
+                    val resp = withContext(Dispatchers.Default) {
+                        mcpGateway.call(
+                            CallMcpGatewayOptions(
+                                serverId = McpServerId.AUTOJS6,
+                                method = "tools/list",
+                                endpointUrl = bridgeUrl,
+                                allowLocal = true,
+                                authToken = bridgeToken,
+                                args = buildJsonObject { if (!cur.isNullOrBlank()) put("cursor", cur) }
+                            )
+                        )
+                    }
+                    if (!resp.ok) { lastError = resp.errorMessage; break }
+                    val obj = resp.data as? JsonObject
+                    val arr = obj?.get("tools") as? JsonArray
+                    arr?.forEach { el ->
+                        val jo = el as? JsonObject ?: return@forEach
+                        val n = (jo["name"] as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                        val d = (jo["description"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                        all[n] = d
+                        (jo["inputSchema"] as? JsonObject)?.let { schemas[n] = it }
+                    }
+                    cursor = (obj?.get("nextCursor") as? JsonPrimitive)?.contentOrNull
+                } while (!cursor.isNullOrBlank() && pages < 10)
+
+                deviceToolNames = all.keys.toList()
+                deviceToolDescriptions = all
+                deviceToolSchemas = schemas
+                deviceToolParamValues = emptyMap()
+                if (deviceToolNameDraft.isBlank()) deviceToolNameDraft = deviceToolNames.firstOrNull().orEmpty()
+                deviceToolsText = when {
+                    lastError != null && all.isEmpty() -> "读取工具清单失败：$lastError"
+                    all.isEmpty() -> "该版本没有返回工具清单（可能是旧版 MCP 插件）"
+                    else -> buildString {
+                        append("可用工具 ${all.size} 个（$pages 页）：")
+                        append(all.keys.joinToString("、"))
+                        if (all.size < 40) {
+                            append("\n只看到 ${all.size} 个通常是 AutoJs6 默认关掉了一些工具组。")
+                            append("到 AutoJs6 → 插件 → MCP Server → 设置 → 工具组，把「脚本 / 文件 / Shell / 手势 / 应用」等打开，再点一次工具清单。")
+                        }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                deviceToolsText = "读取工具清单失败：${e.message}"
+            }
+        }
+    }
+
+    /** 直接调用任意真机 MCP 工具：工具名 + JSON 参数，结果脱敏后显示。 */
+    fun runDeviceTool(name: String, argsJson: String) {
+        if (deviceToolRunning) return
+        val tool = name.trim()
+        if (tool.isEmpty()) { deviceToolResult = "先填工具名，或点上面的「工具清单」挑一个"; return }
+        scope.launch {
+            deviceToolRunning = true
+            deviceToolResult = "正在调用 $tool …"
+            try {
+                val argsObj = runCatching {
+                    Json.parseToJsonElement(argsJson.ifBlank { "{}" }) as? JsonObject
+                }.getOrNull() ?: throw IllegalArgumentException("参数必须是 JSON 对象，例如 {\"lines\": 20}")
+                applyBridgeConfig()
+                val resp = withContext(Dispatchers.Default) {
+                    mcpGateway.call(
+                        CallMcpGatewayOptions(
+                            serverId = McpServerId.AUTOJS6,
+                            method = "tools/call",
+                            toolName = tool,
+                            args = argsObj,
+                            endpointUrl = bridgeUrl,
+                            allowLocal = true,
+                            authToken = bridgeToken
+                        )
+                    )
+                }
+                deviceToolResult = if (resp.ok) {
+                    val text = resp.data.toString()
+                    "成功（${resp.latencyMs}ms）：\n" + text.take(6000)
+                } else {
+                    "失败：${resp.errorMessage}"
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                deviceToolResult = "调用失败：${e.message}"
+            } finally {
+                deviceToolRunning = false
+            }
+        }
+    }
+
+    data class ToolParamField(
+        val name: String,
+        val type: String,
+        val desc: String,
+        val required: Boolean,
+        val options: List<String> = emptyList()
+    )
+
+    /** 按工具的 inputSchema 生成表单字段：用户只点选/填值，不再手写 JSON。 */
+    fun toolParamsFor(name: String): List<ToolParamField> {
+        val schema = deviceToolSchemas[name] ?: return emptyList()
+        val props = schema["properties"] as? JsonObject ?: return emptyList()
+        val required = (schema["required"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty().toSet()
+        return props.map { (k, v) ->
+            val o = v as? JsonObject
+            val type = (o?.get("type") as? JsonPrimitive)?.contentOrNull.orEmpty().ifBlank { "string" }
+            val desc = (o?.get("description") as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val options = (o?.get("enum") as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+            ToolParamField(k, type, desc, k in required, options)
+        }
+    }
+
+    fun setToolParam(name: String, value: String) {
+        deviceToolParamValues = deviceToolParamValues + (name to value)
+    }
+
+    /** 用表单值拼出 JSON 参数并调用；数字/开关按 schema 类型转换。 */
+    fun runDeviceToolFromForm(name: String) {
+        val tool = name.trim()
+        if (tool.isEmpty()) { deviceToolResult = "先点「工具清单」并选一个工具"; return }
+        val args = buildJsonObject {
+            toolParamsFor(tool).forEach { p ->
+                val raw = deviceToolParamValues[p.name]?.trim().orEmpty()
+                if (raw.isNotEmpty()) {
+                    when (p.type.lowercase()) {
+                        "number", "integer" -> put(p.name, raw.toDoubleOrNull() ?: 0.0)
+                        "boolean" -> put(p.name, raw.equals("true", true))
+                        else -> put(p.name, raw)
+                    }
+                }
+            }
+        }
+        runDeviceToolJson(tool, args)
+    }
+
+    private fun runDeviceToolJson(tool: String, argsObj: JsonObject) {
+        if (deviceToolRunning) return
+        scope.launch {
+            deviceToolRunning = true
+            deviceToolResult = "正在调用 $tool …"
+            try {
+                applyBridgeConfig()
+                val resp = withContext(Dispatchers.Default) {
+                    mcpGateway.call(
+                        CallMcpGatewayOptions(
+                            serverId = McpServerId.AUTOJS6,
+                            method = "tools/call",
+                            toolName = tool,
+                            args = argsObj,
+                            endpointUrl = bridgeUrl,
+                            allowLocal = true,
+                            authToken = bridgeToken
+                        )
+                    )
+                }
+                deviceToolResult = if (resp.ok) "成功（${resp.latencyMs}ms）：\n" + resp.data.toString().take(6000)
+                else "失败：${resp.errorMessage}"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                deviceToolResult = "调用失败：${e.message}"
+            } finally {
+                deviceToolRunning = false
+            }
+        }
+    }
+
+    /** 读取已安装应用列表，供「选 App 自动打开并采集」使用（不需要打开 App 再切换）。 */
+    fun loadInstalledApps() {
+        if (appsLoading) return
+        scope.launch {
+            appsLoading = true
+            autoStatus = "正在读取已装应用…"
+            try {
+                applyBridgeConfig()
+                installedApps = withContext(Dispatchers.Default) {
+                    kotlinx.coroutines.withTimeout(20_000) { bridge.listApps() }
+                }.sortedBy { it.second.lowercase() }
+                autoStatus = if (installedApps.isEmpty()) {
+                    "没读到应用列表：确认 AutoJs6 MCP 的 app_list 工具可用（工具组已开），或改用「① 识别」"
+                } else {
+                    "读到 ${installedApps.size} 个应用，点一个就自动打开并采集"
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                autoStatus = "读取应用列表失败：${e.message}（可改用「① 识别」）"
+            } finally {
+                appsLoading = false
+            }
+        }
+    }
+
+    /** 选中一个已安装应用：自动启动它、等页面出来、采集控件，仍不需要用户切 App 或输包名。 */
+    fun launchAppAndCapture(pkg: String, label: String) {
+        if (autoBusy) return
+        scope.launch {
+            autoBusy = true
+            autoStatus = "正在打开 ${label.ifBlank { pkg }} 并采集页面…"
+            platformRef.startKeepAlive()
+            try {
+                applyBridgeConfig()
+                withContext(Dispatchers.Default) { bridge.launchApp(pkg) }
+                kotlinx.coroutines.delay(2500)
+                val win = withContext(Dispatchers.Default) { bridge.currentWindow() }
+                autoPkg = pkg
+                autoPkgLabel = label.ifBlank { win.packageName }
+                val dump = withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 350, maxDepth = 30) }
+                autoCands = extractAutoCandidates(dump)
+                autoCandidates = autoCands.map { it.value }
+                autoStatus = if (autoCands.isEmpty()) {
+                    "已打开 ${autoPkgLabel}，但没找到可点按钮；可等页面加载后点「① 识别」"
+                } else {
+                    "已打开并识别 ${autoPkgLabel}；可点：${autoCandidates.take(6).joinToString("、")}"
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                autoStatus = "打开并采集失败：${e.message}"
+            } finally {
+                autoBusy = false
+                platformRef.stopKeepAlive()
+            }
+        }
+    }
+
+    /** 自动读 ProxyPin 抓包，列出域名与接口，供一键选用（不需要手输域名）。 */
+    /** 一键自检：确认 AutoJs6 连接、设备信息，结果直接用人话显示在卡片上。 */
+    fun autoSelfCheck() {
+        if (autoBusy) return
+        scope.launch {
+            autoBusy = true
+            autoStatus = "正在检查 AutoJs6 连接…"
+            try {
+                applyBridgeConfig()
+                val ms = bridge.ping()
+                val info = bridge.deviceInfo()
+                deviceInfo = info
+                deviceStatusText = "真机：${info.label}"
+                deviceStatusLevel = "ok"
+                autoStatus = "✅ 已连接 ${info.label}（${ms}ms，Android ${info.androidRelease}）"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                autoStatus = "❌ 未连接：" + describeBridgeFailure(e).replace("\n", " ")
+                deviceStatusLevel = "err"
+            } finally {
+                autoBusy = false
+            }
+        }
+    }
+
+    /** 自动扫本机回环端口，找出 AutoJs6（9637/8765）与 ProxyPin（9127/9000）地址，省去手填。 */
+    fun autoDiscoverLocalServices() {
+        if (autoBusy) return
+        scope.launch {
+            autoBusy = true
+            autoStatus = "正在找本机的 AutoJs6 / ProxyPin 服务…"
+            try {
+                val autoCandidates = listOf(
+                    "http://127.0.0.1:9637/mcp",
+                    "http://127.0.0.1:8765/mcp",
+                    "http://127.0.0.1:9127/mcp"
+                )
+                var autoUrl: String? = null
+                for (u in autoCandidates) {
+                    val tok = bridge.authMap()[normUrl(u)]?.removePrefix("Bearer ").orEmpty()
+                    val r = mcpGateway.call(
+                        CallMcpGatewayOptions(
+                            serverId = McpServerId.AUTOJS6,
+                            method = "tools/list",
+                            endpointUrl = u,
+                            allowLocal = true,
+                            authToken = tok,
+                            timeoutMs = 2500
+                        )
+                    )
+                    val msg = r.errorMessage.orEmpty()
+                    if (r.ok || msg.contains("UNAUTHORIZED") || msg.contains("PAIRING")) { autoUrl = u; break }
+                }
+                val proxyCandidates = listOf(
+                    "http://127.0.0.1:9127/mcp",
+                    "http://127.0.0.1:9000/mcp",
+                    "http://127.0.0.1:8765/mcp"
+                )
+                var proxyUrl: String? = null
+                for (u in proxyCandidates) {
+                    val r = proxyPin.gateway.call(
+                        CallMcpGatewayOptions(
+                            serverId = McpServerId.PROXYPIN,
+                            method = "tools/list",
+                            endpointUrl = u,
+                            allowLocal = true,
+                            authToken = proxyPinToken,
+                            timeoutMs = 2500
+                        )
+                    )
+                    val msg = r.errorMessage.orEmpty()
+                    if (r.ok || msg.contains("UNAUTHORIZED") || msg.contains("PAIRING")) { proxyUrl = u; break }
+                }
+                if (autoUrl != null) {
+                    updateBridgeUrl(autoUrl)
+                    bridgeToken = bridge.authMap()[normUrl(autoUrl)]?.removePrefix("Bearer ").orEmpty()
+                }
+                if (proxyUrl != null) updateProxyPinUrl(proxyUrl)
+                autoStatus = buildString {
+                    append(if (autoUrl != null) "AutoJs6：$autoUrl" else "没找到 AutoJs6 MCP（9637）")
+                    append("；")
+                    append(if (proxyUrl != null) "ProxyPin：$proxyUrl" else "没找到 ProxyPin（9127/9000）")
+                    if ((autoUrl != null && bridgeToken.isBlank()) || (proxyUrl != null && proxyPinToken.isBlank())) {
+                        append("。有服务但没有令牌：从对应 App 的 MCP 设置里复制一次令牌即可")
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                autoStatus = "扫描失败：${e.message}"
+            } finally {
+                autoBusy = false
+            }
+        }
+    }
+
+    fun autoAnalyzeProxyPin() {
+        if (aiBusy) return
+        scope.launch {
+            aiBusy = true
+            trafficStatus = "正在读取 ProxyPin 抓包…"
+            try {
+                val effectiveTransport = if (!devMode && mcpTransport == McpTransport.LOCAL_BRIDGE) {
+                    McpTransport.HTTP_JSONRPC
+                } else mcpTransport
+                if (effectiveTransport == McpTransport.HTTP_JSONRPC) {
+                    proxyPin.configure(proxyPinUrl, proxyPinToken, allowLocal = true)
+                }
+                val resp = withContext(Dispatchers.Default) {
+                    proxyPin.listHttpFlows(domain = proxyPinDomainFilter, limit = 50, transport = effectiveTransport, devMode = devMode)
+                }
+                if (!resp.ok) {
+                    trafficStatus = "读取抓包失败：${resp.errorMessage}"
+                    return@launch
+                }
+                val flows = ((resp.data as? JsonObject)?.get("flows") as? JsonArray) ?: JsonArray(emptyList())
+                val doms = LinkedHashSet<String>()
+                val eps = LinkedHashSet<String>()
+                val tf = mutableListOf<TrafficFlow>()
+                fun s(o: JsonObject, k: String) = (o[k] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                flows.forEach { el ->
+                    val o = el as? JsonObject ?: return@forEach
+                    val url = s(o, "url").ifBlank { s(o, "requestUrl") }
+                    val dom = s(o, "domain").ifBlank {
+                        Regex("^https?://([^/:]+)").find(url)?.groupValues?.get(1).orEmpty()
+                    }
+                    val path = s(o, "path").ifBlank { Regex("^https?://[^/]+(/.*)$").find(url)?.groupValues?.get(1).orEmpty() }
+                    val method = s(o, "method").ifBlank { "GET" }
+                    if (dom.isNotBlank()) doms += dom
+                    if (path.isNotBlank()) eps += "$method $path"
+                    tf += TrafficFlow(s(o, "flowId").ifBlank { s(o, "id") }, method, url, dom, path)
+                }
+                trafficDomains = doms.toList().take(12)
+                trafficEndpoints = eps.toList().take(30)
+                trafficFlows = tf
+                // 自动把第一条 POST 的请求体拆成参数，后面生成请求积木直接用它，无需用户写 JSON
+                trafficParamValues = emptyMap()
+                trafficPayloadRaw = "{}"
+                tf.firstOrNull { it.method.uppercase() in setOf("POST", "PUT", "PATCH") }?.let { first ->
+                    if (first.method.uppercase() in setOf("POST", "PUT", "PATCH") && first.flowId.isNotBlank()) {
+                        val detail = runCatching {
+                            withContext(Dispatchers.Default) {
+                                proxyPin.getFlowDetail(first.flowId, transport = effectiveTransport, devMode = devMode)
+                            }
+                        }.getOrNull()
+                        val payload = if (detail?.ok == true) extractRequestPayload(detail.data) else null
+                        if (!payload.isNullOrBlank()) {
+                            trafficPayloadRaw = payload
+                            val obj = runCatching { Json.parseToJsonElement(payload) as? JsonObject }.getOrNull()
+                            val map = LinkedHashMap<String, String>()
+                            obj?.forEach { (k, v) ->
+                                if (v is JsonPrimitive) map[k] = v.content
+                            }
+                            trafficParamValues = map
+                        }
+                    }
+                }
+                if (proxyPinDomainFilter.isBlank() && trafficDomains.isNotEmpty()) {
+                    updateProxyPinDomainFilter(trafficDomains.first())
+                }
+                trafficStatus = when {
+                    flows.isEmpty() -> "没读到抓包：先在 ProxyPin 里抓一次目标 App 的请求，再点一次"
+                    else -> "解析到 ${flows.size} 条包、${trafficDomains.size} 个域名、${trafficEndpoints.size} 个接口"
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                trafficStatus = "读取抓包失败：${e.message}"
+            } finally {
+                aiBusy = false
+            }
+        }
+    }
+
+    fun setTrafficParam(name: String, value: String) {
+        trafficParamValues = trafficParamValues + (name to value)
+    }
+
+    private fun extractRequestPayload(el: JsonElement?): String? {
+        when (el) {
+            is JsonObject -> {
+                for ((k, v) in el) {
+                    val key = k.lowercase()
+                    // ProxyPin 1.4: detail.request.body = { available, binary, text: "..." }
+                    if (key == "body" && v is JsonObject) {
+                        val binary = (v["binary"] as? JsonPrimitive)?.contentOrNull == "true"
+                        val t = (v["text"] as? JsonPrimitive)?.contentOrNull
+                        if (!binary && !t.isNullOrBlank()) return t
+                    }
+                    if (key in setOf("requestbody", "postdata", "body", "reqbody", "request_body") &&
+                        v is JsonPrimitive && v.isString && v.content.isNotBlank()
+                    ) return v.content
+                    // body 块里的 text 字段（父对象带 returned/available）
+                    if (key == "text" && el.containsKey("returned") && v is JsonPrimitive && v.isString && v.content.isNotBlank()) {
+                        return v.content
+                    }
+                    extractRequestPayload(v)?.let { return it }
+                }
+            }
+            is JsonArray -> el.forEach { extractRequestPayload(it)?.let { r -> return r } }
+            else -> Unit
+        }
+        return null
+    }
+
+    /** 用抓到的第一条接口，自动生成一个 GET/POST 请求积木（URL、方法、请求体都来自抓包）。 */
+    fun autoGenerateRequestFromTraffic() {
+        val f = trafficFlows.firstOrNull { it.method.uppercase() in setOf("POST", "PUT", "PATCH") }
+            ?: trafficFlows.firstOrNull()
+        if (f == null) { trafficStatus = "先点「自动解析接口」拿到抓包"; return }
+        if (aiBusy) return
+        scope.launch {
+            aiBusy = true
+            trafficStatus = "正在按抓包生成请求积木…"
+            try {
+                val effectiveTransport = if (!devMode && mcpTransport == McpTransport.LOCAL_BRIDGE) {
+                    McpTransport.HTTP_JSONRPC
+                } else mcpTransport
+                if (effectiveTransport == McpTransport.HTTP_JSONRPC) {
+                    proxyPin.configure(proxyPinUrl, proxyPinToken, allowLocal = true)
+                }
+                var payload = "{}"
+                val m = f.method.uppercase()
+                if (trafficParamValues.isNotEmpty()) {
+                    payload = buildJsonObject {
+                        trafficParamValues.forEach { (k, v) -> if (v.isNotBlank()) put(k, v) }
+                    }.toString()
+                } else if (m in setOf("POST", "PUT", "PATCH") && f.flowId.isNotBlank()) {
+                    payload = trafficPayloadRaw
+                    if (payload == "{}") {
+                        val detail = withContext(Dispatchers.Default) {
+                            proxyPin.getFlowDetail(f.flowId, transport = effectiveTransport, devMode = devMode)
+                        }
+                        if (detail.ok) extractRequestPayload(detail.data)?.let { payload = it }
+                    }
+                }
+                val url = f.url.ifBlank { "https://${f.domain}${f.path}" }
+                val blocks = mutableListOf<Block>()
+                if (m == "GET") {
+                    blocks += newBlock("httpGet", mapOf("url" to ParamValue.Text(url), "var" to ParamValue.Text("res")))
+                } else {
+                    blocks += newBlock(
+                        "httpPostJson",
+                        mapOf(
+                            "url" to ParamValue.Text(url),
+                            "payload" to ParamValue.Text(payload),
+                            "var" to ParamValue.Text("res")
+                        )
+                    )
+                }
+                repo.addBlocksAtScopeEnd(blocks)
+                commit()
+                trafficStatus = "已生成请求积木：$m $url（请求体来自抓包，已脱敏）"
+                toast("已按抓包生成 ${blocks.size} 个请求积木")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                trafficStatus = "生成请求积木失败：${e.message}"
+            } finally {
+                aiBusy = false
             }
         }
     }
@@ -1216,42 +2064,47 @@ class StudioState(
         }
     }
 
+    private suspend fun collectAutoJsState(): Boolean {
+        aiStatusMsg = "正在通过 AutoJs6 MCP 采集设备与控件树状态…"
+        val effectiveTransport = if (!devMode && mcpTransport == McpTransport.LOCAL_BRIDGE) {
+            McpTransport.HTTP_JSONRPC
+        } else mcpTransport
+        if (effectiveTransport == McpTransport.HTTP_JSONRPC) {
+            applyBridgeConfig()
+        }
+        val resp = withContext(Dispatchers.Default) {
+            mcpGateway.call(
+                CallMcpGatewayOptions(
+                    serverId = McpServerId.AUTOJS6,
+                    transport = effectiveTransport,
+                    endpointUrl = bridgeUrl,
+                    method = "tools/call",
+                    toolName = "get_device_state",
+                    allowLocal = true,
+                    authToken = bridgeToken,
+                    devMode = devMode
+                )
+            )
+        }
+        if (!resp.ok) {
+            aiStatusMsg = "AutoJs6 MCP 采集失败：${resp.errorMessage}"
+            toast(aiStatusMsg)
+            return false
+        }
+        lastAutoJsStateReport = resp.redactionReport ?: Redaction.redactTrafficPayload(resp.data)
+        lastAutoJsIsSynthetic = resp.isSynthetic
+        val tag = if (resp.isSynthetic) "【合成数据】" else ""
+        aiStatusMsg = "${tag}已采集 AutoJs6 设备状态（耗时 ${resp.latencyMs}ms）"
+        toast("${tag}AutoJs6 设备状态已载入")
+        return true
+    }
+
     fun fetchAutoJsDeviceState() {
         if (aiBusy) return
         scope.launch {
             aiBusy = true
-            aiStatusMsg = "正在通过 AutoJs6 MCP 采集设备与控件树状态…"
             try {
-                val effectiveTransport = if (!devMode && mcpTransport == McpTransport.LOCAL_BRIDGE) {
-                    McpTransport.HTTP_JSONRPC
-                } else mcpTransport
-                if (effectiveTransport == McpTransport.HTTP_JSONRPC) {
-                    applyBridgeConfig()
-                }
-                val resp = withContext(Dispatchers.Default) {
-                    mcpGateway.call(
-                        CallMcpGatewayOptions(
-                            serverId = McpServerId.AUTOJS6,
-                            transport = effectiveTransport,
-                            endpointUrl = bridgeUrl,
-                            method = "tools/call",
-                            toolName = "get_device_state",
-                            allowLocal = true,
-                            authToken = bridgeToken,
-                            devMode = devMode
-                        )
-                    )
-                }
-                if (!resp.ok) {
-                    aiStatusMsg = "AutoJs6 MCP 采集失败：${resp.errorMessage}"
-                    toast(aiStatusMsg)
-                } else {
-                    lastAutoJsStateReport = resp.redactionReport ?: Redaction.redactTrafficPayload(resp.data)
-                    lastAutoJsIsSynthetic = resp.isSynthetic
-                    val tag = if (resp.isSynthetic) "【合成数据】" else ""
-                    aiStatusMsg = "${tag}已采集 AutoJs6 设备状态（耗时 ${resp.latencyMs}ms）"
-                    toast("${tag}AutoJs6 设备状态已载入")
-                }
+                collectAutoJsState()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1259,6 +2112,25 @@ class StudioState(
                 toast(aiStatusMsg)
             } finally {
                 aiBusy = false
+            }
+        }
+    }
+
+    /** 小白一键：先采集当前界面，再让 AI 用人话给出下一步；不配置模型时走离线规则引擎。 */
+    fun analyzeCurrentScreenWithAi(goal: String) {
+        if (aiBusy) return
+        scope.launch {
+            aiBusy = true
+            try {
+                if (!collectAutoJsState()) return@launch
+                aiBusy = false
+                requestAiRefine(goal)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                aiStatusMsg = "AI 分析失败：${e.message}"
+            } finally {
+                if (aiBusy) aiBusy = false
             }
         }
     }

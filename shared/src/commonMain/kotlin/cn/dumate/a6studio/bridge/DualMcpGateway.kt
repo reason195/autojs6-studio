@@ -2,6 +2,7 @@ package cn.dumate.a6studio.bridge
 
 import cn.dumate.a6studio.platform.nowMillis
 import cn.dumate.a6studio.security.Redaction
+import cn.dumate.a6studio.security.RedactionOptions
 import cn.dumate.a6studio.security.RedactionReport
 import cn.dumate.a6studio.security.RedactionStats
 import cn.dumate.a6studio.security.UrlSecurity
@@ -253,7 +254,10 @@ class DualMcpGateway(
                 msg.contains("unknown method") ||
                 msg.contains("未知工具") ||
                 msg.contains("工具不存在") ||
-                msg.contains("no such tool")
+                msg.contains("no such tool") ||
+                // AutoJs6 MCP 插件对未知工具的真实回包：`Tool get_device_state not found`
+                // 没有 "tool not found" 的相邻词序，必须用正则单独匹配，否则永远降级不了。
+                Regex("tool\\s+[a-z0-9_]+\\s+not\\s+found").containsMatchIn(msg)
         }
 
         fun finalizeMcpRpcResponse(
@@ -264,7 +268,12 @@ class DualMcpGateway(
             rawPayload: JsonElement,
             isSynthetic: Boolean = false
         ): McpGatewayResponse {
-            val report = Redaction.redactTrafficPayload(rawPayload)
+            // 之前用默认脱敏选项（maxArrayLength=20）会把 tools/list 的 45 个工具截成 20 个，
+            // files_list / ui_dump 这类数组结果也会被腰斩。这里放宽数组/深度，只保留键名与正则脱敏。
+            val report = Redaction.redactTrafficPayload(
+                rawPayload,
+                RedactionOptions(maxStringLength = 4000, maxArrayLength = 500, maxDepth = 16)
+            )
             return McpGatewayResponse(
                 ok = true,
                 degraded = false,
@@ -328,7 +337,7 @@ class DualMcpGateway(
 
         return try {
             val payload: JsonElement = when (opts.method) {
-                "tools/list" -> client.listTools(timeoutMs)
+                "tools/list" -> client.listTools(timeoutMs, (opts.args["cursor"] as? JsonPrimitive)?.contentOrNull)
                 "tools/call" -> callRemoteToolWithAdapter(client, opts, timeoutMs)
                 else -> return McpGatewayResponse(
                     ok = false,

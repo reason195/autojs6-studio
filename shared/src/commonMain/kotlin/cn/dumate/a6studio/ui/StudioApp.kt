@@ -103,11 +103,16 @@ private fun StudioAppContent(state: StudioState) {
                 // switchable sheets so nothing gets squeezed off-screen.
                 Column(Modifier.fillMaxSize()) {
                     PhoneyTabs(state)
-                    Box(Modifier.weight(1f)) {
-                        when (state.mobileSheet) {
-                            MobileSheet.CANVAS -> CanvasColumn(state, Modifier.fillMaxSize())
-                            MobileSheet.PALETTE -> PaletteColumn(state, Modifier.fillMaxSize())
-                            MobileSheet.PANE -> PaneColumn(state, Modifier.fillMaxSize())
+                    if (state.mobileSheet == MobileSheet.PANE) {
+                        Box(Modifier.weight(1f)) {
+                            PaneColumn(state, Modifier.fillMaxSize())
+                        }
+                    } else {
+                        // 手机：画布 + 积木 上下分栏，同时可见，不再来回切
+                        Column(Modifier.weight(1f)) {
+                            CanvasColumn(state, Modifier.weight(0.55f).fillMaxWidth())
+                            Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.border))
+                            PaletteColumn(state, Modifier.weight(0.45f).fillMaxWidth())
                         }
                     }
                 }
@@ -184,7 +189,7 @@ private fun TopBar(state: StudioState) {
                     PlainNameField(name) { name = it; state.renameProject(it) }
                     Text(state.deviceStatusText, fontSize = 10.sp, color = Palette.textDim, maxLines = 1)
                 }
-                QuietAction("↶", "撤销") { state.undo() }
+                QuietTextAction("撤销") { state.undo() }
                 MoreMenu(state)
                 Spacer(Modifier.width(6.dp))
                 RunButton(state)
@@ -241,7 +246,7 @@ private fun TopBar(state: StudioState) {
                 Spacer(Modifier.weight(1f))
                 Badge(state.deviceStatusText, badgeKindOf(state.deviceStatusLevel))
                 Spacer(Modifier.width(10.dp))
-                QuietAction("↶", "撤销") { state.undo() }
+                QuietTextAction("撤销") { state.undo() }
                 MoreMenu(state)
                 Spacer(Modifier.width(8.dp))
                 RunButton(state)
@@ -312,6 +317,21 @@ private fun ToolbarGroup(content: @Composable () -> Unit) {
 @Composable
 private fun ToolbarDivider() {
     Box(Modifier.padding(horizontal = 10.dp).width(1.dp).height(22.dp).background(Palette.border))
+}
+
+/** 顶栏的轻量文字按钮（撤销等）：不用图标，直接写中文，小白也认得出。 */
+@Composable
+private fun QuietTextAction(label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, fontSize = 13.sp, color = Palette.text)
+    }
 }
 
 /** Borderless round icon button, same 36dp height as the run button. */
@@ -490,6 +510,7 @@ private fun PaneTabs(state: StudioState) {
     val tabs = if (state.beginnerMode) {
         listOf(
             Pane.RUN to "运行",
+            Pane.AI to "AI 分析",
             Pane.DIAG to "检查问题",
             Pane.HELP to "帮助"
         )
@@ -500,7 +521,7 @@ private fun PaneTabs(state: StudioState) {
             Pane.TEST to "测试",
             Pane.DIAG to "诊断",
             Pane.DEVICE to "真机",
-            Pane.AI to "AI 抓包",
+            Pane.AI to "AI 分析",
             Pane.HELP to "帮助"
         )
     }
@@ -633,11 +654,11 @@ private fun PhoneyTabs(state: StudioState) {
             .clip(RoundedCornerShape(10.dp)).background(Palette.panelAlt).padding(3.dp)
     ) {
         listOf(
-            MobileSheet.CANVAS to "画布",
-            MobileSheet.PALETTE to "积木",
+            MobileSheet.CANVAS to "编辑（画布 + 积木）",
             MobileSheet.PANE to "面板"
         ).forEach { (sheet, label) ->
-            val active = state.mobileSheet == sheet
+            // 编辑模式下画布与积木同屏；只有 CANVAS/PALETTE 都算编辑
+            val active = if (sheet == MobileSheet.CANVAS) state.mobileSheet != MobileSheet.PANE else state.mobileSheet == sheet
             Box(
                 Modifier.weight(1f).height(30.dp).clip(RoundedCornerShape(8.dp))
                     .background(if (active) Palette.panel else Color.Transparent)

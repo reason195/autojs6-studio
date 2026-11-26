@@ -48,7 +48,7 @@ import cn.dumate.a6studio.ui.panes.TinyToggle
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
-    var goal by remember { mutableStateOf("提取可执行任务按钮关键词与推荐浏览等待时长") }
+    var goal by remember { mutableStateOf("用大白话说明当前页面能做什么、下一步该点哪个，按顺序列出来") }
 
     Column(
         modifier = modifier
@@ -56,7 +56,8 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 0. 桌面端本地 Studio MCP 服务端（默认关闭，需手动开启；带随机 Bearer 令牌）
+        // 0. 本地 Studio MCP 服务端：只有桌面端提供回调；Android 宿主没有，不渲染这张卡片
+        if (state.onToggleLocalMcp != null) {
         Surface(
             color = Palette.panelAlt,
             shape = RoundedCornerShape(8.dp),
@@ -119,7 +120,35 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                 }
             }
         }
+        }
 
+        // 新手：AI 分析两步入口（采集当前界面 → 开始分析）
+        Surface(
+            color = Palette.panelAlt,
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, Palette.border)
+        ) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("用 AI 分析当前手机界面", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
+                Text(
+                    "先点「① 采集当前界面」自动抓取并脱敏页面，再点「② 开始分析」；没配置模型时用离线规则引擎，不会上传到云端。",
+                    fontSize = 11.sp,
+                    color = Palette.textDim
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SmallButton("① 采集当前界面") { state.fetchAutoJsDeviceState() }
+                    SmallButton("② AI 分析（说人话）", primary = true) { state.analyzeCurrentScreenWithAi(goal) }
+                }
+                if (state.autoJsPlainSummary.isNotBlank()) {
+                    Text("已经读到：${state.autoJsPlainSummary}", fontSize = 11.sp, color = Palette.info)
+                }
+                if (state.refinePlainSummary.isNotBlank()) {
+                    Text("AI 说：${state.refinePlainSummary}", fontSize = 11.sp, color = Palette.ok)
+                }
+            }
+        }
+
+        if (!state.beginnerMode) {
         // 1. 双 MCP JSON-RPC 2.0 网关（AutoJs6 设备 MCP + ProxyPin 抓包 MCP）
         Surface(
             color = Palette.panelAlt,
@@ -204,8 +233,15 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().trackTextFocus()
                 )
+                Text(
+                    "抓不到目标 App 的包？在 ProxyPin 里开启 VPN/透明代理（或给目标 App 单独配代理）——系统代理对部分 App 无效。",
+                    fontSize = 9.sp, color = Palette.textDim
+                )
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     OutlinedButton(
                         onClick = { state.fetchAutoJsDeviceState() },
                         enabled = !state.aiBusy
@@ -218,6 +254,12 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                         colors = ButtonDefaults.buttonColors(containerColor = Palette.accent, contentColor = Palette.onAccent)
                     ) {
                         Text("拉取并脱敏流量", fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { state.autoAnalyzeProxyPin() },
+                        enabled = !state.aiBusy
+                    ) {
+                        Text("自动解析接口", fontSize = 12.sp)
                     }
                 }
 
@@ -237,7 +279,46 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                         color = if (state.lastTrafficIsSynthetic) Palette.warn else Palette.ok
                     )
                 }
+                if (state.trafficStatus.isNotBlank()) {
+                    Text(state.trafficStatus, fontSize = 10.5.sp, color = Palette.info)
+                }
+                if (state.trafficDomains.isNotEmpty()) {
+                    Text("抓到的域名（点一个自动填入过滤）：", fontSize = 9.5.sp, color = Palette.textDim)
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        state.trafficDomains.forEach { d ->
+                            SmallButton(d) { state.updateProxyPinDomainFilter(d) }
+                        }
+                    }
+                }
+                if (state.trafficEndpoints.isNotEmpty()) {
+                    Text("抓到的主要接口：", fontSize = 9.5.sp, color = Palette.textDim)
+                    state.trafficEndpoints.take(10).forEach { e ->
+                        Text("· $e", fontSize = 10.sp, color = Palette.text, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                    }
+                    if (state.trafficParamValues.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text("抓到的请求参数（已自动填入，可直接改值）：", fontSize = 9.5.sp, color = Palette.textDim)
+                        state.trafficParamValues.forEach { (k, v) ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(k, fontSize = 9.5.sp, color = Palette.textDim, modifier = Modifier.weight(0.4f))
+                                InlineField(
+                                    v,
+                                    { state.setTrafficParam(k, it) },
+                                    placeholder = k,
+                                    mono = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    SmallButton("用第一条接口生成请求积木", primary = true) { state.autoGenerateRequestFromTraffic() }
+                }
             }
+        }
         }
 
         // 2. 多通道大模型提炼
@@ -379,6 +460,10 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
                 border = BorderStroke(1.dp, Palette.border)
             ) {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (state.refinePlainSummary.isNotBlank()) {
+                        Text("小白解读：${state.refinePlainSummary}", fontSize = 12.sp, color = Palette.ok)
+                        Spacer(Modifier.height(2.dp))
+                    }
                     Text("提炼结果 · ${out.modelUsed}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
                     Text("候选按钮词：${out.refinedKeywords.joinToString("、").ifEmpty { "无" }}", fontSize = 12.sp, color = Palette.info)
                     Text("推荐浏览等待：${out.recommendedBrowseWaitMs} ms", fontSize = 12.sp, color = Palette.text)
