@@ -51,6 +51,7 @@ import cn.dumate.a6studio.picker.UiNode
 import cn.dumate.a6studio.recorder.RecorderStatus
 import cn.dumate.a6studio.ui.image.decodeBase64ToImage
 import cn.dumate.a6studio.ui.components.Badge
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.components.BadgeKind
 import cn.dumate.a6studio.ui.components.Chip
 import cn.dumate.a6studio.ui.components.EmptyHint
@@ -69,8 +70,11 @@ private fun OverlayFrame(
     headerActions: @Composable (() -> Unit)? = null,
     body: @Composable (Modifier) -> Unit
 ) {
+    // Scrim does NOT dismiss: an accidental click outside the dialog would otherwise throw
+    // away in-flight state (e.g. a running recorder or audit results). Close via ✕ or Esc.
+    val (closeHoverMod, closeHovered) = rememberHovered()
     Box(
-        Modifier.fillMaxSize().background(Color(0x661F2328)).clickable(onClick = onClose),
+        Modifier.fillMaxSize().background(Color(0x661F2328)).pointerInput(Unit) { detectTapGestures { } },
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -78,7 +82,6 @@ private fun OverlayFrame(
                 .clip(RoundedCornerShape(10.dp))
                 .background(Palette.panel)
                 .border(1.dp, Palette.border, RoundedCornerShape(10.dp))
-                .clickable(enabled = false) { }
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
@@ -91,8 +94,13 @@ private fun OverlayFrame(
                 headerActions?.invoke()
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "✕", fontSize = 12.sp, color = Palette.textDim,
-                    modifier = Modifier.clickable(onClick = onClose).padding(4.dp)
+                    "✕", fontSize = 12.sp, color = if (closeHovered) Palette.text else Palette.textDim,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(5.dp))
+                        .then(closeHoverMod)
+                        .background(if (closeHovered) Palette.hover else Color.Transparent)
+                        .clickable(onClick = onClose)
+                        .padding(5.dp)
                 )
             }
             androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(1.dp).background(Palette.border))
@@ -188,11 +196,13 @@ fun PickerOverlay(state: StudioState) {
 
 @Composable
 private fun ViewTab(label: String, active: Boolean, onClick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Text(
         label, fontSize = 10.5.sp,
         color = if (active) Palette.onAccent else Palette.textDim,
         modifier = Modifier.clip(RoundedCornerShape(4.dp))
-            .background(if (active) Palette.accent else Palette.panelAlt)
+            .then(hoverMod)
+            .background(if (active) Palette.accent else if (hovered) Palette.hover else Palette.panelAlt)
             .clickable(onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 4.dp)
     )
@@ -572,10 +582,12 @@ private fun PickerDetail(state: StudioState) {
 
 @Composable
 private fun CandidateRow(c: Candidate, chosen: Boolean, onApply: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Row(
         Modifier.fillMaxWidth().padding(vertical = 2.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(if (chosen) Palette.ok.copy(alpha = 0.12f) else Palette.panelAlt)
+            .then(hoverMod)
+            .background(if (chosen) Palette.ok.copy(alpha = 0.12f) else if (hovered) Palette.hover else Palette.panelAlt)
             .clickable(onClick = onApply)
             .padding(horizontal = 6.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically

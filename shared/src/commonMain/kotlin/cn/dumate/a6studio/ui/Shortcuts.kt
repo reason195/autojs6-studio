@@ -15,7 +15,8 @@ import androidx.compose.foundation.focusable
 
 /**
  * Keyboard shortcuts matching the web build: F5 run, F6 tests, F7 diagnose, F8 audit,
- * F9 recorder, Ctrl+S save, Ctrl+Z undo, Ctrl+E export, Delete removes the selected block.
+ * F9 recorder, Ctrl+S save, Ctrl+Z undo, Ctrl+E export, Ctrl+K focus block search,
+ * Delete removes the selected block.
  */
 @Composable
 fun Modifier.studioShortcuts(state: StudioState): Modifier {
@@ -38,6 +39,11 @@ fun Modifier.studioShortcuts(state: StudioState): Modifier {
                     if (editingText || hasModal) false else { state.undo(); true }
                 }
                 ctrl && ev.key == Key.E -> { state.exportJs(); true }
+                // Same guard as undo/delete: never steal the key from a text field being edited,
+                // and never yank focus while a modal is up.
+                ctrl && ev.key == Key.K -> {
+                    if (editingText || hasModal) false else { state.requestPaletteSearchFocus(); true }
+                }
                 ev.key == Key.Escape -> {
                     if (hasModal) {
                         state.closeOverlay()

@@ -373,6 +373,13 @@ class StudioState(
 
     var statusHint by mutableStateOf("")
     val toastText = mutableStateOf<String?>(null)
+    /**
+     * Bumped by Ctrl+K to ask the palette search box for focus. The palette observes the
+     * counter and requests focus on its text field (bumping avoids focus races when the
+     * palette was already open).
+     */
+    var paletteSearchFocusRequest by mutableStateOf(0)
+        private set
 
     private var diagJob: Job? = null
     private var bubbleJob: Job? = null
@@ -536,7 +543,7 @@ class StudioState(
     fun toast(msg: String) {
         toastText.value = msg
         scope.launch {
-            delay(1800)
+            delay(2400)
             if (toastText.value == msg) toastText.value = null
         }
     }
@@ -547,6 +554,12 @@ class StudioState(
     }
 
     fun setHint(text: String) { statusHint = text }
+
+    /** Ctrl+K: reveal the palette and focus its search box. */
+    fun requestPaletteSearchFocus() {
+        if (mobileSheet != MobileSheet.PALETTE) mobileSheet = MobileSheet.PALETTE
+        paletteSearchFocusRequest++
+    }
 
     fun clearRunLogs() { runLogs = emptyList() }
 

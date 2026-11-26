@@ -18,11 +18,13 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -109,8 +111,18 @@ fun CanvasPanel(
         DisposableEffect(drag, rootId) { onDispose { drag.unregisterContainer(rootId, "body") } }
     }
     val target = drag?.target
+    // Reverse sync: selecting a block from the code pane scrolls it into view. +1 skips the
+    // always-present scope header item; the empty-state item only exists when body is empty
+    // (in which case there is no selection to scroll to). Nested blocks can't be targeted
+    // precisely, so only top-level matches scroll.
+    val listState = rememberLazyListState()
+    LaunchedEffect(selectedId) {
+        val idx = selectedId?.let { id -> body.indexOfFirst { it.id == id } } ?: -1
+        if (idx >= 0) runCatching { listState.animateScrollToItem(idx + 1) }
+    }
     LazyColumn(
-        modifier
+        state = listState,
+        modifier = modifier
             .then(if (drag != null) Modifier.onGloballyPositioned {
                 drag.registerContainer(DropContainer(rootId, "body", body.size, it.boundsInRoot()))
             } else Modifier)

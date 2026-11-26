@@ -27,7 +27,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,6 +46,7 @@ import cn.dumate.a6studio.catalog.Category
 import cn.dumate.a6studio.catalog.Friendly
 import cn.dumate.a6studio.ui.Palette as P
 import cn.dumate.a6studio.ui.components.EmptyHint
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.fields.SearchField
 import cn.dumate.a6studio.ui.canvas.PaletteDragState
 
@@ -107,11 +110,17 @@ fun PalettePanel(
     drag: PaletteDragState? = null,
     /** True on touch devices: a long press starts the drag so swipes keep scrolling. */
     longPressDrag: Boolean = false,
-    onDrop: (String, cn.dumate.a6studio.ui.canvas.DropTarget) -> Unit = { _, _ -> }
+    onDrop: (String, cn.dumate.a6studio.ui.canvas.DropTarget) -> Unit = { _, _ -> },
+    /** Bumped by Ctrl+K: palette receives focus on the search box. */
+    focusRequest: Int = 0
 ) {
     var query by remember { mutableStateOf("") }
     // 默认全部收起：列表从「一屏 20 项」变成「一屏 10 个分类」。
     val collapsed = remember { mutableStateOf(Catalog.CATS.map { it.id }.toSet()) }
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(focusRequest) {
+        if (focusRequest > 0) runCatching { searchFocus.requestFocus() }
+    }
 
     val grouped = remember(query, beginner) {
         val q = query.trim().lowercase()
@@ -138,7 +147,8 @@ fun PalettePanel(
                 value = query,
                 onValueChange = { query = it },
                 placeholder = "搜索积木（Ctrl+K）",
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                focusRequester = searchFocus
             )
         }
         if (query.isEmpty() && popular.isNotEmpty()) {
@@ -207,10 +217,12 @@ private fun PopularRow(
             items(defs.size) { idx ->
                 val def = defs[idx]
                 val c = Color(Catalog.colorOf(def.cat))
+                val (hoverMod, hovered) = rememberHovered()
                 Row(
                     Modifier
                         .clip(RoundedCornerShape(7.dp))
-                        .background(P.panelAlt)
+                        .then(hoverMod)
+                        .background(if (hovered) P.hover else P.panelAlt)
                         .border(1.dp, P.border, RoundedCornerShape(7.dp))
                         .paletteDraggable(def.type, drag, longPress, onDrop)
                         .clickable { onAdd(def.type) }
@@ -228,8 +240,12 @@ private fun PopularRow(
 
 @Composable
 private fun CategoryHeader(category: Category, beginner: Boolean, collapsed: Boolean, count: Int, onToggle: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onToggle)
+        Modifier.fillMaxWidth()
+            .then(hoverMod)
+            .background(if (hovered) P.hover else Color.Transparent)
+            .clickable(onClick = onToggle)
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -250,8 +266,13 @@ private fun PaletteItem(
     onDrop: (String, cn.dumate.a6studio.ui.canvas.DropTarget) -> Unit, onClick: () -> Unit
 ) {
     val c = Color(color)
+    val (hoverMod, hovered) = rememberHovered()
     Row(
-        Modifier.fillMaxWidth().paletteDraggable(def.type, drag, longPress, onDrop).clickable(onClick = onClick)
+        Modifier.fillMaxWidth()
+            .then(hoverMod)
+            .background(if (hovered) P.hover else Color.Transparent)
+            .paletteDraggable(def.type, drag, longPress, onDrop)
+            .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

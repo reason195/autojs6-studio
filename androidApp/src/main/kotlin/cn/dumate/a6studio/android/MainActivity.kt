@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.snapshotFlow
@@ -20,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cn.dumate.a6studio.ui.AndroidColors
 import cn.dumate.a6studio.ui.AndroidStyle
+import cn.dumate.a6studio.ui.MobileSheet
+import cn.dumate.a6studio.ui.Overlay
 import cn.dumate.a6studio.ui.Palette
 import cn.dumate.a6studio.ui.StudioApp
 import cn.dumate.a6studio.ui.StudioColors
@@ -143,6 +146,9 @@ class MainActivity : ComponentActivity() {
                 info       = AndroidColors.info,
                 codeBg     = dyn.surfaceContainer,
                 codeHl     = dyn.primaryContainer,
+                // Dynamic palette has no "hover" slot; a translucent onSurface reads as a
+                // subtle highlight over any wallpaper-derived surface colour.
+                hover      = dyn.onSurface.copy(alpha = 0.10f),
             )
             AndroidStyle.copy(colors = dynColors)
         } else {
@@ -153,6 +159,18 @@ class MainActivity : ComponentActivity() {
             // State lives in the ViewModel: rotation / dark-mode / font-size changes keep the
             // project, undo stack, tokens, a running simulation and an open panel.
             val state = vm.state
+            // System back closes transient UI (overlay → guide → templates → sheet) instead of
+            // dropping the user straight out of the app.
+            val backHandled = state.overlay != Overlay.NONE || state.showGuide ||
+                state.showTemplatePicker || state.mobileSheet != MobileSheet.CANVAS
+            BackHandler(enabled = backHandled) {
+                when {
+                    state.overlay != Overlay.NONE -> state.closeOverlay()
+                    state.showGuide -> state.dismissGuide()
+                    state.showTemplatePicker -> state.closeTemplates()
+                    else -> state.mobileSheet = MobileSheet.CANVAS
+                }
+            }
             StudioTheme(style = androidStyle) {
                 Surface(Modifier.fillMaxSize(), color = Palette.bg) {
                     androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().imePadding().padding(0.dp)) {
