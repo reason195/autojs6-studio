@@ -73,12 +73,24 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
         if (first != null) listState.animateScrollToItem(first)
     }
 
+    // Which block owns each code line (nearest preceding marker) — enables “click code line
+    // to select the block”, the reverse of the existing block→code highlighting.
+    val lineOwner = remember(lines) {
+        var owner: String? = null
+        Array(lines.size) { i ->
+            val line = lines[i]
+            if (line.isEmptyMarker) { owner = line.blockId; null } else owner
+        }.toList()
+    }
+
     Column(modifier) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(state.cleanCodeInfo.ifEmpty { "生成的 AutoJs6 脚本" }, fontSize = 11.sp, color = P.textDim)
+            Spacer(Modifier.width(8.dp))
+            Text("点代码行可定位积木", fontSize = 9.sp, color = P.textDim.copy(alpha = 0.6f))
             Spacer(Modifier.weight(1f))
             Text(
                 "复制",
@@ -106,10 +118,12 @@ fun CodePane(state: StudioState, modifier: Modifier = Modifier) {
                     Box(Modifier.height(0.dp))
                 } else {
                     val isHl = i in highlighted
+                    val owner = lineOwner.getOrNull(i)
                     Row(
                         Modifier.widthIn(min = 420.dp)
                             .width((widest * 6.6f + 44).dp.coerceAtLeast(420.dp))
                             .background(if (isHl) P.codeHl else androidx.compose.ui.graphics.Color.Transparent)
+                            .then(if (owner != null) Modifier.clickable { state.repo.select(owner) } else Modifier)
                             .padding(horizontal = 8.dp, vertical = 1.dp)
                     ) {
                         Text(

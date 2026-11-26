@@ -16,11 +16,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,7 +81,15 @@ fun CanvasPanel(
         Scope.Root -> project.root.children["body"].orEmpty()
     }
 
-    LazyColumn(modifier.padding(12.dp)) {
+    // Reverse sync: selecting a block from the code pane scrolls it into view (nested blocks
+    // can't be targeted precisely, so only top-level matches scroll).
+    val listState = rememberLazyListState()
+    LaunchedEffect(selectedId) {
+        val idx = selectedId?.let { id -> body.indexOfFirst { it.id == id } } ?: -1
+        if (idx >= 0) runCatching { listState.animateScrollToItem(idx + 1) }
+    }
+
+    LazyColumn(modifier.padding(12.dp), state = listState) {
         item {
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 8.dp),

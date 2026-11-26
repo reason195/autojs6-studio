@@ -37,6 +37,7 @@ import cn.dumate.a6studio.model.Template
 import cn.dumate.a6studio.model.Templates
 import cn.dumate.a6studio.ui.components.Badge
 import cn.dumate.a6studio.ui.components.BadgeKind
+import cn.dumate.a6studio.ui.components.rememberHovered
 import cn.dumate.a6studio.ui.panes.SmallButton
 
 /**
@@ -217,11 +218,13 @@ fun TemplateOverlay(state: StudioState) {
 
 @Composable
 private fun TemplateCard(template: Template, onPick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Column(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(Palette.panelAlt)
-            .border(1.dp, Palette.borderSoft, RoundedCornerShape(8.dp))
+            .then(hoverMod)
+            .background(if (hovered) Palette.hover else Palette.panelAlt)
+            .border(1.dp, if (hovered) Palette.accent.copy(alpha = 0.45f) else Palette.borderSoft, RoundedCornerShape(8.dp))
             .clickable(onClick = onPick)
             .padding(12.dp)
     ) {
@@ -278,11 +281,13 @@ fun EmptyCanvasGuide(
 
 @Composable
 private fun NextStepCard(title: String, hint: String, onClick: () -> Unit) {
+    val (hoverMod, hovered) = rememberHovered()
     Row(
         Modifier.widthIn(max = 460.dp).fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(Palette.panelAlt)
-            .border(1.dp, Palette.borderSoft, RoundedCornerShape(8.dp))
+            .then(hoverMod)
+            .background(if (hovered) Palette.hover else Palette.panelAlt)
+            .border(1.dp, if (hovered) Palette.accent.copy(alpha = 0.45f) else Palette.borderSoft, RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically

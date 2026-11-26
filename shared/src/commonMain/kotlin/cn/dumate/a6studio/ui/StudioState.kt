@@ -36,6 +36,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -208,7 +209,7 @@ class StudioState(
     fun toast(msg: String) {
         toastText.value = msg
         scope.launch {
-            delay(1800)
+            delay(2600)
             if (toastText.value == msg) toastText.value = null
         }
     }
@@ -295,7 +296,10 @@ class StudioState(
             }
         }
         scope.launch {
-            val result = engine.run(repo.current, sink)
+            // Run the simulator off the UI thread — Rhino executes inline, so a long script
+            // would otherwise freeze the whole window until it finishes. Snapshot state writes
+            // from the sink are legal from any thread and recompose on Main.
+            val result = withContext(Dispatchers.Default) { engine.run(repo.current, sink) }
             lastRun = result
             runLogs = result.logs
             simNodes = simNodes.ifEmpty { emptyList() }
@@ -354,7 +358,7 @@ class StudioState(
         showPane(Pane.TEST)
         testSummary = "运行中…"
         scope.launch {
-            val results = engine.runTests(repo.current, onlyIds)
+            val results = withContext(Dispatchers.Default) { engine.runTests(repo.current, onlyIds) }
             testResults = results
             val pass = results.count { it.ok }
             testSummary = "$pass / ${results.size} 通过"
