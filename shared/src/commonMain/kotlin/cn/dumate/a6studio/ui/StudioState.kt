@@ -1099,7 +1099,7 @@ class StudioState(
                         )
                     )
                 )
-                repo.addBlocksAtScopeEnd(blocks)
+                repo.insertBlocksBeforeKitFinish(blocks)
                 commit()
                 autoStatus = "已追加下一步：等「${chosen.value}」→ 点它。到新页面后点「① 识别」可再追加。"
                 toast("已追加 1 步")
@@ -2302,7 +2302,16 @@ class StudioState(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                aiStatusMsg = "ProxyPin 拉取失败：${e.message}"
+val msg = e.message ?: e::class.simpleName ?: "未知错误"
+                val authRejected = msg.contains("401") || msg.contains("拒绝了令牌") ||
+                    (e is cn.dumate.a6studio.bridge.BridgeException && e.code == "UNAUTHORIZED")
+                if (authRejected) {
+                    lastTrafficReport = null
+                    lastTrafficIsSynthetic = true
+                    aiStatusMsg = "ProxyPin 令牌被拒绝（401）。请在 ProxyPin 右上角 MCP 面板重新复制配置，粘贴后点「导入配置」；移动端重启后端口会变化，也需重新导入。"
+                } else {
+                    aiStatusMsg = "ProxyPin 拉取失败：$msg"
+                }
                 toast(aiStatusMsg)
             } finally {
                 aiBusy = false

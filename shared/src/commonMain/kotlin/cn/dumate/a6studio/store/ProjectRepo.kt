@@ -466,6 +466,21 @@ class ProjectRepo(private val storage: ProjectStorage) {
         save()
     }
 
+    /**
+     * Inserts several blocks right before the [kitFinish] guard of the current scope,
+     * so steps appended to an auto-generated flow land inside the kit run instead of
+     * after its finish block. Falls back to appending at the end when no kitFinish exists.
+     */
+    fun insertBlocksBeforeKitFinish(blocks: List<Block>) {
+        if (blocks.isEmpty()) return
+        val body = scopeBodyInternal().toMutableList()
+        val idx = body.indexOfLast { it.type == "kitFinish" }
+        if (idx >= 0) body.addAll(idx, blocks) else body += blocks
+        updateScopeBody(body)
+        _selectedState = blocks.last().id
+        save()
+    }
+
     /** Suggests a name that is not already taken, so repeated clicks never create duplicates. */
     fun nextModuleName(): String {
         val used = current.modules.map { it.name }.toSet()

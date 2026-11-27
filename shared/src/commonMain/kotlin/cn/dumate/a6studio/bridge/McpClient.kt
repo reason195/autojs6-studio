@@ -673,6 +673,30 @@ class McpClient(
         return ScreenCapture(base64 = data, mimeType = mime, metaJson = textPart)
     }
 
+    /**
+     * 点击一个节点（ui_click）。selector 里的键按 AutoJs6 的规则映射：
+     *  `AutoCand.by` ∈ {"text","desc"} 对应 selector 中的 text/desc 字段（不能把 "by" 当键发出去）。
+     *  x/y 坐标点击需要手机上开启 ui_gesture 组；候选按钮点击走 selector 优先。
+     */
+    suspend fun uiClick(selector: JsonObject? = null, x: Int? = null, y: Int? = null, timeoutMs: Long = 15_000): McpToolResult =
+        callTool(
+            "ui_click",
+            buildJsonObject {
+                if (selector != null) put("selector", selector)
+                if (x != null && y != null) {
+                    put("x", x)
+                    put("y", y)
+                }
+            },
+            timeoutMs
+        )
+
+    suspend fun uiClickByText(value: String, timeoutMs: Long = 15_000): McpToolResult =
+        uiClick(buildJsonObject { put("text", value) }, timeoutMs = timeoutMs)
+
+    suspend fun uiClickByDesc(value: String, timeoutMs: Long = 15_000): McpToolResult =
+        uiClick(buildJsonObject { put("desc", value) }, timeoutMs = timeoutMs)
+
     suspend fun filesRead(path: String): String? {
         val r = callTool("files_read", buildJsonObject {
             put("path", path)
