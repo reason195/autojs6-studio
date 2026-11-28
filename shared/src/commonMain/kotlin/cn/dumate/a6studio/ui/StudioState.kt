@@ -2413,26 +2413,70 @@ class StudioState(
             toast("$source 里的 MCP 地址都被安全策略拒绝了，详情见设备日志")
             return 0
         }
-        found.forEach { c ->
+        // 分流：ProxyPin 特征（名字含 proxypin，或端口 9127/9000）进 ProxyPin 配置，
+        // 其余进 AutoJs6 设备列表。这样把「一加 MCP + 魅族 MCP + ProxyPin MCP」合成一份文本
+        // 粘贴/选文件，一次导入全部到位，不用分两个入口各导一次。
+        val (proxies, auto) = found.partition { isProxyPinEntry(it) }
+        // ---- AutoJs6 设备 ----
+        auto.forEach { c ->
             repo.saveDevice(c.url, cn.dumate.a6studio.bridge.McpConfigParser.label(c))
             if (c.token.isNotEmpty()) bridge.setAuthFor(c.url, c.token)
         }
         persistTokens()
-        val first = found.first()
-        bridgeUrl = first.url
-        repo.updateBridgeUrl(first.url)
-        bridge.setUrl(first.url)
-        bridgeToken = first.token.ifBlank { bridge.authMap()[normUrl(first.url)]?.removePrefix("Bearer ").orEmpty() }
-        persistBridgeConfig()
-        applyBridgeConfig()
-        val withToken = found.count { it.token.isNotEmpty() }
-        val names = found.joinToString("、") { cn.dumate.a6studio.bridge.McpConfigParser.label(it) }
-        appendDevice("sys", "从$source 导入 ${found.size} 台设备（$withToken 台带令牌）：$names")
-        if (withToken > 0 && !rememberToken) {
+        if (auto.isNotEmpty()) {
+            val first = auto.first()
+            bridgeUrl = first.url
+            repo.updateBridgeUrl(first.url)
+            bridge.setUrl(first.url)
+            bridgeToken = first.token.ifBlank { bridge.authMap()[normUrl(first.url)]?.removePrefix("Bearer ").orEmpty() }
+            persistBridgeConfig()
+            applyBridgeConfig()
+        }
+        // ---- ProxyPin 设备（全部存入设备列表，激活第一台） ----
+        var proxyApplied = 0
+        val proxyOk = mutableListOf<cn.dumate.a6studio.bridge.McpServerConfig>()
+        proxies.forEach { c ->
+            val reason = cn.dumate.a6studio.bridge.ProxyPinImport.checkBeforeWrite(c.url, c.token)
+            if (reason != null) { appendDevice("error", "ProxyPin ${redactUrlForLog(c.url)}：$reason"); return@forEach }
+            runCatching { proxyPin.configure(c.url, c.token, allowLocal = true) }
+                .onFailure { e -> appendDevice("error", "ProxyPin 配置失败：${e.message}") }
+                .onSuccess {
+                    proxyOk += c
+                    repo.saveProxyPinDevice(c.url, cn.dumate.a6studio.bridge.McpConfigParser.label(c))
+                }
+        }
+        proxyOk.firstOrNull()?.let { first ->
+            proxyPinUrl = first.url
+            proxyPinToken = first.token
+            persistAiConfig()
+            persistAiTokens()
+            proxyApplied = 1
+        }
+        val autoWithToken = auto.count { it.token.isNotEmpty() }
+        val autoNames = auto.joinToString("、") { cn.dumate.a6studio.bridge.McpConfigParser.label(it) }
+        val proxyNames = proxies.joinToString("、") { cn.dumate.a6studio.bridge.McpConfigParser.label(it) }
+        appendDevice(
+            "sys",
+            "从$source 导入 AutoJs6 ${auto.size} 台（$autoWithToken 台带令牌）：${autoNames.ifEmpty { "-" }}" +
+                (if (proxies.isNotEmpty()) "；ProxyPin ${proxyApplied}/$proxies:${proxyNames}" else "")
+        )
+        if (autoWithToken > 0 && !rememberToken) {
             appendDevice("info", "令牌目前只在内存里，重启后需要重新导入；要保留请勾「记住令牌」")
         }
-        toast("已导入 ${found.size} 台设备，当前：${cn.dumate.a6studio.bridge.McpConfigParser.label(first)}")
-        return found.size
+        val total = auto.size + proxyApplied
+        toast(
+            "已导入 $total 台" +
+                (if (auto.isNotEmpty()) "，当前 AutoJs6：${cn.dumate.a6studio.bridge.McpConfigParser.label(auto.first())}" else "") +
+                (if (proxies.size > 1) "；ProxyPin 检测到 ${proxies.size} 台，已使用第一台" else "")
+        )
+        return total
+    }
+
+    /** ProxyPin 特征判断：名字含 proxypin，或端口 9127/9000（区别于 AutoJs6 的 9637）。 */
+    private fun isProxyPinEntry(c: cn.dumate.a6studio.bridge.McpServerConfig): Boolean {
+        if (c.name.contains("proxypin", ignoreCase = true)) return true
+        val port = Regex("""(?:https?://[^/:]+):(\d{2,5})""").find(c.url)?.groupValues?.get(1)
+        return port == "9127" || port == "9000"
     }
 
     fun importMcpFromClipboard() {

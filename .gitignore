@@ -33,3 +33,4 @@ verify_oppo/
 verify_meizu/
 verify/bridge*.json
 verify/apk_*/
+verify/integrated_mcp.json

@@ -59,12 +59,12 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 标签条：按使用逻辑排序——连接模型 → AI 分析 → 双 MCP 网关 → 提炼结果
+        // 标签条：按使用逻辑排序——连接模型 → AI 分析 → 流量采集 → 提炼结果
         SectionTabs(
             tabs = listOf(
                 "model" to "连接模型",
                 "analyze" to "AI 分析",
-                "gateway" to "双 MCP 网关",
+                "gateway" to "流量采集",
                 "result" to "提炼结果"
             ),
             selected = aiTab,
@@ -200,7 +200,7 @@ private fun AiAnalyzeTab(state: StudioState, goal: String) {
     }
 }
 
-// ===================== 双 MCP JSON-RPC 网关 =====================
+// ===================== 流量采集（AutoJs6 状态 + ProxyPin 抓包） =====================
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AiGatewayTab(state: StudioState) {
@@ -211,7 +211,7 @@ private fun AiGatewayTab(state: StudioState) {
         border = BorderStroke(1.dp, Palette.border)
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("双 MCP JSON-RPC 2.0 网关（自动脱敏）", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
+            Text("流量采集（AutoJs6 状态 + ProxyPin 抓包，自动脱敏）", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 val visibleTransports = if (state.devMode) {
                     McpTransport.entries
@@ -232,24 +232,7 @@ private fun AiGatewayTab(state: StudioState) {
                 )
             }
 
-            // 连接配置已统一收进「真机」页的「连接」标签（AutoJs6 / ProxyPin 两节），这里只做采集与解析。
-            Surface(
-                color = Palette.panel,
-                shape = RoundedCornerShape(6.dp)
-            ) {
-                Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        "MCP 连接与令牌请到「真机」页 →「连接」标签配置（AutoJs6 MCP 与 ProxyPin MCP 分两节填写）。",
-                        fontSize = 10.5.sp, color = Palette.textDim
-                    )
-                    OutlinedButton(
-                        onClick = { state.showPane(cn.dumate.a6studio.ui.Pane.DEVICE) },
-                        modifier = Modifier.padding(top = 2.dp)
-                    ) {
-                        Text("去真机连接页", fontSize = 11.sp)
-                    }
-                }
-            }
+            // 连接配置已在「真机」页完成，这里只做采集与解析
             Text(
                 "抓不到目标 App 的包？在 ProxyPin 里开启 VPN/透明代理（或给目标 App 单独配代理）——系统代理对部分 App 无效。",
                 fontSize = 9.sp, color = Palette.textDim

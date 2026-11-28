@@ -112,4 +112,21 @@ class ProxyPinImportTest {
         val urlErr = ProxyPinImport.checkBeforeWrite("http://x@169.254.169.254/mcp", "")
         assertTrue(urlErr != null && (urlErr ?: "").contains("安全策略拦截"), "userinfo 地址应在写状态前被拒: $urlErr")
     }
+
+    @Test
+    fun `integrated multi-device config parses four servers with tokens`() {
+        // 两个真实 txt 拼接 + 用户补充的 ProxyPin 一加 —— 4 台设备一次解析
+        val text = """
+            {"mcpServers":{"AutoJs6-Oneplus-12":{"type":"http","url":"http://192.168.1.6:9637/mcp","headers":{"Authorization":"Bearer 5L0FuZdPCANealYm3MHmIzrW27NhbkkWpKgmpz0kAm0"}}}}
+            {"mcpServers":{"AutoJs6-Meizu-17-Pro":{"type":"http","url":"http://192.168.1.17:9637/mcp","headers":{"Authorization":"Bearer I5OYbvCLFTIqMcUpYLoNDLJbYmWpHtpmOFfJ5mBICtY"}}}}
+            {"mcpServers":{"ProxyPin-Meizu-17-Pro":{"type":"http","url":"http://192.168.1.17:9127/mcp","headers":{"Authorization":"Bearer 3243b65e6f3ee38c739e79c11c34df20f180c6a8368b782d"}}}}
+            {"mcpServers":{"ProxyPin-OnePlus-12":{"type":"http","url":"http://192.168.1.6:9127/mcp","headers":{"Authorization":"Bearer 462eeee1aeab1af237eeca1b216ad85221740e89e27244d7"}}}}
+        """.trimIndent()
+        val parsed = McpConfigParser.parse(text)
+        assertEquals(4, parsed.size, "拼接 4 个 JSON 应解析出 4 台设备：${parsed.map { "${it.name} ${it.url}" }}")
+        assertTrue(parsed.all { it.token.isNotEmpty() }, "每台都应带令牌")
+        assertTrue(parsed.any { it.name.contains("AutoJs6-Oneplus") && it.url.contains("192.168.1.6:9637") })
+        assertTrue(parsed.any { it.name.contains("ProxyPin-OnePlus") && it.url.contains("192.168.1.6:9127") })
+        assertTrue(parsed.any { it.name.contains("ProxyPin-Meizu") && it.url.contains("192.168.1.17:9127") })
+    }
 }
