@@ -129,7 +129,8 @@ private fun StudioAppContent(state: StudioState) {
         Overlay.AUDIT -> AuditOverlay(state)
         Overlay.RECORDER -> RecorderOverlay(state)
         Overlay.TEMPLATES -> TemplateOverlay(state)
-        Overlay.GUIDE -> Unit
+        Overlay.GUIDE -> QuickStart(state)
+        Overlay.STEPPER -> StepperOverlay(state)
         Overlay.NONE -> Unit
     }
 
@@ -192,6 +193,7 @@ private fun TopBar(state: StudioState) {
                     PlainNameField(name) { name = it; state.renameProject(it) }
                     Text(state.deviceStatusText, fontSize = 10.sp, color = Palette.textDim, maxLines = 1)
                 }
+                HomeRound(state)
                 QuietTextAction("撤销") { state.undo() }
                 MoreMenu(state)
                 Spacer(Modifier.width(6.dp))
@@ -215,7 +217,10 @@ private fun TopBar(state: StudioState) {
                     placeholder = "项目名称",
                     modifier = Modifier.width(200.dp)
                 )
-                Spacer(Modifier.width(18.dp))
+                Spacer(Modifier.width(12.dp))
+                // 一键上手主页常驻入口：icon+文字，回到快速开始整页（随时可再进，不藏进 ⋯）
+                HomeEntry(state)
+                Spacer(Modifier.width(14.dp))
                 // 宽屏：常用动作直接摆在顶栏，按「文件 | 检查 | 项目」分组，组间一条细竖线。
                 // 只在 ≥ 1200dp 时全部展开；中等宽度只放文件组，其余仍在 ⋯ 里。
                 if (this@BoxWithConstraints.maxWidth >= 1200.dp) {
@@ -285,6 +290,43 @@ private fun RunButton(state: StudioState, modifier: Modifier = Modifier) {
             fontWeight = FontWeight.SemiBold,
             color = Palette.onAccent
         )
+    }
+}
+
+/**
+ * 顶栏常驻的「一键上手主页」入口（宽屏用文字版）：回到快速开始整页。
+ * 用主题色描边胶囊，和 RunButton 一主一次形成视觉对偶。
+ */
+@Composable
+private fun HomeEntry(state: StudioState) {
+    Box(
+        Modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .border(1.dp, Palette.accent.copy(alpha = 0.55f), RoundedCornerShape(18.dp))
+            .clickable { state.openQuickStart() }
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("⌂", fontSize = 15.sp, color = Palette.accent)
+            Text("一键上手", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Palette.accent)
+        }
+    }
+}
+
+/** 窄屏 / 手机的圆形主页图标按钮，同 36dp 高。 */
+@Composable
+private fun HomeRound(state: StudioState) {
+    Box(
+        Modifier
+            .size(36.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .border(1.dp, Palette.accent.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+            .clickable { state.openQuickStart() },
+        contentAlignment = Alignment.Center
+    ) {
+        Text("⌂", fontSize = 18.sp, color = Palette.accent)
     }
 }
 
@@ -408,6 +450,7 @@ private fun MoreMenu(state: StudioState) {
                 ) {
                     item {
                         groupTitle("常用")
+                        menuItem("快速开始", Icons.Filled.PlayArrow) { open = false; state.openQuickStart() }
                         menuItem("保存", Icons.Filled.Done) { open = false; state.saveNow() }
                         menuItem("导出 JS", Icons.Filled.Share) { open = false; state.exportJs() }
                         menuItem("导出项目", Icons.Filled.Share) { open = false; state.exportProject() }

@@ -82,6 +82,7 @@ object Friendly {
         // 护栏运行时（aj6_kit）
         "kitBoot" to "启动护栏底座：自动拦截风控验证码、支付/结算页面和底部禁点区",
         "kitLaunch" to "安全拉起目标 App 并确认已在前台",
+        "kitEnsureForeground" to "如果中途跳到了其他 App，自动把目标 App 拉回前台再继续",
         "kitOpenDeepLink" to "通过深链直达活动页，避开首页入口变动",
         "kitGuard" to "检查当前是否触发风控、误入危险页或总时长超时",
         "kitWaitFor" to "只等待真正在屏幕可见区域内的控件出现（忽略离屏节点）",

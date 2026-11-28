@@ -39,6 +39,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.dumate.a6studio.audit.AuditStatus
@@ -675,6 +676,190 @@ fun AuditOverlay(state: StudioState) {
                 fontSize = 10.sp, color = Palette.textDim,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
             )
+        }
+    }
+}
+
+// ============================ step / interactive single-step ============================
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+fun StepperOverlay(state: StudioState) {
+    val s = state
+    val entries = s.stepEntries
+    val cands = s.stepCandidates
+
+    OverlayFrame(
+        title = "交互式单步识别",
+        subtitle = if (entries.isNotEmpty()) "已录 ${entries.size} 步" else "—",
+        onClose = { s.closeStepper() }
+    ) { bodyMod ->
+        Column(bodyMod) {
+            // ── 顶部操作区：识别 + 当前目标 ──
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SmallButton(if (s.stepBusy) "识别中…" else "① 识别当前页", primary = true) { s.stepperRecognize() }
+                if (s.stepTargetApp.isNotEmpty()) {
+                    Text("目标：${s.stepTargetApp}", fontSize = 10.5.sp, color = Palette.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                } else {
+                    Text("点「识别」读取目标 App 当前页的可点按钮", fontSize = 10.sp, color = Palette.textDim, modifier = Modifier.weight(1f))
+                }
+                SmallButton("清空") { s.stepperClear() }
+            }
+            if (s.stepStatus.isNotEmpty()) {
+                Text(
+                    s.stepStatus, fontSize = 10.5.sp, color = if (s.stepStatus.startsWith("✓")) Palette.ok
+                    else if (s.stepStatus.startsWith("已")) Palette.textDim
+                    else Palette.info,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)
+                )
+            }
+
+            // ── 识别到的可点按钮：点一下 = 真实点击 + 记录 + 自动识别下一屏 ──
+            if (cands.isNotEmpty()) {
+                Text(
+                    "点下面的按钮：会真机点它 → 记一步 → 自动识别新页面",
+                    fontSize = 10.sp, color = Palette.textDim,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+                androidx.compose.foundation.layout.FlowRow(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    maxItemsInEachRow = 2
+                ) {
+                    cands.take(24).forEach { (by, value) ->
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (s.stepBusy) Palette.panelAlt else Palette.panelAlt)
+                                .border(1.dp, Palette.borderSoft, RoundedCornerShape(6.dp))
+                                .clickable(enabled = !s.stepBusy) { s.stepperClickNode(by, value) }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("▸ ", fontSize = 10.sp, color = Palette.accent)
+                            Text(value, fontSize = 11.sp, color = Palette.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            } else if (entries.isNotEmpty()) {
+                // 已录步骤、刚点完出去、新页面无按钮时给出引导
+                Text(
+                    "当前页没有识别到可点按钮：可插模板动作，或再点「① 识别当前页」。",
+                    fontSize = 10.sp, color = Palette.textDim,
+                    modifier = Modifier.padding(horizontal = 12.dp))
+            }
+
+            // ── 模板动作（可扩展）：点一下把「一个动作」插到步骤里 ──
+            Text(
+                "插入模板动作（可扩展）：",
+                fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = Palette.textDim,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+            androidx.compose.foundation.layout.FlowRow(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                maxItemsInEachRow = 2
+            ) {
+                cn.dumate.a6studio.step.StepTemplates.menu.forEach { action ->
+                    Column(
+                        Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Palette.panelAlt)
+                            .border(1.dp, Palette.borderSoft, RoundedCornerShape(6.dp))
+                            .clickable(enabled = !s.stepBusy) { s.stepperInsertTemplate(action) }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Text(action.title, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Palette.text)
+                        Text(action.desc, fontSize = 8.5.sp, color = Palette.textDim, maxLines = 1)
+                    }
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+
+            // ── 「等待 N 秒」秒数输入弹窗 ──
+            if (s.stepWaitDialogOpen) {
+                var secText by remember(s.stepWaitDialogOpen) { mutableStateOf(s.stepWaitSeconds.toString()) }
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { s.stepperCloseWaitDialog() },
+                    title = { Text("等待几秒？", fontSize = 15.sp) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text("插一段「原地等待」，之后脚本会先等这些秒数再继续。", fontSize = 11.sp, color = Palette.textDim)
+                            InlineField(
+                                secText,
+                                { v -> secText = v.filter { it.isDigit() }.take(3) },
+                                placeholder = "秒数（1-600）",
+                                mono = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        (SmallButton("插入") { s.confirmInsertWait(secText.toIntOrNull() ?: 3) })
+                    },
+                    dismissButton = {
+                        (Text(
+                            "取消", fontSize = 12.sp, color = Palette.textDim,
+                            modifier = Modifier.clickable { s.stepperCloseWaitDialog() }.padding(8.dp)
+                        ))
+                    }
+                )
+            }
+
+            // ── 已录步骤：从上到下的脚本预览 ──
+            Text(
+                "已录制步骤（自上而下执行）：",
+                fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = Palette.textDim,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+            LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                if (entries.isEmpty()) {
+                    item {
+                        EmptyHint("还没录步骤。点上面的可点按钮（真机翻页+记录），或插模板动作。")
+                    }
+                }
+                items(count = entries.size, key = { i -> entries[i].id }) { i ->
+                    val e = entries[i]
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Palette.panelAlt)
+                            .padding(horizontal = 7.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("#${i + 1}", fontSize = 10.sp, color = Palette.textDim, modifier = Modifier.width(30.dp))
+                        if (e is cn.dumate.a6studio.step.NodeTapStep) Chip("点击", Palette.ok)
+                        else Chip("模板", Palette.info)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            e.label, fontSize = 10.5.sp, color = Palette.text, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            // ── 结束 / 生成 ──
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (entries.isNotEmpty()) "步骤都真实点过，已同步成脚本积木。"
+                    else "想结束随时可以关；没有步骤就不会生成新脚本。",
+                    fontSize = 9.5.sp, color = Palette.textDim, modifier = Modifier.weight(1f)
+                )
+                SmallButton(if (entries.isEmpty()) "直接关闭" else "生成脚本并保存", primary = entries.isNotEmpty()) {
+                    if (entries.isEmpty()) s.closeStepper() else s.stepperGenerateAndClose()
+                }
+            }
         }
     }
 }

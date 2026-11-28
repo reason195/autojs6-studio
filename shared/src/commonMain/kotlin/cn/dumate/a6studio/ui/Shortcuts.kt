@@ -40,7 +40,8 @@ fun Modifier.studioShortcuts(state: StudioState): Modifier {
                 ctrl && ev.key == Key.E -> { state.exportJs(); true }
                 ev.key == Key.Escape -> {
                     if (hasModal) {
-                        state.closeOverlay()
+                        // 快速开始整页入口：Esc 也当成「看过了」，不再每次启动都弹
+                        if (state.overlay == Overlay.GUIDE) state.dismissGuide() else state.closeOverlay()
                         state.showTemplatePicker = false
                         state.showGuide = false
                         true

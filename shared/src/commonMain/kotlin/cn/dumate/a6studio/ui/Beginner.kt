@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,6 +21,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,8 +34,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.dumate.a6studio.model.Template
@@ -293,5 +301,220 @@ private fun NextStepCard(title: String, hint: String, onClick: () -> Unit) {
             Text(hint, fontSize = 11.sp, color = Palette.textDim, lineHeight = 16.sp)
         }
         Text("›", fontSize = 18.sp, color = Palette.accent)
+    }
+}
+
+/**
+ * 快速开始（一键上手首页）：第一次打开就停在这里，也是顶栏「主页」常驻入口。
+ * 视觉按现代引导页/空状态设计：Hero 大标题 + 副标题讲价值，卡片带阴影、圆角、
+ * 渐变图标块与主次分明的操作按钮；真机一键生成卡片随连接状态变化。
+ */
+@Composable
+fun QuickStart(state: StudioState) {
+    val connected = state.deviceStatusLevel == "ok" || state.deviceInfo != null
+    val deviceLabel = state.deviceInfo?.label?.substringBefore('(')?.trim()
+        ?: state.deviceStatusText.removePrefix("真机：")
+
+    BoxWithConstraints(Modifier.fillMaxSize().background(Palette.bg)) {
+        // 窄屏手机（横屏 360dp 左右）用紧凑节奏与更小卡内边距，桌面/大屏用宽松节奏。
+        val compact = maxWidth < 480.dp
+        val topPad = if (compact) 22.dp else 48.dp
+        val heroSize = if (compact) 23.sp else 30.sp
+        val heroLine = if (compact) 31.sp else 38.sp
+        val subSize = if (compact) 12.5.sp else 14.sp
+        val iconPad = if (compact) 11.dp else 18.dp
+        val iconSize = if (compact) 38.dp else 52.dp
+        val iconShape = if (compact) 10.dp else 13.dp
+        val hintSize = if (compact) 11.sp else 12.sp
+        Column(
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.height(topPad))
+
+            // ── Hero 区：品牌小标 + 大标题 + 副标题 ──
+            Badge("一键上手 · 不用写代码", BadgeKind.OK)
+            Spacer(Modifier.height(if (compact) 12.dp else 16.dp))
+            Text(
+                "像叠积木一样，做出你的第一个自动化脚本",
+                fontSize = heroSize, fontWeight = FontWeight.Bold, color = Palette.text,
+                lineHeight = heroLine, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = if (compact) 18.dp else 32.dp)
+            )
+            Spacer(Modifier.height(if (compact) 8.dp else 10.dp))
+            Text(
+                "从模板开始、真机一键生成、或自己拼——三条路，选一条就走。",
+                fontSize = subSize, color = Palette.textDim,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = if (compact) 22.dp else 40.dp)
+            )
+            Spacer(Modifier.height(if (compact) 14.dp else 20.dp))
+
+            // 连接状态条：连上给绿勾，没连给提示，但不堵路
+            if (connected) {
+                Badge("真机已连接 · $deviceLabel", BadgeKind.OK)
+            } else {
+                Text("还没连真机？这条不着急，方案①先在模拟器里玩", fontSize = if (compact) 11.sp else 12.sp, color = Palette.textDim)
+            }
+
+            Spacer(Modifier.height(if (compact) 18.dp else 30.dp))
+
+            // ── 三张大卡片 ──
+            Column(Modifier.fillMaxWidth().widthIn(max = 660.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 14.dp)) {
+                QuickStartCard(
+                    icon = "计",
+                    title = "从现成模板开始",
+                    tag = "最快 · 不需要手机",
+                    hint = "已经写好的脚本，点开就能在模拟器里运行；先看效果，再按需改文字。",
+                    actionLabel = "打开模板库",
+                    primary = true,
+                    accent = Palette.accent,
+                    iconSize = iconSize, iconShape = iconShape,
+                    compact = compact, hintSize = hintSize, iconPad = iconPad,
+                    onClick = { state.openFromQuickStart { state.openTemplates() } }
+                )
+                QuickStartCard(
+                    icon = "机",
+                    title = "真机一键生成",
+                    tag = if (connected) "真机已连接 · 直接开始" else "需要连接 AutoJs6",
+                    hint = if (connected)
+                        "我读你真机当前页 → 自动生成「打开 App → 等按钮 → 点击」的脚本并试跑。"
+                    else
+                        "连上 AutoJs6 后，我自动采集屏幕：打开 App → 等按钮出现 → 点它 → 生成脚本。",
+                    actionLabel = if (connected) "开始一键生成" else "去连接真机",
+                    primary = !connected,
+                    accent = Palette.info,
+                    iconSize = iconSize, iconShape = iconShape,
+                    compact = compact, hintSize = hintSize, iconPad = iconPad,
+                    onClick = {
+                        if (connected) {
+                            state.openFromQuickStart { state.autoOneClickStart() }
+                        } else {
+                            // 直达「一键上手」标签：连不连都直接看到主操作（未连时页内给连接指引），
+                            // 手机端顺带切到「面板」分栏，不落在编辑画布上。
+                            state.openFromQuickStart { state.openDeviceGuide() }
+                        }
+                    }
+                )
+                QuickStartCard(
+                    icon = "⌗",
+                    title = "从头开始，自己拼",
+                    tag = "进阶玩法",
+                    hint = "点左侧积木栏里的「点击控件」「等待」「滑动」，每点一个就加到中间画布上。",
+                    actionLabel = "打开空画布",
+                    primary = false,
+                    accent = Palette.textDim,
+                    iconSize = iconSize, iconShape = iconShape,
+                    compact = compact, hintSize = hintSize, iconPad = iconPad,
+                    onClick = { state.openFromQuickStart { /* 留空画布即可，空画布上已有下一步提示 */ } }
+                )
+            }
+
+            Spacer(Modifier.height(if (compact) 20.dp else 30.dp))
+
+            // ── 次要用例：不堵主路，但要能再看到 ──
+            Row(horizontalArrangement = Arrangement.spacedBy(if (compact) 18.dp else 22.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("重看 2 分钟指南", fontSize = if (compact) 11.5.sp else 12.sp, color = Palette.accent,
+                    modifier = Modifier.clickable {
+                        state.openFromQuickStart { state.showGuide = true }
+                    }.padding(8.dp))
+                Box(Modifier.width(1.dp).height(14.dp).background(Palette.border))
+                Text("先随便逛逛", fontSize = if (compact) 11.5.sp else 12.sp, color = Palette.textDim,
+                    modifier = Modifier.clickable { state.dismissGuide() }.padding(8.dp))
+            }
+            Spacer(Modifier.height(if (compact) 28.dp else 40.dp))
+        }
+    }
+}
+
+/**
+ * 一张带层次感的入口卡片：渐变图标块 + 标题/标签/描述 + 主操作按钮。
+ * primary=true 时卡片描边 + 按钮用强调色，视觉主次一眼可辨。
+ * 窄屏（compact）下图标块变小、卡内边距变薄、描述字号略小，避免换行挤爆：
+ * 原桌面版把行内按钮挤到 4~5 行文字塞进窄列，卡片被拉得 400dp+ 高。
+ */
+@Composable
+private fun QuickStartCard(
+    icon: String,
+    title: String,
+    tag: String,
+    hint: String,
+    actionLabel: String,
+    primary: Boolean,
+    accent: Color,
+    iconSize: Dp,
+    iconShape: Dp,
+    compact: Boolean,
+    hintSize: TextUnit,
+    iconPad: Dp,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(if (compact) 11.dp else 14.dp),
+        colors = CardDefaults.cardColors(containerColor = Palette.panel),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (primary) 6.dp else 2.dp,
+            pressedElevation = 1.dp
+        ),
+        border = if (primary) androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.45f))
+                 else androidx.compose.foundation.BorderStroke(1.dp, Palette.borderSoft)
+    ) {
+        Column(
+            Modifier.fillMaxWidth().clickable(onClick = onClick).padding(iconPad),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp)) {
+                // 渐变图标块：主卡片用强调色渐变，次级用灰
+                Box(
+                    Modifier.size(iconSize).clip(RoundedCornerShape(iconShape))
+                        .background(
+                            if (primary)
+                                Brush.linearGradient(listOf(accent, accent.copy(alpha = 0.55f)))
+                            else
+                                Brush.linearGradient(listOf(Palette.panelAlt, Palette.borderSoft))
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        icon,
+                        fontSize = if (compact) 16.sp else 21.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (primary) Color.White else Palette.textDim
+                    )
+                }
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(title, fontSize = if (compact) 13.sp else 15.sp, fontWeight = FontWeight.SemiBold, color = Palette.text)
+                        Spacer(Modifier.width(8.dp))
+                        val tagColor = if (primary) Palette.accent else Palette.textDim
+                        Text(
+                            tag,
+                            fontSize = if (compact) 9.sp else 10.sp,
+                            color = tagColor,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(tagColor.copy(alpha = 0.12f))
+                                .padding(horizontal = if (compact) 5.dp else 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(if (compact) 3.dp else 5.dp))
+                    Text(hint, fontSize = hintSize, color = Palette.textDim, lineHeight = if (compact) 15.sp else 18.sp)
+                }
+            }
+            Button(
+                onClick = onClick,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (primary) Palette.accent else Palette.panelAlt,
+                    contentColor = if (primary) Palette.onAccent else Palette.text
+                ),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = if (compact) 7.dp else 9.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = if (primary) 3.dp else 0.dp),
+                shape = RoundedCornerShape(9.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(actionLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 1.dp))
+            }
+        }
     }
 }

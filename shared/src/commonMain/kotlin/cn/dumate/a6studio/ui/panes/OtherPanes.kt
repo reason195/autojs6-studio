@@ -2,23 +2,32 @@ package cn.dumate.a6studio.ui.panes
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,6 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -253,8 +264,8 @@ fun DiagPane(state: StudioState, modifier: Modifier = Modifier, beginner: Boolea
 @Composable
 fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
     val project = state.repo.current
-    // 默认停在「连接」：先连接真机，才有后续的一键上手/工具/输出
-    var tab by remember { mutableStateOf("connect") }
+    // 标签页放在 State 里：外面（「快速开始」首页）可以直接切到指定标签。
+    val tab = state.deviceTab
     val connected = state.deviceStatusLevel == "ok" || state.deviceInfo != null
 
     Column(modifier.verticalScroll(rememberScrollState()).padding(10.dp)) {
@@ -267,13 +278,13 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
                 "output" to "真机输出"
             ),
             selected = tab,
-            onSelect = { tab = it }
+            onSelect = { state.deviceTab = it }
         )
         Spacer(Modifier.height(10.dp))
 
-        // 功能依赖连接：先连接 AutoJs6 才有东西可做——所有非「连接」标签都拦截，
-        // 一键上手的识别/录制同样依赖真机，因此也纳入拦截。
-        if (tab != "connect" && !connected) {
+        // 没连真机时：工具/真机输出确实没内容，拦下来提示去连接。但「一键上手」里
+        // 有「一键自检」可以现场探活并给人话提示，所以允许进入，不整页灰掉。
+        if (tab != "connect" && tab != "guide" && !connected) {
             Surface(
                 color = P.panelAlt,
                 shape = RoundedCornerShape(8.dp),
@@ -288,7 +299,7 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
                         "还没有连接真机：先点左侧「连接」页连上 AutoJs6，这里才有内容。",
                         fontSize = 10.5.sp, color = P.warn, modifier = Modifier.weight(1f)
                     )
-                    SmallButton("去连接", primary = true) { tab = "connect" }
+                    SmallButton("去连接", primary = true) { state.deviceTab = "connect" }
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -297,91 +308,233 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
 
         when (tab) {
             "guide" -> {
-        // 一键上手：目标 App、按钮、参数全部从真机采集，小白不用手输任何东西
-        Column(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(P.panelAlt).padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Text("一键上手（不用写代码）", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = P.text)
-            Text(
-                "先打开要自动化的 App，再回来点「① 识别」——它有 5 秒倒计时，趁这 5 秒切到目标 App 就行；然后点「② 生成脚本」。按钮和参数都从真机自动采集，不用手输。",
-                fontSize = 9.5.sp, color = P.textDim
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SmallButton("① 识别（5秒内切到目标 App）", primary = true) { state.autoDetectForeground() }
-                SmallButton("② 生成脚本", primary = true) { state.autoGenerateFlow() }
-            }
-            if (state.autoStatus.isNotBlank()) {
-                Text(state.autoStatus, fontSize = 10.sp, color = P.info)
-            }
-            if (state.autoPkg.isNotBlank()) {
-                Text("目标 App：${state.autoPkgLabel.ifBlank { state.autoPkg }}（${state.autoPkg}）", fontSize = 9.5.sp, color = P.textDim)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                SmallButton("从已装应用选（自动打开并采集）") { state.loadInstalledApps() }
-                if (state.appsLoading) Text("读取中…", fontSize = 9.5.sp, color = P.textDim)
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SmallButton("一键自检（连没连上）") { state.autoSelfCheck() }
-                SmallButton("自动找本机服务（地址不用填）") { state.autoDiscoverLocalServices() }
-            }
-            if (state.installedApps.isNotEmpty()) {
-                InlineField(
-                    state.appQuery,
-                    { state.appQuery = it },
-                    placeholder = "搜索应用名（不用输包名）",
-                    modifier = Modifier.fillMaxWidth()
-                )
-                val q = state.appQuery.trim().lowercase()
-                androidx.compose.foundation.layout.FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+        // ── 一键上手：连接状态一眼可见 → 主操作聚焦 → 次级操作收进「高级选项」 ──
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+
+            // 1. 连接状态卡：已连接 → 绿勾 + 设备名；未连接 → 人话提示 + 直达连接页
+            if (connected) {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                        .background(P.ok.copy(alpha = 0.10f))
+                        .border(1.dp, P.ok.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    state.installedApps
-                        .filter { q.isBlank() || it.second.lowercase().contains(q) || it.first.lowercase().contains(q) }
-                        .take(12)
-                        .forEach { (pkg, label) ->
-                            SmallButton(label.ifBlank { pkg }) { state.launchAppAndCapture(pkg, label) }
-                        }
-                }
-            }
-            if (state.autoCandidates.isNotEmpty()) {
-                Text("识别到的可点按钮（先点选，再生成或追加）：", fontSize = 9.5.sp, color = P.textDim)
-                androidx.compose.foundation.layout.FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    state.autoCandidates.forEach { v ->
-                        SmallButton(if (state.autoSelected == v) "✓ $v" else v) { state.selectAutoCandidate(v) }
+                    Box(Modifier.size(20.dp).clip(RoundedCornerShape(10.dp)).background(P.ok), contentAlignment = Alignment.Center) {
+                        Text("✓", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = P.onAccent)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("真机已连接", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = P.ok)
+                        Text(state.deviceInfo?.label?.substringBefore('(')?.trim().orEmpty().ifBlank { "AutoJs6 已就绪" },
+                            fontSize = 10.sp, color = P.ok.copy(alpha = 0.8f), maxLines = 1)
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SmallButton("用选中生成", primary = true) { state.autoGenerateFlow() }
-                    SmallButton("生成并试跑") { state.autoGenerateFlow(runAfter = true) }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                        .background(P.warn.copy(alpha = 0.10f))
+                        .border(1.dp, P.warn.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(Modifier.size(20.dp).clip(RoundedCornerShape(10.dp)).background(P.warn), contentAlignment = Alignment.Center) {
+                        Text("!", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = P.onAccent)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("还没连接 AutoJs6", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = P.warn)
+                        Text("先到「连接」页加载手机上的 MCP Server，工具就是全自动的。", fontSize = 10.sp, color = P.warn.copy(alpha = 0.85f), maxLines = 2)
+                    }
+                    SmallButton("去连接", primary = true) { state.deviceTab = "connect" }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SmallButton("追加为下一步", primary = true) { state.autoAppendStep() }
-                    SmallButton("撤销上一步") { state.undo() }
-                    SmallButton("去运行") { state.showPane(cn.dumate.a6studio.ui.Pane.RUN) }
+            }
+
+            // 2. 主操作卡：渐变图标块 + 「一键生成并试跑」，视觉焦点
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = P.panel),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp, pressedElevation = 1.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, P.accent.copy(alpha = 0.45f))
+            ) {
+                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(
+                            Modifier.size(46.dp).clip(RoundedCornerShape(12.dp))
+                                .background(Brush.linearGradient(listOf(P.accent, P.accent.copy(alpha = 0.55f)))),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("①", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text("一键生成并试跑", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = P.text)
+                            Text("自动自检 → 5 秒倒计时 → 识别按钮 → 生成脚本并试跑，一步到底。", fontSize = 10.5.sp, color = P.textDim, lineHeight = 15.sp)
+                        }
+                    }
+                    Button(
+                        onClick = { state.autoOneClickStart() },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = P.accent, contentColor = P.onAccent),
+                        shape = RoundedCornerShape(10.dp),
+                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 3.dp)
+                    ) {
+                        Text("🚀 一键生成并试跑", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 4.dp))
+                    }
+                    Text(
+                        if (connected) "点一下，5 秒内把手机切到要自动化的 App，剩下全自动。"
+                        else "先连上 AutoJs6，再点这里；没连时它会先带你去连接页。",
+                        fontSize = 9.5.sp, color = P.textDim, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SmallButton("③ 录制我的操作") { state.recorderStart() }
-                SmallButton("④ 读取并生成") { state.recorderFetchAndGenerate() }
-            }
-            Text(
-                "③ 点完去操作手机（按音量下键停止），回到本页点 ④，刚才的操作会自动变成积木。",
-                fontSize = 9.5.sp, color = P.textDim
-            )
-            SmallButton("录制失败？从文件导入录制") { state.recorderImport() }
-            if (state.recorderState.note.isNotBlank()) {
-                Text(state.recorderState.note, fontSize = 10.sp, color = P.info)
-            }
-            if (state.recorderState.usableCount > 0) {
-                Text(
-                    "已录到 ${state.recorderState.usableCount} 个操作（待生成 ${state.recorderState.freshCount} 个）",
-                    fontSize = 9.5.sp, color = P.ok
+
+            // 3. 步骤指示器：只在有状态时出现（进行中 / 失败 / 完成）
+            if (state.autoBusy || state.autoStep.isNotBlank() || state.autoStatus.isNotBlank()) {
+                AutoStepIndicator(
+                    step = state.autoStep,
+                    status = state.autoStatus,
+                    busy = state.autoBusy
                 )
+            }
+
+            // 3.5 交互式单步识别：一条条真机点 → 记一步 → 自动识别下一屏，适合流程复杂、想可控逐步录制的场景
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = P.panel),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp, pressedElevation = 0.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, P.info.copy(alpha = 0.4f))
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().clickable { state.openStepper() }.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        Modifier.size(34.dp).clip(RoundedCornerShape(9.dp))
+                            .background(Brush.linearGradient(listOf(P.info, P.info.copy(alpha = 0.55f)))),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("✋", fontSize = 15.sp, color = Color.White)
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text("交互式单步识别", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = P.text)
+                        Text("真机一步步点：点一下识别出的按钮 → 记一步 → 自动识别下一屏，可随时插模板动作。", fontSize = 10.sp, color = P.textDim, lineHeight = 14.sp)
+                    }
+                    Text("›", fontSize = 14.sp, color = P.info)
+                }
+            }
+
+            // 4. 目标 App 提示
+            if (state.autoPkg.isNotBlank()) {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(P.panelAlt).padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("目标 App：", fontSize = 10.sp, color = P.textDim)
+                    Text(state.autoPkgLabel.ifBlank { state.autoPkg }, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, color = P.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(state.autoPkg, fontSize = 9.sp, color = P.textDim, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                }
+            }
+
+            // 5. 识别到的可点按钮（有候选时核心展示，先点选再生成/追加）
+            if (state.autoCandidates.isNotEmpty()) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("识别到的可点按钮：", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = P.textDim)
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        state.autoCandidates.forEach { v ->
+                            SmallButton(if (state.autoSelected == v) "✓ $v" else v) { state.selectAutoCandidate(v) }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SmallButton("用选中生成", primary = true) { state.autoGenerateFlow() }
+                        SmallButton("生成并试跑") { state.autoGenerateFlow(runAfter = true) }
+                        SmallButton("撤销上一步") { state.undo() }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SmallButton("追加为下一步", primary = true) { state.autoAppendStep() }
+                        SmallButton("去运行") { state.showPane(cn.dumate.a6studio.ui.Pane.RUN) }
+                    }
+                }
+            }
+
+            // 6. 高级选项（默认收起）：只识别 / 仅生成 / 从已装应用选 / 自检 / 找服务 / 录制
+            var advancedOpen by remember { mutableStateOf(false) }
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(P.panelAlt)
+                    .clickable { advancedOpen = !advancedOpen }.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("高级选项", fontSize = 10.5.sp, fontWeight = FontWeight.Medium, color = P.textDim, modifier = Modifier.weight(1f))
+                Text(if (advancedOpen) "▴ 收起" else "▾ 展开", fontSize = 10.sp, color = P.accent)
+            }
+            if (advancedOpen) {
+                Column(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(P.panelAlt)
+                        .border(1.dp, P.borderSoft, RoundedCornerShape(10.dp)).padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text("单步操作：", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = P.textDim)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SmallButton("① 只识别（5秒倒计时）") { state.autoDetectForeground() }
+                        SmallButton("② 仅生成") { state.autoGenerateFlow() }
+                    }
+                    Text("选目标 App：", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = P.textDim)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        SmallButton("从已装应用选", primary = true) { state.loadInstalledApps() }
+                        if (state.appsLoading) Text("读取中…", fontSize = 9.5.sp, color = P.textDim)
+                    }
+                    if (state.installedApps.isNotEmpty()) {
+                        InlineField(
+                            state.appQuery,
+                            { state.appQuery = it },
+                            placeholder = "搜索应用名（不用输包名）",
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        val q = state.appQuery.trim().lowercase()
+                        androidx.compose.foundation.layout.FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            state.installedApps
+                                .filter { q.isBlank() || it.second.lowercase().contains(q) || it.first.lowercase().contains(q) }
+                                .take(12)
+                                .forEach { (pkg, label) ->
+                                    SmallButton(label.ifBlank { pkg }) { state.launchAppAndCapture(pkg, label) }
+                                }
+                        }
+                    }
+                    Text("连接诊断：", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = P.textDim)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SmallButton("一键自检（连没连上）") { state.autoSelfCheck() }
+                        SmallButton("自动找本机服务") { state.autoDiscoverLocalServices() }
+                    }
+                    Text("录制：", fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = P.textDim)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SmallButton("① 录制我的操作") { state.recorderStart() }
+                        SmallButton("② 读取并生成") { state.recorderFetchAndGenerate() }
+                    }
+                    Text(
+                        "点「录制」去操作手机（按音量下键停止），回来点「读取并生成」，操作自动变积木。",
+                        fontSize = 9.5.sp, color = P.textDim
+                    )
+                    SmallButton("录制失败？从文件导入录制") { state.recorderImport() }
+                    if (state.recorderState.note.isNotBlank()) {
+                        Text(state.recorderState.note, fontSize = 10.sp, color = P.info)
+                    }
+                    if (state.recorderState.usableCount > 0) {
+                        Text(
+                            "已录到 ${state.recorderState.usableCount} 个操作（待生成 ${state.recorderState.freshCount} 个）",
+                            fontSize = 9.5.sp, color = P.ok
+                        )
+                    }
+                }
             }
         }
             }
@@ -835,6 +988,141 @@ fun SmallButton(label: String, primary: Boolean = false, onClick: () -> Unit) {
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 4.dp)
     )
+}
+
+/**
+ * 一键上手的步骤指示器：自检 → 识别 → 生成并试跑，三段胶囊。
+ * 依据 state.autoStep（check/detect/generate/done/fail）给每段配色：
+ *   · 已完成段 → 绿底对勾
+ *   · 正在进行的段 → 强调色描边 + 实心点（配合细进度条）
+ *   · 未开始的段 → 灰底
+ *   · fail → 整条转红，状态行换成错误色
+ * 手动单步（"① 只识别"/"② 仅生成"）没走上三步链（autoStep 为空）时，只画
+ * 进度条 + 状态文字，不出现三段胶囊，避免误导。
+ * 不用 material3 LinearProgressIndicator，纯 Box 绘制在两端渲染一致。
+ */
+@Composable
+private fun AutoStepIndicator(step: String, status: String, busy: Boolean) {
+    val segLabels = listOf("自检", "识别 5 秒", "生成并试跑")
+    val fail = step == "fail"
+    val done = step == "done"
+    // 走上三步链时才画胶囊：check/detect/generate/done/fail 都属于链内
+    val chain = step in listOf("check", "detect", "generate", "done", "fail")
+    // 当前所处段序：check→0、detect→1、generate→2、done→3（全覆盖）
+    val currentIdx = when (step) {
+        "check" -> 0
+        "detect" -> 1
+        "generate" -> 2
+        else -> 3
+    }
+    val accent = if (fail) P.err else P.accent
+
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        if (chain) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                segLabels.forEachIndexed { i, label ->
+                    if (i > 0) {
+                        // 段间连接线：左侧段完成才点绿
+                        val lineDone = !fail && i < currentIdx
+                        Box(
+                            Modifier
+                                .width(12.dp)
+                                .height(2.dp)
+                                .background(if (lineDone) P.ok else P.borderSoft)
+                        )
+                    }
+                    val segDone = !fail && (i < currentIdx)
+                    val segActive = !fail && !done && busy && i == currentIdx
+                    val segColor = when {
+                        fail -> P.err
+                        segDone -> P.ok
+                        segActive -> P.accent
+                        else -> P.textDim
+                    }
+                    val segBg = when {
+                        fail -> P.err.copy(alpha = 0.12f)
+                        segDone -> P.ok.copy(alpha = 0.14f)
+                        segActive -> P.accent.copy(alpha = 0.10f)
+                        else -> P.panel
+                    }
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(segBg)
+                            .border(1.dp, segColor.copy(alpha = if (segActive || segDone || fail) 0.55f else 0.35f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Box(
+                            Modifier.size(if (segActive) 6.dp else 5.dp).clip(RoundedCornerShape(50)).background(
+                                when {
+                                    fail -> P.err
+                                    segActive -> P.accent
+                                    segDone -> P.ok
+                                    else -> P.textDim
+                                }
+                            )
+                        )
+                        Text(label, fontSize = 9.sp, color = segColor, fontWeight = if (segActive) FontWeight.SemiBold else FontWeight.Medium)
+                    }
+                }
+            }
+        }
+        // 底部状态区：失败红条 / 成功绿条 / 进行中进度条 / 普通文字
+        when {
+            fail -> Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(P.err.copy(alpha = 0.10f)).padding(horizontal = 8.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("✕", fontSize = 10.sp, color = P.err, fontWeight = FontWeight.Bold)
+                Text(status, fontSize = 9.5.sp, color = P.err, modifier = Modifier.weight(1f))
+            }
+
+            done -> Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(P.ok.copy(alpha = 0.10f)).padding(horizontal = 8.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("✓", fontSize = 10.sp, color = P.ok, fontWeight = FontWeight.Bold)
+                Text(status, fontSize = 9.5.sp, color = P.ok, modifier = Modifier.weight(1f))
+            }
+
+            busy -> {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(P.panel)
+                        .height(4.dp)
+                ) {
+                    val progress = remember { mutableStateOf(0.25f) }
+                    // 轻量往返动画：协程驱动，避免依赖 compose-animation 的具体 API
+                    androidx.compose.runtime.LaunchedEffect(busy) {
+                        var f = 0.25f
+                        var dir = 1
+                        while (true) {
+                            f += dir * 0.06f
+                            if (f >= 1f || f <= 0.15f) dir = -dir
+                            progress.value = f.coerceIn(0.15f, 1f)
+                            kotlinx.coroutines.delay(120)
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(progress.value)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(accent)
+                    )
+                }
+                Text(status, fontSize = 9.5.sp, color = P.textDim)
+            }
+
+            else -> Text(status, fontSize = 9.5.sp, color = P.info)
+        }
+    }
 }
 
 /**

@@ -43,6 +43,10 @@ import cn.dumate.a6studio.recorder.RecorderController
 import cn.dumate.a6studio.recorder.RecorderState
 import cn.dumate.a6studio.runtime.LogEntry
 import cn.dumate.a6studio.runtime.RunResult
+import cn.dumate.a6studio.step.StepEntry
+import cn.dumate.a6studio.step.StepTemplates
+import cn.dumate.a6studio.step.TemplateActionDef
+import cn.dumate.a6studio.step.NodeTapStep
 import cn.dumate.a6studio.runtime.RunControl
 import cn.dumate.a6studio.runtime.RunEngine
 import cn.dumate.a6studio.runtime.SimNode
@@ -73,7 +77,7 @@ import kotlinx.serialization.json.put
 
 enum class Pane { CODE, RUN, TEST, DIAG, DEVICE, AI, HELP }
 
-enum class Overlay { NONE, PICKER, AUDIT, RECORDER, TEMPLATES, GUIDE }
+enum class Overlay { NONE, PICKER, AUDIT, RECORDER, TEMPLATES, GUIDE, STEPPER }
 
 /** Narrow-screen navigation: which of the three columns is visible. */
 enum class MobileSheet { CANVAS, PALETTE, PANE }
@@ -254,6 +258,9 @@ class StudioState(
     var overlay by mutableStateOf(Overlay.NONE)
         private set
     var mobileSheet by mutableStateOf(MobileSheet.CANVAS)
+    /** 真机页当前标签（连接 / 一键上手 / 工具 / 真机输出）——提升到 State 之后，「快速开始」首页
+     *  才能把用户直接带到「一键上手」标签，而不是只能落在「连接」。 */
+    var deviceTab by mutableStateOf("connect")
     /**
      * Beginner mode: hides advanced blocks and jargon, shows plain-language help. On by default
      * for a fresh install and remembered afterwards, because the target user never writes code.
@@ -340,6 +347,35 @@ class StudioState(
     var autoBusy by mutableStateOf(false)
         private set
     var autoStatus by mutableStateOf("")
+        private set
+    /** 一键流程的当前阶段（自检 / 识别 / 生成 / 试跑 / 完成 / 失败），用于步骤指示器与进度反馈。
+     *  只随 one-click 链路更新；手动单步调用（只识别/仅生成）不清它。 */
+    var autoStep by mutableStateOf("")
+        private set
+
+    // ---- 交互式单步识别-生成（StepFlow）----
+    /** 当前交互流程的入口列表（顺序即脚本步骤）：点识别节点 / 插模板动作。 */
+    var stepEntries by mutableStateOf<List<StepEntry>>(emptyList())
+        private set
+    /** 当前识别到的可点按钮（复用自动候选的 by/value 对）。 */
+    var stepCandidates by mutableStateOf<List<Pair<String, String>>>(emptyList())
+        private set
+    var stepTargetApp by mutableStateOf("")
+        private set
+    var stepTargetPkg by mutableStateOf("")
+        private set
+    var stepBusy by mutableStateOf(false)
+        private set
+    var stepStatus by mutableStateOf("")
+        private set
+    /** 是否处于「点一下 → 真实点击 → 自动识别下一屏」的步进模式（开着时点候选即联动）。 */
+    var stepModeActive by mutableStateOf(false)
+        private set
+    /** 「插入等待」模板的秒数输入：点「等待 N 秒」时先弹输入框填秒数，再插入。 */
+    var stepWaitSeconds by mutableStateOf(3)
+        private set
+    /** 是否正在等用户输入「等待」秒数（弹窗可见性）。 */
+    var stepWaitDialogOpen by mutableStateOf(false)
         private set
     /** ProxyPin 自动解析结果：不用用户手输域名/接口。 */
     var trafficDomains by mutableStateOf<List<String>>(emptyList())
@@ -453,7 +489,9 @@ class StudioState(
             if (repo.current.root.children["body"].isNullOrEmpty() && repo.current.modules.isEmpty()) {
                 repo.setProjectDirect(cn.dumate.a6studio.model.Samples.emptyProject())
             }
-            showGuide = true
+            // 一键上手：首次打开直接停在「快速开始」整页入口（第一次跑 / 空项目时都先看到它），
+            // 而不是旧的 5 步弹窗——一个屏幕讲清三条路，点一下就能开始。
+            overlay = Overlay.GUIDE
         }
 
         // 界面状态（当前页签 / 面板）随变化自动落盘：退出到桌面再回来，仍停在退出前的位置。
@@ -508,7 +546,20 @@ class StudioState(
 
     fun dismissGuide() {
         showGuide = false
+        if (overlay == Overlay.GUIDE) overlay = Overlay.NONE
         platform.writeTextFile(GUIDE_MARKER, "1")
+    }
+
+    /** Closes the [Overlay.GUIDE] QuickStart home and opens one of its three paths. */
+    fun openFromQuickStart(openPath: () -> Unit) {
+        dismissGuide()
+        openPath()
+    }
+
+    /** 随时把「快速开始」整页入口重新打开出来（更多菜单 → 快速开始）。 */
+    fun openQuickStart() {
+        showGuide = false
+        overlay = Overlay.GUIDE
     }
 
     fun changeBeginnerMode(on: Boolean) {
@@ -517,6 +568,17 @@ class StudioState(
         // Beginner mode hides the advanced panes; never leave the user stuck on a hidden one.
         // The beginner tab row is 运行 / 检查问题 / 帮助, so CODE is hidden too.
         if (on && pane !in listOf(Pane.RUN, Pane.DIAG, Pane.HELP)) showPane(Pane.RUN)
+    }
+
+    /** 快速开始 → 「去连接真机」的直达落地：真机页「连接」标签（先连接才能一键上手），
+     *  手机端同步切到「面板」分栏，不落在编辑画布上。
+     *  旧实现切的是「一键上手」标签，与「先连接」理念相悖——未连接时用户要的是连接页；
+     *  已连接时 QuickStart 走 autoOneClickStart 一键生成，不需要落到这里。 */
+    fun openDeviceGuide() {
+        if (beginnerMode) changeBeginnerMode(false)
+        pane = Pane.DEVICE
+        deviceTab = "connect"
+        mobileSheet = MobileSheet.PANE
     }
 
     fun openTemplates() { showTemplatePicker = true }
@@ -932,41 +994,53 @@ class StudioState(
         if (autoBusy) return
         scope.launch {
             autoBusy = true
+            // 手动单步不走上三步链：清掉残留的链状态，避免旧 fail/done 胶囊误显示
+            autoStep = ""
             platformRef.startKeepAlive()
             try {
-                applyBridgeConfig()
-                for (s in delaySec downTo 1) {
-                    autoStatus = "$s 秒后采集：现在请切到要自动化的 App（保持屏幕亮着）…"
-                    kotlinx.coroutines.delay(1000)
-                }
-                autoStatus = "正在读取目标 App 的页面…"
-                val win = withContext(Dispatchers.Default) { bridge.currentWindow() }
-                val pkg = win.packageName
-                if (pkg.isBlank() || pkg == "cn.dumate.a6studio") {
-                    autoStatus = "没读到目标 App：请确认已切到目标 App 且无障碍正常，再点一次"
-                    return@launch
-                }
-                val label = try { bridge.listApps() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { emptyList() }
-                    .firstOrNull { it.first == pkg }?.second.orEmpty()
-                autoPkg = pkg
-                autoPkgLabel = label.ifBlank { pkg }
-                val dump = withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 350, maxDepth = 30) }
-                autoCands = extractAutoCandidates(dump)
-                autoCandidates = autoCands.map { it.value }
-                autoStatus = if (autoCands.isEmpty()) {
-                    "已识别 ${autoPkgLabel}（$pkg），但没找到可点按钮；先手动把目标页打开再识别"
-                } else {
-                    "已识别 ${autoPkgLabel}（$pkg）；可点：${autoCandidates.take(6).joinToString("、")}"
-                }
+                if (!detectForeground(delaySec)) autoStep = "fail"
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 autoStatus = "识别失败：${e.message}"
+                autoStep = "fail"
             } finally {
                 autoBusy = false
                 platformRef.stopKeepAlive()
             }
         }
+    }
+
+    /**
+     * 采集目标 App：倒计时 → 读当前前台窗口 → 识别可点按钮，并顺手写进 autoPkg /
+     * autoCandidates。成功读到前台 App（即便没有可点按钮）返回 true。
+     */
+    private suspend fun detectForeground(delaySec: Int): Boolean {
+        applyBridgeConfig()
+        for (s in delaySec downTo 1) {
+            autoStatus = "$s 秒后采集：现在请切到要自动化的 App（保持屏幕亮着）…"
+            kotlinx.coroutines.delay(1000)
+        }
+        autoStatus = "正在读取目标 App 的页面…"
+        val win = withContext(Dispatchers.Default) { bridge.currentWindow() }
+        val pkg = win.packageName
+        if (pkg.isBlank() || pkg == "cn.dumate.a6studio") {
+            autoStatus = "没读到目标 App：请确认已切到目标 App 且无障碍正常，再点一次"
+            return false
+        }
+        val label = try { bridge.listApps() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { emptyList() }
+            .firstOrNull { it.first == pkg }?.second.orEmpty()
+        autoPkg = pkg
+        autoPkgLabel = label.ifBlank { pkg }
+        val dump = withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 350, maxDepth = 30) }
+        autoCands = extractAutoCandidates(dump)
+        autoCandidates = autoCands.map { it.value }
+        autoStatus = if (autoCands.isEmpty()) {
+            "已识别 ${autoPkgLabel}（$pkg），但没找到可点按钮；先手动把目标页打开再识别"
+        } else {
+            "已识别 ${autoPkgLabel}（$pkg）；可点：${autoCandidates.take(6).joinToString("、")}"
+        }
+        return true
     }
 
     /** 一键生成：打开目标 App → 等候选按钮 → 点它 → 收工，全部参数来自真机采集。 */
@@ -979,79 +1053,147 @@ class StudioState(
         if (autoBusy) return
         scope.launch {
             autoBusy = true
+            // 手动单步不走上三步链：清掉残留的链状态
+            autoStep = ""
             autoStatus = "正在采集当前页面并生成脚本…"
             try {
-                applyBridgeConfig()
-                val win = withContext(Dispatchers.Default) { bridge.currentWindow() }
-                val pkg = autoPkg.ifBlank { win.packageName }
-                if (pkg.isBlank() || pkg == "cn.dumate.a6studio") {
-                    autoStatus = "先打开要自动化的 App（或点「从已装应用选」），再点「生成」"
-                    return@launch
-                }
-                val cands = if (autoCands.isNotEmpty()) autoCands else {
-                    val dump = withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 400, maxDepth = 32) }
-                    extractAutoCandidates(dump).also { autoCands = it }
-                }
-                if (cands.isEmpty()) {
-                    autoStatus = "还没有识别到按钮：先点「① 识别当前页面」"
-                    return@launch
-                }
-                val chosen = (pickedValue ?: autoSelected).takeIf { it.isNotBlank() }
-                    ?.let { v -> cands.firstOrNull { it.value == v } } ?: cands.first()
-                val label = autoPkgLabel.substringAfterLast('.').ifBlank { pkg }
-                val body = mutableListOf<Block>()
-                body += newBlock("autoWait")
-                body += newBlock(
-                    "kitBoot",
-                    mapOf(
-                        "pkg" to ParamValue.Text(pkg),
-                        "name" to ParamValue.Text("自动 · $label"),
-                        "maxRuntimeMs" to ParamValue.Num(600000.0)
-                    )
-                )
-                body += newBlock("kitLaunch")
-                body += newBlock("kitGuard")
-                body += newBlock(
-                    "kitWaitFor",
-                    mapOf(
-                        "by" to ParamValue.Text(chosen.by),
-                        "match" to ParamValue.Text("contains"),
-                        "value" to ParamValue.Text(chosen.value),
-                        "timeoutMs" to ParamValue.Num(12000.0)
-                    )
-                )
-                body += newBlock(
-                    "kitClick",
-                    mapOf(
-                        "by" to ParamValue.Text(chosen.by),
-                        "match" to ParamValue.Text("contains"),
-                        "value" to ParamValue.Text(chosen.value)
-                    )
-                )
-                body += newBlock("kitFinish", mapOf("result" to ParamValue.Text("auto")))
-                val project = Project(
-                    name = "自动 · $label",
-                    root = Project.rootBlock().copy(children = mapOf("body" to body))
-                )
-                repo.snapshot("一键生成")
-                repo.setProjectDirect(project)
-                autoPkg = pkg
-                autoStatus = "已生成：打开 $label → 等「${chosen.value}」→ 点它 → 结束。可去「运行」页试跑。"
-                refreshAll()
-                toast("已生成脚本，共 ${body.size} 个积木")
-                autoSelected = chosen.value
-                // 生成后清空旧候选：下一步必须在目标 App 的新页面上重新识别，避免把同一步重复追加
-                autoCands = emptyList()
-                autoCandidates = emptyList()
-                if (runAfter) run()
+                if (!generateFlow(pickedValue, runAfter)) autoStep = "fail"
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 autoStatus = "生成失败：${e.message}"
+                autoStep = "fail"
             } finally {
                 autoBusy = false
             }
         }
+    }
+
+    /** 从已采集的候选生成脚本；返回是否成功。runAfter=true 时生成完直接试跑。 */
+    private suspend fun generateFlow(pickedValue: String?, runAfter: Boolean): Boolean {
+        applyBridgeConfig()
+        val win = withContext(Dispatchers.Default) { bridge.currentWindow() }
+        val pkg = autoPkg.ifBlank { win.packageName }
+        if (pkg.isBlank() || pkg == "cn.dumate.a6studio") {
+            autoStatus = "先打开要自动化的 App（或点「从已装应用选」），再点「生成」"
+            return false
+        }
+        val cands = if (autoCands.isNotEmpty()) autoCands else {
+            val dump = withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 400, maxDepth = 32) }
+            extractAutoCandidates(dump).also { autoCands = it }
+        }
+        if (cands.isEmpty()) {
+            autoStatus = "还没有识别到按钮：先点「① 识别当前页面」"
+            return false
+        }
+        val chosen = (pickedValue ?: autoSelected).takeIf { it.isNotBlank() }
+            ?.let { v -> cands.firstOrNull { it.value == v } } ?: cands.first()
+        val label = autoPkgLabel.substringAfterLast('.').ifBlank { pkg }
+        val body = mutableListOf<Block>()
+        body += newBlock("autoWait")
+        body += newBlock(
+            "kitBoot",
+            mapOf(
+                "pkg" to ParamValue.Text(pkg),
+                "name" to ParamValue.Text("自动 · $label"),
+                "maxRuntimeMs" to ParamValue.Num(600000.0)
+            )
+        )
+        body += newBlock("kitLaunch")
+        body += newBlock("kitGuard")
+        body += newBlock(
+            "kitWaitFor",
+            mapOf(
+                "by" to ParamValue.Text(chosen.by),
+                "match" to ParamValue.Text("contains"),
+                "value" to ParamValue.Text(chosen.value),
+                "timeoutMs" to ParamValue.Num(12000.0)
+            )
+        )
+        body += newBlock(
+            "kitClick",
+            mapOf(
+                "by" to ParamValue.Text(chosen.by),
+                "match" to ParamValue.Text("contains"),
+                "value" to ParamValue.Text(chosen.value)
+            )
+        )
+        body += newBlock("kitFinish", mapOf("result" to ParamValue.Text("auto")))
+        val project = Project(
+            name = "自动 · $label",
+            root = Project.rootBlock().copy(children = mapOf("body" to body))
+        )
+        repo.snapshot("一键生成")
+        repo.setProjectDirect(project)
+        autoPkg = pkg
+        autoStatus = "已生成：打开 $label → 等「${chosen.value}」→ 点它 → 结束。可去「运行」页试跑。"
+        refreshAll()
+        toast("已生成脚本，共 ${body.size} 个积木")
+        autoSelected = chosen.value
+        // 生成后清空旧候选：下一步必须在目标 App 的新页面上重新识别，避免把同一步重复追加
+        autoCands = emptyList()
+        autoCandidates = emptyList()
+        if (runAfter) run()
+        return true
+    }
+
+    /**
+     * 一键到底：自检 → 识别（5 秒）→ 生成并试跑，一串点完不用管中间步骤。
+     * 没连上时先把人带到「连接」页并给出人话提示，不硬来。
+     */
+    fun autoOneClickStart() {
+        if (autoBusy) return
+        scope.launch {
+            autoBusy = true
+            autoStep = "check"
+            autoStatus = "正在检查 AutoJs6 连接…"
+            platformRef.startKeepAlive()
+            try {
+                applyBridgeConfig()
+                // 先探活：失败就把人带到「连接」页，提示足够具体
+                var alive = false
+                try {
+                    val ms = bridge.ping()
+                    val info = bridge.deviceInfo()
+                    deviceInfo = info
+                    deviceStatusText = "真机：${info.label}"
+                    deviceStatusLevel = "ok"
+                    autoStatus = "✅ 已连接 ${info.label}（${ms}ms）；5 秒内切到要自动化的 App…"
+                    alive = true
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // 留在「一键上手」页原地报错：页内顶部已有未连提示 + 去连接按钮，
+                    // 不再把人拽去「连接」标签（那是旧逻辑，破环了点到即所在的直觉）。
+                    autoStatus = "❌ 还没连上 AutoJs6：" + describeBridgeFailure(e).replace("\n", " ") + "。点上方「去连接」连一次再回来。"
+                    deviceStatusLevel = "err"
+                }
+                // 已连上：识别 → 生成并试跑，一步到位
+                if (alive) {
+                    autoStep = "detect"
+                    if (detectForeground(5)) {
+                        autoStep = "generate"
+                        if (generateFlow(pickedValue = null, runAfter = true)) autoStep = "done"
+                        else autoStep = "fail"
+                    } else autoStep = "fail"
+                } else autoStep = "fail"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                autoStatus = "一键流程失败：${e.message}"
+                autoStep = "fail"
+            } finally {
+                autoBusy = false
+                platformRef.stopKeepAlive()
+            }
+        }
+    }
+
+    /** 仅供桌面截图冒烟喂状态用：模拟一键流程的某个阶段，目检步骤指示器的 bus/fail 渲染。 */
+    fun smokeFeedAuto(step: String, status: String, busy: Boolean) {
+        autoStep = step
+        autoStatus = status
+        autoBusy = busy
     }
 
     /**
@@ -1113,6 +1255,227 @@ class StudioState(
                 autoBusy = false
             }
         }
+    }
+
+    // ---------- 交互式单步识别-生成（StepFlow） ----------
+
+    /** 打开交互式单步识别覆盖层：从「一键上手」页点「✋ 交互式单步」进入。 */
+    fun openStepper() {
+        overlay = Overlay.STEPPER
+        stepModeActive = false
+        stepStatus = "点「① 识别当前页」先拿到按钮，再一步步点。"
+    }
+
+    fun closeStepper() {
+        overlay = Overlay.NONE
+        stepModeActive = false
+    }
+
+    /** 识别当前页，把可点按钮列出来。步进模式下识别完自动回到列表待命。 */
+    fun stepperRecognize() {
+        if (stepBusy) return
+        scope.launch {
+            stepBusy = true
+            stepStatus = "正在读取目标 App 当前页…"
+            try {
+                applyBridgeConfig()
+                val win = withContext(Dispatchers.Default) { bridge.currentWindow() }
+                val pkg = win.packageName
+                if (pkg.isBlank() || pkg == "cn.dumate.a6studio") {
+                    stepStatus = "没读到目标窗口：请把手机切到要自动化的 App，保持亮屏，再点识别。"
+                    return@launch
+                }
+                stepTargetPkg = pkg
+                stepTargetApp = try { bridge.listApps() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { emptyList() }
+                    .firstOrNull { it.first == pkg }?.second?.ifBlank { pkg }.orEmpty()
+                val dump = withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 350, maxDepth = 30) }
+                val cands = extractAutoCandidates(dump)
+                stepCandidates = cands.map { it.by to it.value }
+                stepStatus = if (stepCandidates.isEmpty())
+                    "当前页面没有可点按钮：先把目标页打开再识别。"
+                else
+                    "识别到 ${stepCandidates.size} 个可点按钮：点下一个就是「点击它 + 自动识别下一屏」。"
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                stepStatus = "识别失败：${e.message}"
+            } finally {
+                stepBusy = false
+            }
+        }
+    }
+
+    /** 用户点了一个识别到的候选：① 真实点击手机（目标 App 翻到下一屏）→ ② 记下这一步 → ③ 自动识别下一屏。 */
+    fun stepperClickNode(by: String, value: String) {
+        if (stepBusy) return
+        scope.launch {
+            stepBusy = true
+            val prevCandidates = stepCandidates
+            stepCandidates = emptyList() // 先清列表：点出去后这些按钮已经不在屏上了
+            stepStatus = "正在点击「$value」…"
+            try {
+                applyBridgeConfig()
+                val sel = buildJsonObject { put(by, value) }
+                // 真实下发：真机无障碍点在目标 App 上 → 翻到下一屏
+                val r = withContext(Dispatchers.Default) { bridge.uiClick(selector = sel) }
+                if (r.isError) {
+                    stepStatus = "真机点击失败：${r.text.take(200)}"
+                    stepCandidates = prevCandidates
+                    return@launch
+                }
+                // 记录这一步（真实点过，所以直接作为脚本的一步）
+                stepEntries = stepEntries + NodeTapStep(
+                    id = cn.dumate.a6studio.model.Ids.nextWith("step"),
+                    by = by, value = value, pkg = stepTargetPkg
+                )
+                stepStatus = "✓ 已点「$value」。等目标 App 刷新后自动识别下一屏…"
+                // 轮询等待页面稳定：原按钮从屏上消失、新内容出来才算翻页完成。
+                // 单次最长约 12s（6 次 × 2s 间隔），覆盖慢加载；超时也按当前屏识别并提示。
+                var cands: List<Pair<String, String>>? = null
+                var lastPkg = stepTargetPkg
+                var attempt = 0
+                while (attempt < 6) {
+                    kotlinx.coroutines.delay(2000)
+                    attempt++
+                    val win = runCatching { withContext(Dispatchers.Default) { bridge.currentWindow() } }.getOrNull()
+                    if (win != null && win.packageName.isNotBlank()) lastPkg = win.packageName
+                    val dump = runCatching {
+                        withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 350, maxDepth = 30) }
+                    }.getOrNull()
+                    if (dump == null) continue
+                    val c = extractAutoCandidates(dump)
+                    // 原按钮消失 = 翻页完成；否则继续等（可能是过渡页/半加载）
+                    val stillSame = c.any { it.by == by && it.value == value }
+                    if (!stillSame) {
+                        cands = c.map { it.by to it.value }
+                        break
+                    }
+                }
+                if (cands == null) {
+                    // 一直没等到原按钮消失：可能是 Toast/弹层，识别一次当前屏兜底
+                    val dump = runCatching {
+                        withContext(Dispatchers.Default) { bridge.uiDumpJson(maxNodes = 350, maxDepth = 30) }
+                    }.getOrNull()
+                    cands = dump?.let { extractAutoCandidates(it).map { c -> c.by to c.value } }.orEmpty()
+                }
+                stepTargetPkg = lastPkg
+                stepCandidates = cands.orEmpty()
+                val stillThere = cands.orEmpty().any { (b, v) -> b == by && v == value }
+                stepStatus = when {
+                    cands.orEmpty().isEmpty() ->
+                        "已点「$value」，但新页面没有可点按钮：可以插个模板动作，或点“识别”重试。"
+                    stillThere ->
+                        "已点「$value」，页面似乎没翻（按钮还在）：再点一次，或确认点击是否生效。"
+                    else ->
+                        "已点「$value」→ 新页面有 ${cands!!.size} 个可点按钮，继续选下一个，或结束。"
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                stepStatus = "点击失败：${e.message}"
+                stepCandidates = prevCandidates
+            } finally {
+                stepBusy = false
+            }
+        }
+    }
+
+    /** 打开「等待」模板的秒数输入弹窗。 */
+    fun stepperOpenWaitDialog() {
+        stepWaitDialogOpen = true
+        stepWaitSeconds = 3
+    }
+
+    fun stepperCloseWaitDialog() {
+        stepWaitDialogOpen = false
+    }
+
+    fun stepperSetWaitSeconds(v: Int) {
+        stepWaitSeconds = v.coerceIn(1, 600)
+    }
+
+    /** 插入一个模板动作（等待 / 关弹窗 / 等倒计时 / 检测跳 App）。模板定义可扩展：往 StepTemplates.menu 加一项即可。
+     *  「等待 N 秒」先弹秒数输入（[stepperOpenWaitDialog] 走 UI），直接调用时用默认 3 秒。 */
+    fun stepperInsertTemplate(action: TemplateActionDef) {
+        if (stepBusy) return
+        if (action.id != "wait") {
+            insertTemplateEntry(action)
+        } else {
+            // wait 需要用户先选秒数：打开输入弹窗，确认后再真正插入
+            stepPendingWaitAction = action
+            stepperOpenWaitDialog()
+        }
+    }
+
+    fun confirmInsertWait(seconds: Int) {
+        stepperCloseWaitDialog()
+        val action = stepPendingWaitAction ?: return
+        val sec = seconds.coerceIn(1, 600)
+        val entry: StepEntry = StepTemplates.waitSeconds(cn.dumate.a6studio.model.Ids.nextWith("step"), sec)
+        stepEntries = stepEntries + entry
+        stepPendingWaitAction = null
+        stepStatus = "已插入：${entry.label}。"
+    }
+
+    private var stepPendingWaitAction: TemplateActionDef? = null
+
+    private fun insertTemplateEntry(action: TemplateActionDef) {
+        val entry: StepEntry = when (action.id) {
+            "closeDialogs" -> StepTemplates.closeDialogs(cn.dumate.a6studio.model.Ids.nextWith("step"))
+            "waitCountdown" -> StepTemplates.waitCountdown(cn.dumate.a6studio.model.Ids.nextWith("step"))
+            "ensureForeground" -> StepTemplates.ensureForeground(cn.dumate.a6studio.model.Ids.nextWith("step"))
+            else -> return
+        }
+        stepEntries = stepEntries + entry
+        stepStatus = "已插入：${entry.label}。"
+    }
+
+    /** 生成脚本：把攒下来的步骤（节点点击 + 模板动作）写进工程，另存为一份新脚本。 */
+    fun stepperGenerateAndClose() {
+        if (stepEntries.isEmpty()) {
+            stepStatus = "还没有任何步骤：先点候选按钮或插模板动作。"
+            return
+        }
+        // 生成必须有确定的目标 App：只在没识别过时插了模板（没有目标页），
+        // 生成的 kitBoot 会错用默认包名；此时引导用户先识别一次目标页。
+        val pkg = stepTargetPkg
+        if (pkg.isBlank()) {
+            stepStatus = "先点一次「① 识别当前页」确定目标 App（现在只有模板步骤，还不知道要自动化哪个 App）。"
+            return
+        }
+        val label = stepTargetApp.ifBlank { pkg }
+        val body = mutableListOf<Block>()
+        body += newBlock("autoWait")
+        body += newBlock(
+            "kitBoot",
+            mapOf(
+                "pkg" to ParamValue.Text(pkg),
+                "name" to ParamValue.Text("交互 · $label"),
+                "maxRuntimeMs" to ParamValue.Num(600000.0)
+            )
+        )
+        body += newBlock("kitLaunch")
+        body += newBlock("kitGuard")
+        stepEntries.forEach { body += it.toBlocks() }
+        body += newBlock("kitFinish", mapOf("result" to ParamValue.Text("auto")))
+        val project = Project(
+            name = "交互 · $label",
+            root = Project.rootBlock().copy(children = mapOf("body" to body))
+        )
+        repo.snapshot("交互式单步生成")
+        repo.setProjectDirect(project)
+        refreshAll()
+        stepEntries = emptyList()
+        stepCandidates = emptyList()
+        overlay = Overlay.NONE
+        stepModeActive = false
+        autoStatus = "已生成交互脚本：${body.size} 个积木 → 「去运行」试跑。"
+        autoStep = ""
+    }
+
+    fun stepperClear() {
+        stepEntries = emptyList()
+        stepStatus = "已清空已录步骤。"
     }
 
     fun listDeviceTools() {
@@ -2646,6 +3009,8 @@ val msg = e.message ?: e::class.simpleName ?: "未知错误"
     }
 
     fun closeOverlay() {
+        // Esc / ✕ 关闭交互式单步覆盖层时，退出步进模式（打开的识别循环停手）。
+        if (overlay == Overlay.STEPPER) stepModeActive = false
         overlay = Overlay.NONE
         // Closing must actually stop the phone calls, not just hide the panel.
         pickerJob?.cancel()

@@ -326,6 +326,22 @@ fun main() = application {
                         delay(600)
                     }
                     "templates" -> state.openTemplates()
+                    "quickstart" -> state.openQuickStart()
+                    "device-guide" -> {
+                        state.showPane(cn.dumate.a6studio.ui.Pane.DEVICE)
+                        state.deviceTab = "guide"
+                    }
+                    // 截图冒烟：喂一组固定的步骤指示器状态，验证 bus 进度条与 fail 胶囊的渲染
+                    "device-guide-busy" -> {
+                        state.showPane(cn.dumate.a6studio.ui.Pane.DEVICE)
+                        state.deviceTab = "guide"
+                        state.smokeFeedAuto("detect", "3 秒后采集：现在请切到要自动化的 App（保持屏幕亮着）…", busy = true)
+                    }
+                    "device-guide-fail" -> {
+                        state.showPane(cn.dumate.a6studio.ui.Pane.DEVICE)
+                        state.deviceTab = "guide"
+                        state.smokeFeedAuto("fail", "❌ 还没连上 AutoJs6：请确认手机端 TCP 服务已启动，再点左侧「连接」页。", busy = false)
+                    }
                     "guide" -> state.showGuide = true
                     "run" -> state.run()
                     "tests" -> state.runTests()

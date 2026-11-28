@@ -665,6 +665,20 @@ object Catalog {
         }
 
         def(
+            "kitEnsureForeground", "kit", "检测是否跳转到其他 App 并拉回",
+            listOf(num("waitMs", "等待前台毫秒", 8000.0))
+        ) { b, c ->
+            val waitMs = c.num(b, "waitMs").toLong().let { if (it <= 0) 8000L else it }
+            listOf(
+                "if (!\$kit.isFg()) {",
+                "  \$kit.log(\"已跳转到其他 App（当前 \" + \$kit.curPkg() + \"），拉回目标 App\");",
+                "  \$kit.recoverForeground({ waitMs: $waitMs });",
+                "}",
+                "\$kit.guard();"
+            ).joinToString("\n")
+        }
+
+        def(
             "kitOpenDeepLink", "kit", "深链直达并等前台就绪",
             listOf(text("url", "深链地址", "openapp.jdmobile://virtual"))
         ) { b, c ->
