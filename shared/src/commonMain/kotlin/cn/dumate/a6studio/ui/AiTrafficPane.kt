@@ -105,18 +105,24 @@ fun AiTrafficPane(state: StudioState, modifier: Modifier = Modifier) {
     }
 }
 
-/** 是否已配置可用的云端/本地大模型。纯离线规则引擎（DETERMINISTIC_RULES）算未配置。 */
+/** 是否已配置可用的云端/本地大模型。纯离线规则引擎（DETERMINISTIC_RULES）算未配置。
+ * 注意：OLLAMA/LMSTUDIO 的默认 Base URL 视为「未配置」——用户没动过它就不算连上模型，
+ * 否则默认状态下 AUTO 分支恒为 true，「先连接大模型」拦截永不生效。 */
 private fun modelReady(state: StudioState): Boolean {
     val p = state.llmProvider
     val c = state.llmConfig
+    // 本地服务的默认地址不算「已连接」：只有用户显式改过才认可。
+    fun localReady(url: String, default: String) = url.isNotBlank() && url != default
     return when (p) {
         cn.dumate.a6studio.ai.LlmProviderId.AUTO ->
-            c.geminiApiKey.isNotBlank() || c.openAiApiKey.isNotBlank() || c.openAiBaseUrl.isNotBlank() ||
-                c.ollamaBaseUrl.isNotBlank() || c.lmStudioBaseUrl.isNotBlank()
+            c.geminiApiKey.isNotBlank() ||
+                (c.openAiApiKey.isNotBlank() && c.openAiBaseUrl.isNotBlank()) ||
+                localReady(c.ollamaBaseUrl, "http://127.0.0.1:11434/v1") ||
+                localReady(c.lmStudioBaseUrl, "http://127.0.0.1:1234/v1")
         cn.dumate.a6studio.ai.LlmProviderId.GEMINI -> c.geminiApiKey.isNotBlank()
         cn.dumate.a6studio.ai.LlmProviderId.OPENAI_COMPATIBLE -> c.openAiApiKey.isNotBlank() && c.openAiBaseUrl.isNotBlank()
-        cn.dumate.a6studio.ai.LlmProviderId.OLLAMA -> c.ollamaBaseUrl.isNotBlank()
-        cn.dumate.a6studio.ai.LlmProviderId.LMSTUDIO -> c.lmStudioBaseUrl.isNotBlank()
+        cn.dumate.a6studio.ai.LlmProviderId.OLLAMA -> localReady(c.ollamaBaseUrl, "http://127.0.0.1:11434/v1")
+        cn.dumate.a6studio.ai.LlmProviderId.LMSTUDIO -> localReady(c.lmStudioBaseUrl, "http://127.0.0.1:1234/v1")
         else -> false
     }
 }

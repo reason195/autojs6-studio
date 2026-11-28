@@ -667,9 +667,9 @@ fun DevicePane(state: StudioState, modifier: Modifier = Modifier) {
                         value = cur,
                         onValueChange = { v ->
                             state.setToolParam(p.name, v)
-                            state.rememberToolParamValue(p, v)
+                            state.rememberToolParamValue(state.deviceToolNameDraft, p, v)
                         },
-                        items = state.toolParamPresets(p),
+                        items = state.toolParamPresets(state.deviceToolNameDraft, p),
                         placeholder = p.desc.ifBlank { "可留空" },
                         mono = true,
                         modifier = Modifier.fillMaxWidth()

@@ -1248,8 +1248,10 @@ class StudioState(
      *  - enum 参数：schema 给出的全部枚举值；
      *  - boolean：true / false；
      *  - 其他：类型化示例 + 本工具表单已输入过的历史值，真正做到免手输。
+     * 历史值按「工具名.参数名」隔离，避免不同工具的同类参数（如 script_catalog.limit 与
+     * ui_dump.limit）互相串值。
      */
-    fun toolParamPresets(p: ToolParamField): List<String> {
+    fun toolParamPresets(toolName: String, p: ToolParamField): List<String> {
         if (p.options.isNotEmpty()) return p.options
         val presets = LinkedHashSet<String>()
         when (p.type.lowercase()) {
@@ -1259,8 +1261,8 @@ class StudioState(
                 presets += listOf("", "{}", "[]")
             }
         }
-        // 加历史值：同工具之前填过的参数优先
-        val history = deviceToolParamHistory[p.name].orEmpty()
+        // 加历史值：同工具之前填过的参数优先（键含工具名，防跨工具串值）
+        val history = deviceToolParamHistory[historyKey(toolName, p.name)].orEmpty()
         presets += history
         return presets.toList()
     }
@@ -1268,10 +1270,12 @@ class StudioState(
     /** 记录工具参数填过的值（内存，重启即清，仅用于下拉预置）。 */
     private var deviceToolParamHistory = mutableMapOf<String, MutableList<String>>()
 
-    fun rememberToolParamValue(p: ToolParamField, v: String) {
+    private fun historyKey(toolName: String, paramName: String): String = "$toolName.$paramName"
+
+    fun rememberToolParamValue(toolName: String, p: ToolParamField, v: String) {
         val t = v.trim()
         if (t.isEmpty()) return
-        val list = deviceToolParamHistory.getOrPut(p.name) { mutableListOf() }
+        val list = deviceToolParamHistory.getOrPut(historyKey(toolName, p.name)) { mutableListOf() }
         if (t in list) list.remove(t)
         list.add(0, t)
         if (list.size > 6) list.removeAt(list.size - 1)
@@ -1991,15 +1995,19 @@ class StudioState(
         toast("已切换到 ${url.removePrefix("http://").removePrefix("https://")}")
     }
 
-    /** 删除一台已保存的 ProxyPin 设备；删的是当前地址则恢复默认。 */
+    /**
+     * 删除一台已保存的 ProxyPin 设备；删的是当前地址则切回第一台/默认地址。
+     * 令牌是全局单值（非 per-device），删除设备不清令牌——还有已保存设备时切过去继续用；
+     * 只有一台都不剩才把令牌也清掉，避免残留。
+     */
     fun deleteSavedProxyPinDevice(url: String) {
         if (url.isBlank()) return
         repo.removeProxyPinDevice(url)
         persistBridgeConfig()
         if (url == proxyPinUrl) {
-            proxyPinUrl = repo.current.bridge.proxyPinDevices.firstOrNull()?.url
-                ?: "http://127.0.0.1:9000/mcp"
-            proxyPinToken = ""
+            val remaining = repo.current.bridge.proxyPinDevices
+            proxyPinUrl = remaining.firstOrNull()?.url ?: "http://127.0.0.1:9000/mcp"
+            if (remaining.isEmpty()) proxyPinToken = ""
         }
         toast("已删除 ProxyPin 设备")
     }

@@ -210,7 +210,10 @@ fun DropdownField(
             )
             Text(" ▾", fontSize = 9.sp, color = P.textDim)
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false; query = "" }
+        ) {
             Column(Modifier.widthIn(min = 190.dp)) {
                 if (searchable) {
                     InlineField(
